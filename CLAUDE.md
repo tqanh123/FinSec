@@ -1,3 +1,5 @@
+@AGENTS.md
+
 <!-- >>> harness onboarding (generated; edits between markers are overwritten on reinstall) >>> -->
 
 ## SDLC harness
