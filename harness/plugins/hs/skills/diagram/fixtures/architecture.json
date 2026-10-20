@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "Order Service Topology" },
+  "components": [
+    { "id": "gw", "label": "API Gateway", "role": "gateway", "layer": 0 },
+    { "id": "orders", "label": "Orders Service", "role": "backend", "layer": 1 },
+    { "id": "db", "label": "Orders DB", "role": "database", "layer": 2 }
+  ],
+  "boundaries": [
+    { "id": "vpc", "label": "Production VPC", "role": "vpc", "components": ["gw", "orders", "db"] }
+  ],
+  "connections": [
+    { "from": "gw", "to": "orders", "label": "Place Order", "kind": "sync" },
+    { "from": "orders", "to": "db", "label": "Write Order", "kind": "sync" }
+  ]
+}

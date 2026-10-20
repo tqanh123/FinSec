@@ -1,0 +1,129 @@
+# harness-hooks.yaml — the per-hook on/off registry (nudges + opt-in gates).
+#
+# A hook's CLASS (telemetry | nudge | compliance) is a code constant in the hook
+# file (HOOK_CLASS = "...") and CANNOT be changed here — a broken/edited config
+# never reclassifies a gate.
+#
+# This file now lists EVERY toggleable nudge + opt-in gate EXPLICITLY (no reliance
+# on class-default for them), so the on/off surface is complete and auditable.
+# Still NOT listed here (controlled elsewhere):
+#   - telemetry hooks  → class-default ON; kill the whole class with env HARNESS_TELEMETRY_DISABLED
+#   - safety/enforcement guards (gate_stage, write_guard,
+#     protected_ref_*, privacy_read_guard, bash_safety_guard, merge_gate, standards_strict_gate,
+#     test_policy_dod) → the guard-policy plane (off/warn/block + preset + floor)
+#
+# Class defaults (only when a hook is listed in NEITHER plane):
+#   telemetry → enabled: true, advisory   nudge → enabled: false   compliance → enabled: true, blocking
+#
+# TRACKED IN GIT on purpose (tamper-visible): flipping a gate leaves a diff + a gate_skip trace.
+# Dev-only divergence lives in .harness-dev/harness-hooks.yaml (also tracked), bound by
+# scripts/dev_init.py through HARNESS_HOOK_OVERLAY — a MERGE over this file, not a
+# replacement (HARNESS_HOOK_CONFIG is the replacing test seam). HARNESS_* is scrubbed
+# at push; restart to bind. A fail-closed gate is loosened there only with a force_reason
+# and its record — reason, actor, ts (`hs-cli hooks --off <gate> --force` writes both).
+#
+# Example: gate_stage is a guard (guard-policy), not here. An opt-in gate goes:
+#   simplify_gate: {enabled: false}   # mode (warn/block) lives in simplify-policy.yaml
+
+# Context re-injection refresh mode (top-level config, NOT a nudge toggle):
+#   slim (default) -> within-window refreshes emit the compact block (token diet).
+#   full           -> every refresh emits the full ~2.3K-token block (A/B baseline
+#                     + instant rollback; no code revert needed).
+# Read by inject_prompt_context._refresh_mode(); the first injection after a
+# session boundary is ALWAYS full regardless of this knob.
+hooks:
+  agent_behavior_linter:
+    enabled: true
+  agent_memory_stray:
+    enabled: true
+  auto_decision_review_nudge:
+    enabled: true
+  auto_finalize_ship:
+    enabled: true
+  backlog_capture_nudge:
+    enabled: true
+  backlog_hygiene_nudge:
+    enabled: true
+  bash_write_guard:
+    enabled: false
+  context_firewall:
+    enabled: true
+  cook_delegate_nudge:
+    enabled: true
+  cook_isolation_nudge:
+    enabled: false
+  decision_capture_nudge:
+    enabled: true
+  decision_reconcile_nudge:
+    enabled: true
+  descriptive_name:
+    enabled: false
+  dev_override_wiring_nudge:
+    enabled: false
+  discover_isolation_nudge:
+    enabled: false
+  emit_session_summary:
+    enabled: false
+  engine_root_inject:
+    enabled: true
+  engine_skew_nudge:
+    enabled: true
+  floor_bash_guard:
+    enabled: true
+  gemini_stop_review_gate:
+    enabled: false
+    timeout: 10
+  glossary_capture_nudge:
+    enabled: true
+  glossary_pointer_inject:
+    enabled: true
+  goal_cycle_nudge:
+    enabled: true
+  instruction_policy_nudge:
+    enabled: true
+  instruction_policy_rewrite:
+    enabled: true
+  ledger_red_watch:
+    enabled: true
+  memory_gap_hook:
+    enabled: true
+  memory_index_watch:
+    enabled: true
+  model_guard:
+    enabled: true
+  mutation_guard:
+    enabled: true
+  notify_remote:
+    enabled: false
+  nudge_context_inject:
+    enabled: true
+  pending_decisions_resurface:
+    enabled: true
+  phase_progress_writer:
+    enabled: true
+  plan_dir_nudge:
+    enabled: true
+  plannotator_wrapper_guard:
+    enabled: true
+  rule_nudge_hook:
+    enabled: true
+  simplify_gate:
+    enabled: true
+  spawn_fingerprint_audit:
+    enabled: true
+  spawn_provenance_workflow_guard:
+    enabled: true
+  stale_plan_close_nudge:
+    enabled: true
+  stamp_artifact:
+    enabled: false
+  standards_drift_nudge:
+    enabled: true
+  track_skill_invocation:
+    enabled: true
+  usage_nudge:
+    enabled: true
+  zsh_split_nudge:
+    enabled: true
+inject_refresh_mode: slim
+scope_hint_advisory: false

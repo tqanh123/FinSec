@@ -1,0 +1,6 @@
+# Guard-policy posture. A guard that is also a hook is that hook's row, with the
+# posture attached; a guard that is not a hook is a row of its own.
+page: guard
+run: runtime
+source: {module: guard_policy, entry: guard_gates}
+attach_to: hook

@@ -1,0 +1,124 @@
+# components.yaml — optional feature bundles for ship-all-but-off packaging.
+#
+# Every component SHIPS unconditionally (install copies all files, wires all
+# hooks so `verify_install --strict` stays green). A component is turned OFF at
+# RUNTIME only. Hook-bearing components (write-deny, decision-capture) get `enabled:
+# false` per hook in harness-hooks.yaml. The other components are GROUP LABELS
+# post-collapse: every skill ships in the one `hs` plugin, so the real
+# per-skill disable is dir-OMISSION at install (`install --skills`/`--skill-groups`,
+# `hs-cli skills --disable`). The legacy `plugin:` key and any
+# `enabledPlugins[hs-<group>@hs-local]` toggle are VESTIGIAL — that plugin no
+# longer exists, so flipping it disables nothing.
+#
+# For hook-bearing components SKILL/SCRIPT/DATA lists are informational and the
+# load-bearing effect is the HOOK flag; for the label components the `skills:`
+# list is the install-time selection set.
+#
+# Only OPTIONAL features live here. Core always-on hooks (gate_stage, write_guard,
+# session_init, ...) are deliberately NOT declared — the projector
+# never touches an undeclared hook.
+#
+# `requires`: a component may not be enabled while a component it depends on is off.
+
+components:
+  write-deny:
+    hooks: [floor_bash_guard]
+    scripts: [write_deny_policy, deny_matcher, deny_audit]
+    data: [write-deny-policy.yaml]
+    requires: []
+
+  decision-capture:
+    hooks: [nudge_context_inject, decision_capture_nudge]
+    skills: [remember]
+    requires: []
+
+  viz:
+    # Group label (was the hs-viz sibling plugin pre-collapse) (diagrams / knowledge graphs
+    # / visual preview). No hooks — "off" omits these skills at install
+    # and all skills ship under the one hs plugin. Disabling omits these skills at install (per-skill dir-omit).
+    # diagram ships ON by default (NOT in skill-defaults.yaml default_off, unlike its siblings
+    # here) — membership in this group only governs a scoped --skill-groups INSTALL selection,
+    # never its post-install enabled/disabled state.
+    skills: [mermaidjs, tech-graph, preview, drawio, diagram]
+    hooks: []
+    requires: []
+
+  devops:
+    # Group label (was the hs-devops sibling plugin pre-collapse) (deploy / cloud devops /
+    # web testing / browser automation). Ported (provenance in
+    # docs/STANDARDIZE.md). "off" omits these skills at install
+    # and all skills ship under the one hs plugin. Disabling omits these skills at install (per-skill dir-omit).
+    skills: [deploy, web-testing, release, rops]
+    hooks: []
+    requires: []
+
+  ai:
+    # Group label (was the hs-ai sibling plugin pre-collapse) (AI/multimodal generation,
+    # media processing, creative-coding: shaders, three.js, video). Ported
+    # (provenance in docs/STANDARDIZE.md). "off" flips
+    # enabledPlugins[hs-ai@hs-local]=false while the plugin dir still ships
+    # (ship-all-but-off). Disabling omits these skills at install (per-skill dir-omit).
+    skills: [threejs, gemini, partner]
+    hooks: []
+    requires: []
+
+  extra:
+    # Group label (was the hs-extra sibling plugin pre-collapse) (misc / content / PM
+    # skills: ask, llms, watzup, copywriting, ghpm, mintlify, markdown-novel-viewer,
+    # cti-expert). Ported (provenance in docs/STANDARDIZE.md).
+    # "off" omits these skills at install while the plugin dir
+    # still ships (ship-all-but-off). Disabling omits these skills at install (per-skill dir-omit).
+    skills: [prompt, handoff, eli5]
+    hooks: []
+    requires: []
+
+  flow:
+    # Plugin-only: hs-flow (workflow/orchestration/autonomy). Core decomposition.
+    skills: [loop, goal, team, worktree, compound, coding-agent-orchestration, dispatch, finetune, goal-warmup]
+    hooks: []
+    requires: []
+
+  think:
+    # Plugin-only: hs-think (reasoning/decision/critique). Core decomposition.
+    skills: [brainstorm, predict, scenario, problem-solving, critique, bakeoff, advise]
+    hooks: []
+    requires: []
+
+  research:
+    # Plugin-only: hs-research (investigation/discovery/scan). Core decomposition.
+    skills: [research, discover, techstack, security-scan, contract-test, eval-bootstrap]
+    hooks: []
+    requires: []
+
+  create:
+    # Plugin-only: hs-create (authoring harness artifacts). Core decomposition.
+    skills: [skill-creator, harness-creator, port, bootstrap]
+    hooks: []
+    requires: []
+
+  mem:
+    # Plugin-only: hs-mem (memory/reflection/docs). Core decomposition.
+    skills: [remember, insights, docs]
+    hooks: []
+    requires: []
+
+  meta:
+    # Plugin-only: hs-meta (harness self-management). Core decomposition.
+    skills: [find-skills, context-engineering, rule-author]
+    hooks: []
+    requires: []
+
+  docs-ssot:
+    # Docs-as-SSOT pipeline: scaffold → standardize (gate) → build (render).
+    # _docslib is the shared lib (no SKILL.md, not listed here — see skill-deps.yaml).
+    skills: [docs-scaffold, docs-standardize, docs-build]
+    hooks: []
+    requires: []
+
+  product:
+    # Group label (PO/BA product-spec skills: spec + shape). No hooks — "off" omits
+    # these skills at install and both skills ship under the one hs plugin.
+    # Disabling omits these skills at install (per-skill dir-omit).
+    skills: [spec, shape]
+    hooks: []
+    requires: []

@@ -1,0 +1,142 @@
+# test-strategy.yaml — SSOT: which pytest command each local/dev profile runs.
+#
+# Human-edited config -> YAML (docs/code-standards.md:31). harness/scripts/run_local_tests.py
+# reads this file and builds the exact pytest argv, so a dev or agent runs the SAME
+# command CI runs instead of hand-crafting one (drift). Every profile below MUST mirror
+# the matching case in scripts/ci.sh (unit / release-toolkit / rops /
+# plugin-skills) — harness/tests/test_run_local_tests.py::test_strategy_matches_ci_sh
+# reads ci.sh back and reddens the moment this file or ci.sh drifts. Edit both together.
+schema_version: "1.0"
+
+# --all's profile list (run_local_tests.py's --all flag), in run order. This is the
+# ONE source for which profiles "everything" covers -- run_local_tests.py derives its
+# --all profile list from this key instead of carrying a second hardcoded copy (a
+# hardcoded tuple used to live there and silently stopped covering `rops` when this
+# file grew that profile). `harness-fast` deliberately stays OUT: it trades coverage
+# for speed on purpose (see its profile's own comment below), and --all must never
+# silently swap the full run for the dev-loop subset.
+all_profiles:
+  - harness
+  - release
+  - hs-code
+  - packs
+  - rops
+
+profiles:
+  # Mirrors ci.sh `unit)`: full harness/tests/, `load` scheduler, -p no:randomly on the
+  # hot path when pytest-randomly is installed. `loadfile` was used until 2026-09-01: it
+  # builds a file's module-scoped fixtures once per worker, but it also pins a whole file
+  # to ONE worker, which set the shard-cell floor at the heaviest file. See ci.sh for the
+  # per-cell measurements.
+  # `ignore: [hs_code]` -- the isolated `hs-code` suite below runs those tests as its
+  # own CI cell on every PR (scripts/ci.sh's `hs-code)` case), so this profile (and the
+  # unit/unit-Nof3 lines it mirrors) must not also collect them -- that would run every
+  # hs-code test twice on each push. `coverage-floors` deliberately does NOT carry this
+  # ignore (ported code carries its own coverage group, judged separately), so it stays
+  # the one declared re-run of hs_code -- see test_ci_job_parity.py's
+  # test_each_hs_code_node_runs_through_exactly_its_declared_jobs.
+  # `ignore: [..., rops]` -- same shape, for the `rops` profile below: its own local-only
+  # `rops)` ci.sh cell runs harness/tests/rops/, so this profile (and unit/unit-Nof3)
+  # must not also collect it.
+  harness:
+    path: harness/tests
+    scheduler: load
+    norandomly: true
+    ignore:
+      - hs_code
+      - rops
+
+  # Dev inner-loop subset ONLY — NOT a gate substitute, never trust this in place of the
+  # full run. Skips the ~15 heaviest files (install/lifecycle/subprocess-heavy suites) for
+  # fast local iteration; measured (2026-08-21, `-n auto` 14-core) 119.68s / 11323
+  # collected vs 134.57s / 11853 collected full. The push/ship gate and CI always run the
+  # full `harness` profile (or the sharded unit-Nof3 cells) — this profile trades
+  # coverage for speed on purpose. Also ignores hs_code, same reason as the `harness`
+  # profile above.
+  harness-fast:
+    path: harness/tests
+    scheduler: load
+    norandomly: true
+    ignore:
+      - test_install.py
+      - test_harness_lifecycle.py
+      - test_install_ccstatusline.py
+      - test_install_components.py
+      - test_bash_safety_guard.py
+      - test_spec_shape_e2e_smoke.py
+      - test_courier_slice.py
+      - test_drawio_catalog_search.py
+      - test_find_flaky.py
+      - test_find_polluter.py
+      - test_find_polluter_artifact.py
+      - test_shrink_failure.py
+      - test_decomposition_invariants.py
+      - test_hs_cli.py
+      - test_artifact_io.py
+      - hs_code
+      - rops
+
+  # The isolated hs-code suite (the `hs-code` shell + its `harness/data/hs-code-registry.d/`
+  # domains): a directory under the SAME `harness/tests` root the `harness` profile already
+  # declares, so it needs no separate CENSUS_ROOTS entry (test_census.py's rglob already
+  # walks into it) -- it needs its own PROFILE so `harness`/`harness-fast` can ignore it and
+  # `run_local_tests.py --all` can still run it exactly once.
+  hs-code:
+    path: harness/tests/hs_code
+    scheduler: load
+    norandomly: true
+
+  # Per-pack test dirs (`packs/<name>/tests/`). No pack has shipped one yet -- `allow_empty`
+  # tells run_local_tests.py's --all to treat a missing/empty `packs/` as a suite with
+  # nothing in it yet, not a failure (bare pytest exits 4 on a missing path, 5 on zero
+  # collected -- neither means "broken" here). A live root even so: CENSUS_ROOTS names it,
+  # and `test_test_census_is_anchored.py`'s `_ROOTS_EMPTY_FOR_NOW` waiver clears itself the
+  # day a pack's tests/ actually lands.
+  packs:
+    path: packs
+    scheduler: load
+    norandomly: true
+    allow_empty: true
+
+  # Mirrors ci.sh `release-toolkit)`: --dist load (NOT loadfile) — the shared-tarball
+  # fixture in test_courier_sync.py only pays off when its file's tests are SCATTERED
+  # across workers; loadfile would pack them onto one worker and force it serial again.
+  release:
+    path: release/tests
+    scheduler: load
+    norandomly: true
+
+  # Mirrors ci.sh `rops)`: the remote-execution CLI's pure-function tests. No xdist —
+  # the suite runs in well under a second, so worker startup would cost more than it
+  # saves. `rops` is now ported under harness/scripts/rops/ (its tests under
+  # harness/tests/rops/), so its engine DOES ship inside harness/manifest.json; it is
+  # still meant to run from any repo, reached through the hs-rops launcher
+  # ($HARNESS_BIN_ROOT/harness/bin/hs-rops) rather than a relative path. This is a
+  # directory UNDER the `harness` profile's `harness/tests` root, so the `harness` and
+  # `harness-fast` profiles both `ignore` it below -- the same shape as `hs_code`,
+  # to avoid running it twice on every push (ci.sh's `unit`/`unit-Nof3` lines ignore
+  # it too; `coverage-floors` deliberately does NOT, same reasoning as hs_code).
+  rops:
+    path: harness/tests/rops
+    xdist: false
+    norandomly: true
+
+  # Mirrors ci.sh `plugin-skills)`: the executable Python tooling shipped inside
+  # harness/plugins/hs/skills/*/scripts (db_migrate.py, cloudflare_deploy.py,
+  # tailwind_config_gen.py, ...) ships real logic with real pytest suites, but no
+  # profile above ever reached it — only harness/tests and
+  # release/tests were wired. 36 test files across 18 skill directories sat un-gated
+  # until this profile (see test_plugin_skill_test_dirs_are_gated.py, the mechanical
+  # discovery guard).
+  # ai-multimodal's 4 files that used to be ignored (minimax_api_client /
+  # minimax_generate / gemini_batch_process / openrouter_generate) are ported onto
+  # the repo's single httpx client + respx transport-layer mocking (matching
+  # harness/tests/test_notify_remote.py's pattern) and run here unignored. Its
+  # collection-crashing `sys.exit(1)`-at-import bug was already fixed
+  # (document_converter.py); test_gemini_batch_process.py additionally stubs
+  # `google.genai` in sys.modules so it stays importable/testable without the real
+  # (uninstalled-in-CI) google-genai SDK.
+  plugin-skills:
+    path: harness/plugins/hs/skills
+    scheduler: load
+    norandomly: true

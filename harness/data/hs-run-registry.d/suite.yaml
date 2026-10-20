@@ -1,0 +1,66 @@
+# suite.yaml — the `suite` domain's fragment of the hs-run registry.
+#
+# Owned exclusively by whoever builds the `suite` domain's verbs. Never touch
+# cook.yaml/plan.yaml or any other domain's fragment from here — one file per
+# domain is what lets concurrent domain builds avoid writing the same file.
+# Schema + merge/conflict rules: see harness/data/hs-run-registry.yaml's header.
+#
+# `next` reports whether a FRESH remote suite run exists for the tree as it
+# stands right now (`hs_run_suite.py`'s own module docstring). It never runs the
+# suite itself — a driver runs the `next_command` chain it hands back.
+
+domains:
+  suite:
+    next: {module: hs_run_suite, entry: NEXT, help: "report whether a fresh remote suite result exists for the tree"}
+
+# No live skill owns this domain yet (unlike `security`/`review`, whose
+# `skill:`+`covers_skill: true` pair routes a real SKILL.md's always-read body
+# through this table) — `suite` is reached from a chain another domain's own
+# next_command prints, not from a skill body naming `hs-run suite next`
+# directly. `covers_skill: false` says so plainly rather than defaulting to a
+# `skill:` key that would point at a directory (`harness/plugins/hs/skills/
+# suite/`) that does not exist.
+step_routing:
+  suite:
+    covers_skill: false
+
+    states:
+      # ── no config to run the suite anywhere ───────────────────────────────
+      # Two keys, one state: which env var is missing is in the warning, not
+      # the state name — a caller acting on `config_missing` reads the message
+      # either way, and a second state name would only duplicate the branch
+      # that already exists in the module for the two-key check.
+      config_missing:
+        summary: >-
+          `.rops.env` does not declare the alias/junit-path pair this domain needs
+          (`ROPS_SUITE_LANE` and `ROPS_JUNIT_<NAME>`). Declare both before this verb
+          can resolve which remote lane runs the suite — the warning names the exact
+          missing key.
+
+      # ── no run recorded yet ────────────────────────────────────────────────
+      not_run:
+        summary: >-
+          No `junit.xml` exists under this tree's suite data directory. The
+          envelope's `next_command` is the full chain (sync the lane, stamp the
+          tree's fingerprint, run the suite, fetch the result) — run it verbatim.
+
+      # ── a run exists but cannot be trusted against the tree as it stands ────
+      stale:
+        summary: >-
+          A `junit.xml` exists, but either its recorded fingerprint is missing/
+          unreadable or it no longer matches this tree's current content — the
+          local tree moved since that run. Re-run the chain in `next_command`
+          before trusting anything in the stored result.
+
+      # ── fresh, and it found a failure ────────────────────────────────────────
+      red:
+        summary: >-
+          The last suite run against THIS tree is fresh and carries at least one
+          failure or error. `next_command` opens the redlist for the exact junit
+          file this verdict came from.
+
+      # ── fresh, and it is clean ────────────────────────────────────────────────
+      green:
+        summary: >-
+          The last suite run against THIS tree is fresh and carries zero failures
+          and zero errors.

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": { "title": "Login Flow" },
+  "participants": [
+    { "id": "client", "label": "Web Client", "role": "client" },
+    { "id": "api", "label": "API Server", "role": "gateway" },
+    { "id": "idp", "label": "OAuth Provider", "role": "external" }
+  ],
+  "messages": [
+    { "from": "client", "to": "api", "label": "POST /login", "kind": "sync-call" },
+    { "from": "api", "to": "idp", "label": "Verify Token", "kind": "sync-call" },
+    { "from": "idp", "to": "api", "label": "Token Valid", "kind": "return" },
+    { "from": "api", "to": "client", "label": "Set-Cookie", "kind": "return" }
+  ]
+}

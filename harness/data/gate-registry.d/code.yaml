@@ -1,0 +1,4 @@
+# Code rules the repo declares in codemap.yaml `rules:`.
+page: code
+source: {module: codemap_areas, entry: rule_gates}
+run: {module: codegraph.check.gates, entry: run_code}

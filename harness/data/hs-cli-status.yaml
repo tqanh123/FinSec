@@ -1,0 +1,11 @@
+# hs-cli-status.yaml — what `hs-cli status` shows: one block per row.
+#
+# A row is a name and the argv of ONE family command (hs-run, hs-code, hs-cli,
+# hs-rops). `hs-cli status` runs each row alone and shows what it printed; the exit
+# is the worst row's (broken > refused > findings > clean). Adding a block is adding
+# a row here — `hs-cli status` itself reads no ledger, lane or gate.
+schema_version: 1
+blocks:
+  - {name: port, argv: [hs-code, port, status]}
+  - {name: test, argv: [hs-code, test, status]}
+  - {name: gates, argv: [hs-cli, gates]}

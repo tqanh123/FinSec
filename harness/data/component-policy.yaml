@@ -1,0 +1,22 @@
+# component-policy.yaml — component on/off selection (source of truth).
+#
+# Records ONLY deviations from ship-all: a component absent here is ENABLED
+# (default). component_config.py rewrites this file + projects the chosen state
+# into harness-hooks.yaml. Tracked in git so a toggle is a visible diff.
+#
+# TWO consumers, and only one of them runs in this repo — which is how a measurement
+# here goes wrong. `component_config.project()` carries a deviation into the `enabled:`
+# flag of the component's HOOKS; that is the only in-repo effect, and twelve of the
+# fourteen components own no hook, so in a self-hosted checkout switching them off
+# changes nothing visible. The consumer that matters is the INSTALLER:
+# `_resolve_policy_components` turns this table into the default `--components` value,
+# so an empty table installs EVERYTHING while this one installs default-only-hs. An
+# emptied table therefore looks harmless in the dev tree and silently widens every
+# fresh install (measured: two gates caught it).
+#
+# What the hook axis does NOT cover is drift: `hs-cli components` reports `drift: []`
+# for a component whose skills are all present, because cross_check reads hooks only.
+# In a self-hosted tree that is correct-by-accident, not correct by construction.
+#
+components:
+  integrations: false

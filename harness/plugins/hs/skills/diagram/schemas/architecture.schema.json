@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hs-diagram/architecture.schema.json",
+  "title": "hs:diagram architecture IR",
+  "description": "System topology: components grouped in boundaries, joined by directional connections.",
+  "allOf": [{ "$ref": "#/$defs/envelope" }],
+  "type": "object",
+  "properties": {
+    "diagram_type": { "const": "architecture" },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 250,
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/safe_text" },
+          "role": {
+            "type": "string",
+            "enum": ["frontend", "backend", "database", "cache", "queue",
+                     "storage", "gateway", "auth", "external", "worker"]
+          },
+          "layer": { "type": "integer", "minimum": 0, "maximum": 10 }
+        }
+      }
+    },
+    "boundaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "components"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/safe_text" },
+          "role": {
+            "type": "string",
+            "enum": ["cloud", "vpc", "cluster", "trust-boundary",
+                     "private-network", "external-zone"]
+          },
+          "components": { "type": "array", "items": { "$ref": "#/$defs/id" } }
+        }
+      }
+    },
+    "connections": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "$ref": "#/$defs/id" },
+          "to": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/safe_text" },
+          "kind": {
+            "type": "string",
+            "enum": ["sync", "async", "stream", "fallback", "bi-directional"]
+          }
+        }
+      }
+    }
+  },
+  "required": ["components"]
+}

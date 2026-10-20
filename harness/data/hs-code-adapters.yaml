@@ -1,0 +1,13 @@
+# The bin's language readers: which adapter class reads which file suffix.
+# Read by `codegraph._core.adapter.book.load_book` (the one reader), every row
+# checked; a book with no row is broken, never an empty reader set.
+#
+# A PROJECT adds a reader for its own language in its `codemap.yaml`
+# `adapters:` block, as a command (see `codegraph._core.adapter.command_adapter`);
+# that command runs only in a repo the operator trusted (`hs-cli trust`).
+schema_version: 1
+adapters:
+  - id: python
+    extensions: [".py"]
+    module: codegraph._core.adapter.python_adapter
+    class: PythonAdapter

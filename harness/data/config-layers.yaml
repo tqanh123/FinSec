@@ -1,0 +1,276 @@
+# config-layers.yaml — which layers a harness/data/*.yaml config answers to, and
+# which door resolves it.
+#
+# The defect this exists for (D1/D2/D5) is silent: a reader builds
+# `root/"harness"/"data"/<name>` itself, so it reads the SHIPPED file and a deployment
+# that set HARNESS_<NAME> — the sanctioned per-project exception — is ignored without a
+# word.
+#
+# Measured 2026-09-22, at the scope that decides it (the FUNCTION that resolves the
+# path, not the module): 54 configs, 48 with a path built in product code across 88
+# (file, function) pairs, and 24 where every construction is env-blind. An earlier
+# module-scope count said 18 blind / 30 env-aware; it counted a module env-aware when
+# ANY HARNESS_* appeared anywhere in it, so `gemini-partner.yaml` scored env-aware off
+# HARNESS_AGY_CMD (which names a command, not a path). Four detector passes and a
+# hand-read of every candidate settled it; the env name may sit in a module constant
+# (`environ.get(_ENV_OVERRIDE)`), which a literal-only scan misses.
+#
+# Layers, highest first: explicit > env > project > ship. `project` is this project's
+# writeable data home (harness_paths.data_root()); it is opt-in per file, because a
+# cage-relevant config in the writeable zone is what the localized-config ruling refused.
+#
+# Enrolment is per BATCH, by theme, and the gate
+# harness/tests/test_config_layers_registry.py holds the ratchet: once a name is here,
+# no product file may spell its path. A config not yet enrolled is simply absent — the
+# `configs:` list IS the progress marker. `exempt` is for readers that must NOT be
+# layered, each with the measurement that says why.
+
+configs:
+  - file: critique.yaml
+    env: HARNESS_CRITIQUE_CONFIG
+    project: true
+  - file: review-policy.yaml
+    env: HARNESS_REVIEW_POLICY_CONFIG
+    project: true
+  - file: coverage-floors.yaml
+    env: HARNESS_COVERAGE_FLOORS
+    project: true
+  - file: iso-25010-matrix.yaml
+    env: HARNESS_ISO_MATRIX
+    project: true
+  - file: regression-sentinel.yaml
+    env: HARNESS_REGRESSION_SENTINEL
+    project: true
+  - file: test-strategy.yaml
+    env: HARNESS_TEST_STRATEGY
+    project: true
+  - file: guard-policy.yaml
+    env: HARNESS_GUARD_POLICY
+    project: false
+    why_no_project: >-
+      guard policy decides whether a write is refused; the localized-config ruling keeps a
+      cage-relevant config out of the writeable project zone, and an explicit env stays
+      the sanctioned per-project exception.
+  # batch C — grid planning tables
+  - file: grid-axes.yaml
+    env: HARNESS_GRID_AXES
+    project: true
+  - file: grid-strength.yaml
+    env: HARNESS_GRID_STRENGTH
+    project: true
+  - file: grid-density-tier.yaml
+    env: HARNESS_GRID_DENSITY_TIER
+    project: true
+  # batch D — skill-shape tables
+  - file: injectable-classifier.yaml
+    env: HARNESS_INJECTABLE_CLASSIFIER
+    project: true
+  - file: thin-core-caps.yaml
+    env: HARNESS_THIN_CORE_CAPS
+    project: true
+  - file: thin-core-grandfather.yaml
+    env: HARNESS_THIN_CORE_GRANDFATHER
+    project: true
+  # batch E — the remaining env-blind readers
+  - file: orchestration.yaml
+    env: HARNESS_ORCHESTRATION
+    project: true
+  - file: route-probes.yaml
+    env: HARNESS_ROUTE_PROBES
+    project: true
+  - file: runtime-targets.yaml
+    env: HARNESS_RUNTIME_TARGETS
+    project: true
+  - file: simplify-policy.yaml
+    env: null
+    why_no_env: >-
+      its reader states the rule it was given: posture comes from the write-guarded
+      policy file ONLY, with no env knob, so an env layer here would hand back the lever
+      the file guard exists to hold. It is enrolled for the shared resolution and the
+      ratchet, not for a new layer.
+    project: false
+    why_no_project: >-
+      same reason: a posture file that decides whether a change is flagged does not move
+      into the writeable project zone.
+  # batch F — the standards knobs (D2): two readers built the shipped path directly
+  # and never saw HARNESS_STANDARDS_CONFIG, while the file's own header implied they did
+  - file: standards.yaml
+    env: HARNESS_STANDARDS_CONFIG
+    project: true
+
+  - file: auto-decision.yaml
+    env: HARNESS_AUTO_DECISION_CONFIG
+    project: true
+  - file: auto-decision-labels.yaml
+    env: HARNESS_AUTO_DECISION_LABELS
+    project: true
+  - file: decision-governance.yaml
+    env: HARNESS_DECISION_GOVERNANCE
+    project: true
+
+  - file: skill-chains.yaml
+    env: HARNESS_SKILL_CHAINS
+    project: true
+  - file: skill-deps.yaml
+    env: HARNESS_SKILL_DEPS
+    project: false
+    why_no_project: >-
+      This graph carries the core-immutable floor — the set a selection pass may never
+      untick. A copy in the writeable project zone would let a run drop the spine from
+      under its own gates, which is the shape the localized-config ruling refused. The
+      env layer stays: it is scrubbed pre-push, so the shipped graph decides at the
+      boundary that matters.
+  - file: skill-confusable-exemptions.yaml
+    env: HARNESS_SKILL_CONFUSABLE_EXEMPTIONS
+    project: false
+    why_no_project: >-
+      An exemption list is a waiver list. Its reader fails CLOSED on purpose (a missing
+      or malformed file keeps FLAGGING), so a project-local copy could only ever widen
+      the waivers — silently stopping a confusable-name warning nobody reviewed.
+
+  - file: write-guard.yaml
+    env: HARNESS_WRITE_GUARD_CONFIG
+    project: false
+    why_no_project: >-
+      This is the guard's own switch. A copy in the writeable project zone would let a
+      run turn off the guard that is watching it — the tool-blind hole the localized-
+      config ruling named. The env layer is the dev seam and is scrubbed pre-push.
+  - file: ownership.yaml
+    env: HARNESS_OWNERSHIP_FILE
+    project: false
+    why_no_project: >-
+      The lane map the script-path containment helper enforces. A project-local copy
+      would let a run widen its own lanes, which is the same hole as a local RBAC
+      override; the fence has to be declared where the run cannot rewrite it.
+  - file: stage-policy.yaml
+    env: HARNESS_STAGE_POLICY
+    project: false
+    why_no_project: >-
+      Stage policy is named in the localized-config ruling as bin-global: a per-project
+      copy would let a project drop the artifacts its own stage gate requires.
+  - file: protected-branches.yaml
+    env: HARNESS_PROTECTED_BRANCHES
+    project: true
+
+  - file: partner.yaml
+    env: HARNESS_PARTNER
+    project: true
+  - file: gemini-partner.yaml
+    env: HARNESS_GEMINI_PARTNER
+    project: true
+  - file: model-policy.yaml
+    env: HARNESS_MODEL_POLICY
+    project: false
+    why_no_project: >-
+      This table is the model cage — which tier an agent may spawn at. A copy in the
+      writeable project zone would let a run raise its own ceiling, the same widening
+      the localized-config ruling refused for agent permissions.
+
+  - file: nudge-channels.yaml
+    env: HARNESS_NUDGE_CHANNELS
+    project: true
+  - file: context-surface.yaml
+    env: HARNESS_CONTEXT_SURFACE
+    project: true
+  - file: reinject-strategy.yaml
+    env: HARNESS_REINJECT_STRATEGY
+    project: true
+  - file: spawn-provenance.yaml
+    env: HARNESS_SPAWN_PROVENANCE
+    project: true
+  - file: observation-signals.yaml
+    env: HARNESS_OBSERVATION_SIGNALS
+    project: true
+  # A repo's own rule documents, routed into cook by what a phase creates. Advisory:
+  # an entry only ADDS a document to read and widens no lane, so the project layer
+  # is safe here.
+  - file: cook-rules.yaml
+    env: HARNESS_COOK_RULES
+    project: true
+  - file: hs-run-registry.yaml
+    env: HARNESS_HS_RUN_REGISTRY_BASE
+    project: true
+  - file: hs-code-registry.yaml
+    env: HARNESS_HS_CODE_REGISTRY_BASE
+    project: true
+  - file: hs-cli-registry.yaml
+    env: HARNESS_HS_CLI_REGISTRY_BASE
+    project: true
+  - file: hs-rops-registry.yaml
+    env: HARNESS_HS_ROPS_REGISTRY_BASE
+    project: true
+  - file: hs-secrets-registry.yaml
+    env: HARNESS_HS_SECRETS_REGISTRY_BASE
+  - file: hs-usage-registry.yaml
+    env: HARNESS_HS_USAGE_REGISTRY_BASE
+    project: true
+
+  - file: cook.yaml
+    env: HARNESS_COOK_CONFIG
+    project: true
+  - file: code-review.yaml
+    env: HARNESS_CODE_REVIEW_CONFIG
+    project: true
+  - file: test-policy.yaml
+    env: HARNESS_TEST_POLICY
+    project: true
+  - file: risk-rubric.yaml
+    env: HARNESS_RISK_RUBRIC
+    project: true
+  - file: workflow-weight.yaml
+    env: HARNESS_WORKFLOW_WEIGHT
+    project: true
+  - file: skill-config.yaml
+    env: HARNESS_SKILL_CONFIG
+    project: true
+  - file: artifact-producers.yaml
+    env: HARNESS_ARTIFACT_PRODUCERS
+    project: true
+
+  - file: context-firewall.yaml
+    env: HARNESS_CONTEXT_FIREWALL
+    project: true
+  - file: agent-behavior-linter.yaml
+    env: HARNESS_AGENT_BEHAVIOR_LINTER
+    project: true
+
+exempt:
+  - file: output.yaml
+    reader: harness/scripts/output_config.py
+    why: >-
+      already two named doors, and the split is deliberate: load_output is the gate path
+      and does NOT honour HARNESS_OUTPUT (tracked config only), while resolve_all does.
+      Routing both through one door would erase that distinction.
+  - file: harness-hooks.yaml
+    reader: harness/hooks/hook_runtime.py
+    why: >-
+      carries its own two-seam stack, ruled separately — HARNESS_HOOK_CONFIG
+      replaces (the test seam 47 files use), HARNESS_HOOK_OVERLAY merges per hook name
+      and per key. A generic whole-document merge is the wrong shape for it.
+  - file: hooks-registration.yaml
+    reader: harness/scripts/verify_install.py
+    why: >-
+      parity reader: it asks whether THIS INSTALL's wiring matches THIS INSTALL's
+      registry. Honouring an override would compare a project's preference against
+      another file and report drift that is not there.
+  - file: hook-dispatch.yaml
+    reader: harness/scripts/verify_install.py
+    why: parity reader, same reason as hooks-registration.yaml.
+  - file: components.yaml
+    reader: harness/scripts/verify_install.py
+    why: >-
+      parity reader: the install map is integrity-LOCKED by the manifest, so a drift
+      there is corruption, not customization (verify_install.py's own _LOCALIZED_DATA
+      note).
+  - file: skill-defaults.yaml
+    reader: harness/install/_prompts.py
+    why: >-
+      installer reader: it resolves against the SOURCE tree being installed FROM, not a
+      config this process should honour an override for. An override here would install
+      one tree's defaults while claiming to install another's.
+  - file: component-policy.yaml
+    reader: harness/install/_components.py
+    why: >-
+      installer reader against the TARGET tree being written, the same shape as
+      components.yaml above — the installer is placing these files, not consuming a
+      policy that a deployment may retune.

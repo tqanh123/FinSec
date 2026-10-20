@@ -1,0 +1,6 @@
+# Every hook: the dispatch registry, the installer registration and the shipped
+# on/off registry, read through the one function hs-cli already uses for names.
+page: hook
+run: runtime
+source: {module: hs_cli, entry: hook_gates}
+project_layer: harness-hooks.yaml

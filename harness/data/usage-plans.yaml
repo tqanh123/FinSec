@@ -1,0 +1,55 @@
+# usage-plans.yaml — sample plan presets for hs-usage's LOCAL token-window
+# estimate, its near-ceiling nudge threshold, and the (default-off) opt-in for
+# a live provider fetch.
+#
+# `five_hour_tokens`/`seven_day_tokens` are a ROUGH per-window ceiling this
+# project assumes for the named plan — NOT the provider's own accounting (that
+# formula is proprietary and this repo has no access to it without the opt-in
+# live fetch below). Treat every number here as an estimate to calibrate for
+# your own subscription, not a published fact; override per call with
+# `hs-usage limits --plan <name>`, or edit this file.
+#
+# Human-edited (YAML) — machine-written usage data never lives here.
+
+default_plan:
+  claude-code: pro
+  codex: plus
+
+# A window's used/budget ratio at or above this triggers the advisory nudge
+# (harness/hooks/usage_nudge.py) before a heavy Task/Agent/Workflow spawn.
+nudge_threshold_percent: 80
+
+# Opt-in, default OFF: a live fetch of the provider's own
+# usage percentage instead of the local token-count estimate. hs-usage never
+# calls the network unless this is true AND the caller asked for it
+# (`hs-usage limits --live`).
+provider_fetch:
+  enabled: false
+
+plans:
+  claude-code:
+    free:
+      label: "Claude Free (ước lượng)"
+      five_hour_tokens: 40000
+      seven_day_tokens: 200000
+    pro:
+      label: "Claude Pro (ước lượng)"
+      five_hour_tokens: 300000
+      seven_day_tokens: 1500000
+    max5x:
+      label: "Claude Max 5x (ước lượng)"
+      five_hour_tokens: 1500000
+      seven_day_tokens: 7500000
+    max20x:
+      label: "Claude Max 20x (ước lượng)"
+      five_hour_tokens: 6000000
+      seven_day_tokens: 30000000
+  codex:
+    plus:
+      label: "ChatGPT Plus (ước lượng)"
+      five_hour_tokens: 250000
+      seven_day_tokens: 1250000
+    pro:
+      label: "ChatGPT Pro (ước lượng)"
+      five_hour_tokens: 1000000
+      seven_day_tokens: 5000000

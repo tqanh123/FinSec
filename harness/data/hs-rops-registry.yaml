@@ -1,0 +1,13 @@
+# hs-rops-registry.yaml — base file of hs-rops's command registry.
+#
+# The shipped commands live in hs-rops-registry.d/*.yaml, one row each:
+#
+#   domains:
+#     <command>: {module: rops.verbs.<file>, help: "<one line>"}
+#     <old-command>: {moved_to: "<cli> <command>"}
+#
+# Same loader, merge and conflict rules as the other family registries
+# (`hs_family.registry.load_registry`). Env overrides: HARNESS_HS_ROPS_REGISTRY (single
+# file), HARNESS_HS_ROPS_REGISTRY_BASE, HARNESS_HS_ROPS_REGISTRY_DIR.
+
+domains: {}

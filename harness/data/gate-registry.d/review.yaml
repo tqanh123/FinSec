@@ -1,0 +1,6 @@
+# Review rules the harness ships (harness/standards/areas), disabled included.
+# A repo override (docs/standards/) is the repo's own fact, not a shipped gate.
+page: review
+run: {module: codegraph.check.gates, entry: run_review}
+source: {module: rule_view, entry: shipped_rule_gates}
+project_layer: gates.yaml

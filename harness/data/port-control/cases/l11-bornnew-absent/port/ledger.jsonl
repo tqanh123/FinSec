@@ -1,0 +1,2 @@
+{"ts": "2026-09-28T00:00:00", "node": "old@1e2f3a4b::seed.mod::kept", "status": "unported", "by": "human"}
+{"ts": "2026-09-28T00:00:00", "node": "new@9f8e7d6c::seed.mod::ghost", "status": "born-new", "by": "human", "reason": "declared but never built"}

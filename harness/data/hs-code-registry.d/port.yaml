@@ -1,0 +1,51 @@
+# port.yaml — the `port` domain's fragment of the hs-code registry.
+#
+# The FIRST live verb landed here: `map`, the ledger write door. `ctx` (print
+# the resolved batch paths) and `init` (bulk-declare `unported` from a
+# batch's frozen snapshot) joined it, same module.
+# Concurrent port verb lanes each own a disjoint `module:` and only ADD their own
+# verb row — never touch another slice's row, and never turn this into a
+# domain-level `moved_to` (a node cannot mix a domain-level `moved_to` with verbs).
+
+domains:
+  port:
+    map: {module: codegraph_port_ledger_verbs, entry: MAP, help: "append one or many ledger lines mapping old nodes to a status/destination"}
+    ctx: {module: codegraph_port_ledger_verbs, entry: CTX, help: "print the resolved port root, ledger and batch paths"}
+    init: {module: codegraph_port_ledger_verbs, entry: INIT, help: "bulk-declare unported for every node missing a line in a batch's frozen snapshot"}
+    check-ledger: {module: codegraph_port_ledger_verbs, entry: CHECK_LEDGER, help: "run the ledger laws against a batch and report findings"}
+    port-batch: {module: codegraph_port_batch_verbs, entry: PORT_BATCH, help: "write ported/born-new ledger lines for every symbol of one landed dist"}
+    assign: {module: codegraph_port_batch_verbs, entry: ASSIGN, help: "resolve or cross-check the dist assignment for a batch's frozen snapshot"}
+    carry-forward: {module: codegraph_port_judge_verbs, entry: CARRY_FORWARD, help: "carry fingerprint-equal ledger rows from a previous snapshot onto the batch's freeze"}
+    snapshot: {module: codegraph_port_snapshot_verbs, entry: SNAPSHOT, help: "build a named snapshot of the source or target tree, pinned by hash"}
+    add-module: {module: codegraph_port_tree_verbs, entry: ADD_MODULE, help: "land one or more upstream files into the target repo with imports rewritten"}
+    build: {module: codegraph_port_build_verbs, entry: BUILD, help: "build one dist tree from its spec into the target repo"}
+    judge-nodes: {module: codegraph_port_judge_verbs, entry: JUDGE_NODES, help: "settle changed or new-in-target nodes carry-forward left, auto-porting body-equal matches"}
+    judge-removed: {module: codegraph_port_judge_verbs, entry: JUDGE_REMOVED, help: "settle nodes carry-forward left gone, auto-dropping ones removed upstream"}
+    rehome: {module: codegraph_port_rehome_verbs, entry: REHOME, help: "bulk-update ledger destinations for symbols moved home inside the already-ported tree"}
+    tests: {module: codegraph_port_tests_verbs, entry: TESTS, help: "plan moving and rewriting a source's tests into the target repo"}
+    tests-land: {module: codegraph_port_tests_land_verb, entry: TESTS_LAND, help: "land test files into their dist's test home with owners and ledger rows"}
+    status: {module: codegraph_port_status_verbs, entry: STATUS, help: "report ledger counts, todo buckets and law findings for the batch"}
+    suggest: {module: codegraph_port_status_verbs, entry: SUGGEST, help: "suggest ported destinations for old nodes by matching body hash in a new snapshot"}
+    trace: {module: codegraph_port_status_verbs, entry: TRACE, help: "print one node's full ledger history with blocker status"}
+    propose: {module: codegraph_port_open_verbs, entry: PROPOSE, help: "record the model's proposed choice for a pending open item"}
+    approve: {module: codegraph_port_open_verbs, entry: APPROVE, help: "approve or reject a pending open item as a human"}
+    catch-up: {module: codegraph_port_catchup_verbs, entry: CATCH_UP, help: "open a new batch that follows a predecessor's source to a newer commit"}
+    drift-scan: {module: codegraph_port_drift_verbs, entry: DRIFT_SCAN, help: "report what the source added, changed, deleted and renamed between two pins"}
+    drift-hunks: {module: codegraph_port_drift_verbs, entry: DRIFT_HUNKS, help: "check or record dispositions for every drift hunk of a batch"}
+    drift-merge: {module: codegraph_port_drift_merge_verbs, entry: DRIFT_MERGE, help: "merge a catch-up batch's source drift into the target files that already hold it"}
+    drift-place: {module: codegraph_port_drift_verbs, entry: DRIFT_PLACE, help: "check that applied drift dispositions land at a valid target destination"}
+    drift-rej: {module: codegraph_port_drift_verbs, entry: DRIFT_REJ, help: "list or clean up leftover .rej files from a drift merge"}
+    source: {module: codegraph_port_source_verbs, entry: SOURCE, help: "check out a batch's source at its pinned commit, read-only"}
+    done: {module: codegraph_port_done_verbs, entry: DONE, help: "close or reopen a batch with a done mark"}
+    born-new: {module: codegraph_port_born_new_verbs, entry: BORN_NEW, help: "declare symbols born on the new tree between two snapshots"}
+    docs: {module: codegraph_port_docs_verbs, entry: DOCS, help: "write a batch's progress, mapping and decisions documents from its ledger"}
+    flow-trace: {module: codegraph_port_flow_trace_verbs, entry: FLOW_TRACE, help: "trace a batch's declared flows through the new tree's builder calls"}
+
+# What `hs-code init` reports for this domain (schema: init.yaml's header).
+# A port workspace is planned by an interview, so init routes to it, never runs it.
+initializers:
+  port:
+    order: 50
+    summary: ".port/port.yaml: a port workspace, only for a repo being ported"
+    status: {module: codegraph.init.initializers, entry: port_status}
+    route: "/hs:port"

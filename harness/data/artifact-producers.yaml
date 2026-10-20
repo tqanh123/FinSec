@@ -1,0 +1,31 @@
+# artifact-producers.yaml — CLIs whose own output flag is the legitimate route
+# for a gate artifact, used ONLY to word the artifact-forgery block's advice
+# line (name the flag instead of "use the Write tool"). Never an allow-list:
+# a declared producer's segment that ALSO redirects into an artifact path
+# stays forgery and stays blocked (gate_stage.py's coarse battery decides
+# that; this file cannot override it, by construction — see
+# _forgery_reason_in_segment).
+#
+# `match` is a regex tested at a genuine command head (shell_unwrap's/stage_
+# detector's shared wrapper reach — env VAR=, sudo, uv run [--project <dir>],
+# etc. — is already peeled before this runs, so `match` itself never needs to
+# spell a wrapper). `out_flag` is the flag whose value the advice names.
+producers:
+  # Before the harness/scripts row: first match wins, and hs_code.py is one of those
+  # scripts, but its own output flag is not --out (--out names a snapshot store).
+  - match: '(?:(?:\S*/)?hs-code\b|(?:python3?\s+)?(?:\S*/)?hs_code\.py\b)'
+    out_flag: '--write'
+    why: >-
+      every hs-code verb writes its envelope's `data` to a file with the
+      shell flag --write FILE (atomic, beside the file).
+  - match: '(?:python3?\s+)?harness/scripts/[\w/]+\.py\b'
+    out_flag: '--out'
+    why: >-
+      harness's own scripts route their own output via --out, never a shell
+      redirect.
+  - match: 'obt\b'
+    out_flag: '--out'
+    why: >-
+      ob-tools' own artifact producer (commonly invoked as `uv run --project
+      <dir> obt ...`), writes via its own --out mechanism, not a shell
+      redirect.

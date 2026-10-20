@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": { "title": "Payment Lifecycle" },
+  "states": [
+    { "id": "created", "label": "Created", "kind": "initial" },
+    { "id": "processing", "label": "Processing", "kind": "active" },
+    { "id": "settled", "label": "Settled", "kind": "terminal-success" },
+    { "id": "failed", "label": "Failed", "kind": "failure-recoverable" }
+  ],
+  "transitions": [
+    { "from": "created", "to": "processing", "event": "Submit" },
+    { "from": "processing", "to": "settled", "event": "Charge Success" },
+    { "from": "processing", "to": "failed", "event": "Network Error", "kind": "retry" },
+    { "from": "failed", "to": "processing", "event": "Retry Charge", "kind": "retry" }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": { "title": "Analytics Pipeline" },
+  "stages": [
+    { "id": "ingest", "label": "Ingestion", "order": 0 },
+    { "id": "process", "label": "Processing", "order": 1 },
+    { "id": "store", "label": "Warehouse", "order": 2 }
+  ],
+  "nodes": [
+    { "id": "events", "label": "Clickstream", "role": "source", "stage": "ingest" },
+    { "id": "etl", "label": "ETL Job", "role": "transform", "stage": "process" },
+    { "id": "lake", "label": "Data Lake", "role": "store", "stage": "store" }
+  ],
+  "flows": [
+    { "from": "events", "to": "etl", "label": "Kafka Stream" },
+    { "from": "etl", "to": "lake", "label": "Parquet Files" }
+  ]
+}

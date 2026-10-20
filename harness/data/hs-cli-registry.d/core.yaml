@@ -1,0 +1,23 @@
+# core.yaml — the commands hs-cli ships. One row per command:
+#   <name>: {module: hs_cli, entry: <COMMAND>, help: "<one line>"}
+# `entry` names a `hs_family.cli.Command` in `hs_cli.py` (its `add_args` + `run`).
+
+domains:
+  version: {module: hs_cli, entry: VERSION, help: "print harness version + kit digest"}
+  doctor: {module: hs_cli, entry: DOCTOR, help: "health-check the install"}
+  gates: {module: hs_cli, entry: GATES, help: "report the stage-gate posture and the gate registry; --off/--on switch a gate in THIS project's layer"}
+  guards: {module: hs_cli, entry: GUARDS, help: "report the resolved guard preset + protected branches"}
+  hooks: {module: hs_cli, entry: HOOKS, help: "report the resolved hook posture; --off/--on write THIS project's layer (never the shared config)"}
+  capabilities: {module: hs_cli, entry: CAPABILITIES, help: "emit registered hooks + stage gates as JSON (read-only; tầng-2 discovery source)"}
+  list: {module: hs_cli, entry: LIST, help: "list plugins, skills, and on/off state"}
+  emit: {module: hs_cli, entry: EMIT, help: "project the hook registrations onto another runtime and report what survives (read-only)"}
+  render: {module: hs_cli, entry: RENDER, help: "render ONE hs-run JSON envelope read from stdin (display only — never advances, never runs a verb)"}
+  migrate: {module: hs_cli, entry: MIGRATE, help: "run the decomposition migrate engine (args pass through to the engine)"}
+  components: {module: hs_cli, entry: COMPONENTS, help: "enable/disable a group"}
+  skills: {module: hs_cli, entry: SKILLS, help: "enable/disable individual skills (dir-omit); bare lists state"}
+  cleanup: {module: hs_cli, entry: CLEANUP, help: "safely remove files an over-install left behind (reuses the cleanup engine; --prune is the coarse path)"}
+  install: {module: hs_cli, entry: INSTALL, help: "install + pick which skills/groups to install (args pass through to install.py)"}
+  trust: {module: hs_cli, entry: TRUST, help: "trust a repo so its rule shell-detectors may auto-fire (TOFU; per-machine, recorded in ~/.harness/trust.json)"}
+  docs: {module: hs_cli, entry: DOCS, help: "write one family CLI's command reference from its registry, headed by the registry's sha256"}
+  status: {module: hs_cli, entry: STATUS, help: "run each command of hs-cli-status.yaml alone and show its answer as one block; exit = the worst block's"}
+  policy: {module: instruction_policy, entry: POLICY, help: "propose rules from the instruction files, adopt them at a terminal, and ask what they say (warn or rewrite, never block)"}

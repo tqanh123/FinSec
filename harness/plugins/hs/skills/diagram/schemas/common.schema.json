@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hs-diagram/common.schema.json",
+  "title": "hs:diagram shared envelope and enums",
+  "description": "Definitions shared by every archetype schema. Never validated on its own -- each archetype schema inlines this file's $defs before validation.",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+    },
+    "safe_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "theme": {
+      "type": "string",
+      "enum": ["light", "dark"]
+    },
+    "visual_preset": {
+      "type": "string",
+      "enum": ["classic", "blueprint"]
+    },
+    "meta": {
+      "type": "object",
+      "required": ["title"],
+      "properties": {
+        "title": { "$ref": "#/$defs/safe_text" },
+        "subtitle": { "$ref": "#/$defs/safe_text" },
+        "description": { "$ref": "#/$defs/safe_text" },
+        "locale": { "type": "string", "maxLength": 16 },
+        "visual_preset": { "$ref": "#/$defs/visual_preset" },
+        "theme": { "$ref": "#/$defs/theme" }
+      },
+      "additionalProperties": true
+    },
+    "envelope": {
+      "type": "object",
+      "required": ["schema_version", "diagram_type", "meta"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "meta": { "$ref": "#/$defs/meta" }
+      }
+    }
+  }
+}

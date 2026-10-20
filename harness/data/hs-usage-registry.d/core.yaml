@@ -1,0 +1,8 @@
+# core.yaml — the commands hs-usage ships. One row per command:
+#   <name>: {module: hs_usage, entry: <COMMAND>, help: "<one line>"}
+# `entry` names a `hs_family.cli.Command` in `hs_usage.py` (its `add_args` + `run`).
+
+domains:
+  limits: {module: hs_usage, entry: LIMITS, help: "5h/7d token-usage windows per runtime, from the local usage_meter estimate (--live opts into a provider fetch)"}
+  statusline: {module: hs_usage, entry: STATUSLINE, help: "one-line usage segment for a ccstatusline custom-command widget (always plain text)"}
+  cost: {module: hs_usage, entry: COST, help: "per-skill/per-invocation token cost from the same local transcripts"}

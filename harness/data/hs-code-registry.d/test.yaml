@@ -1,0 +1,29 @@
+# test.yaml -- the `test` domain's fragment of the hs-code registry.
+#
+# Owned exclusively by whoever builds the `test` domain's verbs. Never touch
+# another domain's fragment from here -- one file per domain is what lets
+# concurrent build phases add domains without two agents writing the same
+# file. Schema + merge/conflict rules: see harness/data/
+# hs-code-registry.yaml's header.
+#
+# `module:` is DOTTED (`codegraph.test.durations`, not a flat script) -- the
+# hs-code-registry.d reachability channel matches the dotted module, not just
+# its top package.
+
+domains:
+  test:
+    durations: {module: codegraph.test.durations, entry: DURATIONS, help: "report junit test durations - top expensive, deltas, trends, and an optional CI shard plan"}
+    buckets: {module: codegraph.test.buckets, entry: BUCKETS, help: "split tests into balanced CI buckets from junit durations, gated on run-history readiness"}
+    redlist: {module: codegraph.test.redlist, entry: REDLIST, help: "group red junit tests into diffable families for burn-down tracking"}
+    isolation-bisect: {module: codegraph.test.isolation_bisect, entry: ISOLATION_BISECT, help: "bisect a test that fails in the full suite but passes alone to find the polluter"}
+    leaks: {module: codegraph.test.leaks, entry: LEAKS_VERB, help: "inventory DB-state leaks reported by a test run, with burn-down against a baseline"}
+    backlog: {module: codegraph.test.backlog, entry: BACKLOG, help: "report test-debt signals: coverage gaps, flaky tests, missing asserts, shared fixtures"}
+    goldens: {module: codegraph.test.goldens, entry: GOLDENS, help: "detect golden-file drift where a source changed but its golden was not regenerated"}
+    classify: {module: codegraph.test.classify, entry: CLASSIFY, help: "propose a unit/integration/e2e home for each test function from the static test map"}
+    plan-move: {module: codegraph.test.planmove, entry: PLANMOVE, help: "generate a plan (and git mv script) to move tests into their approved classify homes"}
+    check-home: {module: codegraph.test.check_home, entry: CHECK_HOME, help: "gate an approved test-classify table for wrong-place, undeclared, stale or unmeasured rows"}
+    status: {module: codegraph.test.status, entry: STATUS, help: "print a read-only one-line status of the stored suite run for this tree"}
+    prove: {module: codegraph.test.prove, entry: PROVE, help: "apply one declared mutation to a tree copy and assert the declared tests catch it"}
+    mutation: {module: codegraph.test.mutation, entry: MUTATION, help: "measure the mutation survivor rate to see whether tests actually catch code changes"}
+    clone-scan: {module: codegraph.test.clone_scan, entry: CLONE_SCAN, help: "find test functions that structurally copy production logic, flagging drifted copies"}
+    fixture-shadow: {module: codegraph.test.fixture_shadow, entry: FIXTURE_SHADOW, help: "find fixture names redefined along a conftest chain that silently shadow each other"}

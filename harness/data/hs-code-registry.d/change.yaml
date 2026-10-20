@@ -1,0 +1,23 @@
+# change.yaml — the `change` domain's fragment of the hs-code registry.
+#
+# Owned exclusively by whoever builds the `change` domain's verbs. Never
+# touch another domain's fragment from here — one file per domain is what
+# lets concurrent build phases add domains without two agents writing the
+# same file. Schema + merge/conflict rules: see
+# harness/data/hs-code-registry.yaml's header.
+#
+# Every verb's `module:` lives inside the domain's own package `codegraph.change`
+# (`impact`/`test` share `codegraph.change.verbs`, their engines are
+# `codegraph.change.impact`/`.selection`). The reachability gate reads a dotted
+# `module:` as that exact module (test_module_reachability.py).
+
+domains:
+  change:
+    # api-diff/snapshot-diff/hotspots/report: one package module per verb.
+    api-diff: {module: codegraph.change.api_diff, entry: API_DIFF, help: "diff two API surfaces by name and signature, flag breaking changes, suggest a bump"}
+    snapshot-diff: {module: codegraph.change.snapshot_diff, entry: SNAPSHOT_DIFF, help: "diff two snapshots into added, removed, changed and moved symbols"}
+    hotspots: {module: codegraph.change.hotspots, entry: HOTSPOTS, help: "rank files by git churn times measured size, flag ones a diff touches"}
+    report: {module: codegraph.change.report, entry: REPORT, help: "render one measured snapshot as a json payload and an html dashboard"}
+    structural: {module: codegraph.change.structural, entry: STRUCTURAL, help: "check whether a diff changes this tree's import graph, not just file bodies"}
+    impact: {module: codegraph.change.verbs, entry: IMPACT, help: "measure a symbol's blast radius between two trees or snapshots via callers"}
+    test: {module: codegraph.change.verbs, entry: TEST, help: "pick the tests a change can break by walking the snapshot's import graph"}

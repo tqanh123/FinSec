@@ -1,0 +1,185 @@
+# port-steps.yaml — human-edited: the STANDARD step lane `hs-run port next`
+# hands out for a batch, and the `--step` argv `hs-code` records against.
+#
+# Read by `harness/scripts/port_steps.py` — the ONE loader; `hs-run port
+# next` and a batch's own `batch.yaml` `steps:` validation
+# (`port_batch_reader.py`) both go through it, never a second parser.
+#
+# `argv` is the words after `hs-code` (never the shell's own flags —
+# `--repo`/`--apply`/`--json`/`--step` are appended by the caller, not
+# written here). Placeholders are the CLOSED set `port_steps.render_argv`
+# resolves, each one a value the engine already has in hand from the
+# batch it is rendering for:
+#   {batch}             the batch's own name
+#   {dist}              one entry of the batch's `dists:` — only on a
+#                       `per_dist: true` step, rendered once per dist
+#   {frozen_snapshot}   the batch's own declared `frozen_snapshot` name
+#   {new_snapshot}      the batch's own declared `new_snapshot` name
+#   {from_snapshot}     the `frozen_snapshot` of the batch's `from_batch`
+#   {new_snapshot_dir}  absolute path to the batch's `new_snapshot` under
+#                       `.port/snapshots/` (`port_batch_reader.snapshot_path`)
+#   {ledger_path}       absolute path to `<port_root>/.port/ledger.jsonl`
+#
+# `lanes.port` is the STANDARD order — the ids a batch's own `batch.yaml`
+# `steps:` key may pick and reorder (`port_batch_reader._validate_batch_
+# config`). A `steps:` entry naming an id outside `steps:` below is a
+# broken batch config: `hs-run port next` reports `config_invalid`, naming
+# every known id.
+#
+# `smoke`/`route-parity`/`live-smoke` are declared here (so a batch's own
+# `steps:` CAN name them) but are NEVER in the base `lane:` above — a
+# project's declared `.port/port.yaml` `project.kind` appends them itself,
+# right after `rules` (`harness/data/port-project-kinds.yaml` + `port_config.
+# extra_steps_for_port_root`, read by both `hs_run_port.py` and `hs-code
+# --step` through the one function `port_steps.lane_of` calls). `{app}`
+# resolves from that same `project.app` — see this file's own PLACEHOLDERS
+# section in `port_steps.py`'s module docstring. `route-parity` compares against the batch's own source
+# checkout and its ruled baseline under the batch dir; the first run has no
+# baseline and exits 2 until a human freezes one (`--freeze`).
+#
+# WHY NOT UPSTREAM'S NINE (ob-tools@60075cb:packages/portkit/src/
+# portkit/batch/close_batch.py STEP_IDS — clean-commit, snapshot, build,
+# port-batch, check-ledger, rules, positive-control, slice-audit,
+# drift-rej):
+#   * `clean-commit` is DROPPED — MEASURED, not assumed. `codegraph_port_
+#     snapshot_verbs.py`'s own module docstring ("WHICH COMMIT") records a
+#     direct probe: in PINNED mode (a batch's own `frozen_snapshot`),
+#     `hs-code port snapshot` materializes the SOURCE repo at the batch's
+#     `pinned_sha` through `git clone --shared --no-checkout` +
+#     `checkout --detach` — it reads git HISTORY, never the source
+#     repo's working tree. A dirty source tree cannot corrupt what this
+#     step reads, so there is nothing left for a clean-commit gate to
+#     catch ahead of it.
+#   * `positive-control` is not a step of this lane, and it is not dropped:
+#     upstream's step 7 (`close_batch.py:185 _step_positive_control`) ran
+#     `pytest packages/portkit/tests` — the PORT TOOL's own per-cause red
+#     suite, not the ported project's tests. The harness ships that
+#     control as DATA instead of a pytest run: seeded cases under
+#     `harness/data/port-control/cases/`, one cause each, that the tool must
+#     flag. They answer as the `control` row of the `port` gate page
+#     (`codegraph_port_batch_verbs.port_gate_rows`), present only where a
+#     port root exists, and `hs-run port next` names it before each batch.
+#   * `drift-rej` is not a step of the PORT lane — nothing in it writes a
+#     `.rej`. The catch-up lane runs it, right after the `drift-merge` that
+#     leaves one.
+
+# `init` declares `unported` for every frozen-snapshot node that has no ledger
+# line yet (upstream ran it once by hand; check-ledger's L1 reds every node left
+# without one, and a re-run appends nothing); `assign` fills the dist of every
+# frozen-snapshot node before `build`/`port-batch` read it; `new-snapshot`
+# measures the target tree after `build` — only the roots under
+# `layout.packages_dir` — and its commit is the anchor of every `to`
+# `port-batch` writes, so it refuses a tree whose built files are not committed
+# yet (the commit is `hs:cook`'s, never this lane's). `rules` leaves the
+# standard lane of a target whose `codemap.yaml` declares no `rules:` — run, it
+# refuses every time; green, it would read as a pass over nothing — and `hs-run
+# port next` says so in its warnings (`port_config.omitted_steps_for_port_root`).
+#
+# `catch-up` is the lane of a batch `hs-code port catch-up` opened: it pins the
+# NEW source commit and names its predecessor in `from_batch:`. `snapshot` freezes
+# the new commit; `carry-forward` re-keys every row whose symbol did not change
+# onto that freeze; `drift-scan` reports the file/symbol/dist drift between the
+# two pins (read-only); `drift-merge` carries each changed src file's drift into
+# the target file(s) the ledger homes it in, a conflict keeping the target's side
+# and parking upstream's in a `.rej`; `new-snapshot` measures the target tree the
+# drift landed in (committed first, as in the port lane); `judge-nodes`/`judge-removed` settle
+# what could not be carried by comparing upstream bodies with THAT freeze
+# (auto-write only on proven body equality or a removing commit, a packet for a
+# person otherwise), so a symbol whose drift already landed is ported by proof;
+# `drift-hunks` stays red until every src hunk of the drift (and every hunkless
+# file) carries one disposition; `drift-place` re-audits every applied dest
+# (inside a dist's import root, not a moved symbol's old door, a ledger home);
+# `drift-rej` stays red while a `.rej` the merge left is not recorded and
+# removed; `check-ledger`, `rules` and `slice-audit` close it the way they close
+# the port lane.
+lanes:
+  port: [snapshot, init, assign, build, new-snapshot, port-batch, check-ledger, rules, slice-audit]
+  catch-up: [snapshot, carry-forward, drift-scan, drift-merge, new-snapshot, judge-nodes,
+             judge-removed, drift-hunks, drift-place, drift-rej, check-ledger, rules, slice-audit]
+
+steps:
+  snapshot:
+    argv: [port, snapshot, "{frozen_snapshot}", --apply]
+    per_dist: false
+    writes: true
+  init:
+    argv: [port, init, --batch, "{batch}", --apply]
+    per_dist: false
+    writes: true
+  carry-forward:
+    argv: [port, carry-forward, --batch, "{batch}", --from-snapshot, "{from_snapshot}", --apply]
+    per_dist: false
+    writes: true
+  judge-nodes:
+    argv: [port, judge-nodes, --batch, "{batch}", --from-snapshot, "{from_snapshot}", --apply]
+    per_dist: false
+    writes: true
+  judge-removed:
+    argv: [port, judge-removed, --batch, "{batch}", --from-snapshot, "{from_snapshot}", --apply]
+    per_dist: false
+    writes: true
+  assign:
+    argv: [port, assign, --batch, "{batch}", --apply]
+    per_dist: false
+    writes: true
+  build:
+    argv: [port, build, "{dist}", --batch, "{batch}", --apply]
+    per_dist: true
+    writes: true
+  new-snapshot:
+    argv: [port, snapshot, "{new_snapshot}", --apply]
+    per_dist: false
+    writes: true
+  port-batch:
+    argv: [port, port-batch, "{dist}", --batch, "{batch}", --apply]
+    per_dist: true
+    writes: true
+  drift-scan:
+    argv: [port, drift-scan, --batch, "{batch}"]
+    per_dist: false
+    writes: false
+  drift-merge:
+    argv: [port, drift-merge, --batch, "{batch}", --on-conflict, reject, --apply]
+    per_dist: false
+    writes: true
+  drift-hunks:
+    argv: [port, drift-hunks, --batch, "{batch}"]
+    per_dist: false
+    writes: false
+  drift-place:
+    argv: [port, drift-place, --batch, "{batch}"]
+    per_dist: false
+    writes: false
+  drift-rej:
+    argv: [port, drift-rej, --batch, "{batch}"]
+    per_dist: false
+    writes: false
+  check-ledger:
+    argv: [port, check-ledger, --batch, "{batch}"]
+    per_dist: false
+    writes: false
+  rules:
+    argv: [graph, rules, --snapshot, "{new_snapshot_dir}"]
+    per_dist: false
+    writes: false
+  slice-audit:
+    argv: [refactor, slice-audit, --ledger, "{ledger_path}"]
+    per_dist: false
+    writes: false
+  smoke:
+    argv: [check, smoke]
+    per_dist: false
+    writes: false
+  source:
+    argv: [port, source, --batch, "{batch}", --apply]
+    per_dist: false
+    writes: true
+  route-parity:
+    argv: [check, route-parity, --app, "{app}", --upstream, "{upstream}",
+           --upstream-app, "{upstream_app}", --baseline, "{baseline}"]
+    per_dist: false
+    writes: false
+  live-smoke:
+    argv: [check, live-smoke, --app, "{app}"]
+    per_dist: false
+    writes: false

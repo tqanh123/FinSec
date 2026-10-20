@@ -1,0 +1,56 @@
+#!/bin/sh
+# hs-run — deterministic step-sequence CLI over the harness's plan/cook scripts (POSIX launcher).
+# Generated from harness/data/launcher-templates/ by harness/scripts/launchers.py;
+# edit the template, then `python3 harness/scripts/launchers.py --write`.
+#
+# Resolves the harness root from THIS script's own location, following a symlink
+# chain so a ~/.local/bin/hs-run symlink still finds the tree, then delegates every
+# argument to harness/scripts/hs_run.py. Windows twin: hs-run.cmd.
+set -e
+
+# readlink -f is not portable to macOS, so walk the chain by hand.
+src="$0"
+while [ -L "$src" ]; do
+    dir=$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)
+    target=$(readlink "$src")
+    case "$target" in
+        /*) src="$target" ;;
+        *)  src="$dir/$target" ;;
+    esac
+done
+bin_dir=$(cd -P "$(dirname "$src")" >/dev/null 2>&1 && pwd)
+root=$(cd "$bin_dir/.." >/dev/null 2>&1 && pwd)   # harness/bin -> harness
+script="$root/scripts/hs_run.py"
+
+if [ ! -f "$script" ]; then
+    echo "hs-run: cannot find $script — is the harness installed at $root?" >&2
+    exit 2
+fi
+
+# HARNESS_PYTHON names the interpreter: a path, or a command prefix split on
+# spaces (`uv run --no-project --python 3.14 --with-requirements <req> python`) — for a
+# target repo whose syntax the python3 on PATH cannot parse.
+if [ -n "${HARNESS_PYTHON:-}" ]; then
+    py=$HARNESS_PYTHON
+    # `uv run` re-resolves against the index on every call even with a warm cache, so a
+    # flaky index stops every harness command. Ask the cache first (~50ms); a miss runs
+    # online as before. A flag, not UV_OFFLINE: the child's own `uv` calls stay online.
+    case "$py" in
+        "uv run "*|*"/uv run "*)
+            cached="${py%%uv run *}uv run --offline ${py#*uv run }"
+            # shellcheck disable=SC2086
+            if $cached -c '' >/dev/null 2>&1; then py=$cached; fi ;;
+    esac
+    # shellcheck disable=SC2086  # word splitting IS the contract
+    exec $py "$script" "$@"
+fi
+
+# Prefer python3; fall back to python (some distros ship only `python`).
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$script" "$@"
+elif command -v python >/dev/null 2>&1; then
+    exec python "$script" "$@"
+else
+    echo "hs-run: python3 not found — install Python 3 to run the harness CLI." >&2
+    exit 2
+fi

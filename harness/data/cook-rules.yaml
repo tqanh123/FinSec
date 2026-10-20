@@ -1,0 +1,18 @@
+# cook-rules.yaml — a repo's OWN rules, routed into the cook envelope by what the
+# phase at hand creates or touches (reader: harness/scripts/repo_rules.py).
+#
+# The shipped file declares none: the harness's own rules route through the hs-run
+# registry. A repo puts its conventions in its project layer —
+# `.harness/cook-rules.yaml` (or the file HARNESS_COOK_RULES names) — e.g. a log
+# density its own gate enforces on every new source file:
+#
+#   rules:
+#     - path: docs/conventions/dense-log.md   # repo-relative document to read
+#       when:
+#         creates: ["src/**/*.py"]            # a file the phase CREATES matches
+#         touches: ["db/migrations/*"]        # a file it creates/modifies/deletes
+#
+# A rule is routed at needs_implementation / phase_needs_work / phase_failed when
+# any glob matches the phase's plan-graph.yaml files_to_*. An entry the reader
+# cannot use is named in the envelope's warnings, never dropped silently.
+rules: []
