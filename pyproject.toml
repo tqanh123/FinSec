@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finsec-alpharadar"
+version = "0.1.0"
+description = "Dual-Market (US SEC/Alpaca & Vietnam HOSE/HNX/SSI/Vnstock) Real-Time Quant & Hybrid RAG Copilot"
+readme = "AGENTS.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.9.0",
+    "websockets>=13.0",
+]
+
+[project.optional-dependencies]
+prod = [
+    "pathway>=0.32.0",
+    "qdrant-client>=1.12.0",
+    "psycopg[binary]>=3.2.0",
+    "edgartools>=3.0.0",
+    "vnstock>=3.4.0",
+    "pydantic-ai>=2.0.0",
+]
+finetune = [
+    "unsloth>=2026.4",
+    "trl>=0.12.0",
+    "wandb>=0.18.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

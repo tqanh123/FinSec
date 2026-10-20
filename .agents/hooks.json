@@ -1,0 +1,32 @@
+{
+  "safety-and-live-trade-gate": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/validate_command_safety.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "post-edit-quant-verification": {
+    "enabled": true,
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/post_edit_check.sh",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}
