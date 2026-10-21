@@ -7,10 +7,10 @@
 - FinSec AlphaRadar is a research and alerting platform for US (NYSE/NASDAQ) and Vietnam (HOSE/HNX/UPCOM) equities. It aims to turn disclosures, financial statements and market data into probabilities that are scored against what actually happened (target; nothing does this yet).
 - It never places orders and is not investment advice (DECIDED, AGENTS.md "Engineering Rules").
 - Maturity: **prototype** (AGENTS.md "Current Status", verified 2026-10-20).
-  - About 1,200 lines (OBSERVED 2026-10-21) of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.11`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:4`).
+  - About 1,200 lines (OBSERVED 2026-10-21) of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.11`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:5`).
   - No HTTP/WebSocket client, database driver, environment-variable read or LLM SDK anywhere in `src/`.
   - No prediction has been made or scored yet.
-  - Tests (OBSERVED 2026-10-21): pytest collects 145 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py` and `tests/test_api_server.py` (handlers called directly; skipped without fastapi). `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 145 pass in `.venv` (Python 3.13) and on Python 3.11. CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) calls bare `pytest`, which is not on PATH on the dev machine (OBSERVED 2026-10-20).
+  - Tests (OBSERVED 2026-10-21): pytest collects 165 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py`, `tests/test_rag_as_of.py` and `tests/test_api_server.py` (handlers called directly; skipped without fastapi). `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 165 pass in `.venv` (Python 3.13) and on Python 3.11. CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) calls bare `pytest`, which is not on PATH on the dev machine (OBSERVED 2026-10-20).
 - Shape today: independent engines plus a 3-endpoint FastAPI app. Target shape (PLANNED): a disclosure poller feeding an append-only prediction ledger that is scored automatically (see Data flow).
 
 ## Components
@@ -25,9 +25,9 @@
 | `quant/kalman_microstructure.py` | `KalmanPriceFilter`, `StreamingQuantEngine`: VWAP, OBI, CUSUM, volume z-score, VN foreign net flow, alert reasons | Real; wired to `POST /v1/ticks/ingest`. Session-blind. Foreign flow is summed over the 50-tick deque (line 99). Deferring that fix until the SSI field semantics are read (Phase 6) is planned (roadmap §5.2); `tests/test_end_to_end.py:94-95` feeds increments. |
 | `quant/deduplicator.py` | `MinHashDeduplicator`: near-duplicate text check | Real, test-only. Linear scan (lines 38-42) despite the "O(1)" docstring (line 10). |
 | `forensics/xbrl_bctc_auditor.py` | `ForensicAccountingEngine.evaluate`: Altman Z, 8-variable Beneish M, 9-point Piotroski F | Real, test-only. No zero-division guards (e.g. line 28) and no sector gate. |
-| `rag/hybrid_temporal_rag.py` | `HybridTemporalRAGEngine`: BM25 + RRF + exponential time decay; sentence-level diff | BM25, RRF and decay are real. The "dense" and ColBERT MaxSim legs use per-token hash vectors (lines 47-52) with no semantics. Look-ahead bug: lines 112 and 138, and no `published_at <= as_of` filter (lines 118-122). |
+| `rag/hybrid_temporal_rag.py` | `HybridTemporalRAGEngine`: BM25 + RRF + exponential time decay; sentence-level diff | BM25, RRF and decay are real. The "dense" and ColBERT MaxSim legs use per-token hash vectors (lines 50-55) with no semantics. Since 2026-10-21 `search` takes a required keyword-only `as_of` and never reads the clock: it drops filings with `published_at > as_of` before ranking (line 133), refuses a non-finite one (lines 131-132), and computes the BM25 statistics over the visible filings only (lines 76-104). |
 | `router/linucb_bandit.py` | `LinUCBModelRouter`: disjoint LinUCB over model-name arms | Math is real, but no model is ever called. Only the smoke test calls `update_reward` (hard-coded 0.98, test:151); the app never does, so `GET /v1/rag/search` always picks the first arm (line 40). |
-| `api/server.py` | FastAPI: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search` | Thin. No WebSocket, no auth, untyped `Dict[str, Any]` body (line 77), hard-coded unverified model IDs (lines 18-20). Since 2026-10-21 ingest requires its tick fields and returns 422 on a missing or invalid one (lines 34-90), and both research responses carry the bilingual `DISCLAIMER` (line 23). fastapi installs into `.venv` with the dev setup (AGENTS.md). |
+| `api/server.py` | FastAPI: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search` | Thin. No WebSocket, no auth, untyped `Dict[str, Any]` body (line 78), hard-coded unverified model IDs (lines 19-21). Since 2026-10-21 ingest requires its tick fields and returns 422 on a missing or invalid one (lines 35-91), both research responses carry the bilingual `DISCLAIMER` (line 24), and search takes an optional `as_of` (default: the request time) and echoes it, with 422 for a non-finite one (lines 100-126). fastapi installs into `.venv` with the dev setup (AGENTS.md). |
 
 Outside `src/`:
 - `scripts/train_unsloth_slm.py` only prints a hard-coded training recipe; it does not read `configs/unsloth_qwen3_catalyst.yaml`. Stub.
@@ -59,18 +59,20 @@ Also planned: move `router/` to `experimental/` (Phase 0); rewrite `api/server.p
 
 ### As-built
 ```
-POST /v1/ticks/ingest   raw JSON dict (server.py:76-90)
-  -> MarketTick built inline, NOT via connectors/ (server.py:34-68): required symbol, market, timestamp, price, volume,
+POST /v1/ticks/ingest   raw JSON dict (server.py:77-91)
+  -> MarketTick built inline, NOT via connectors/ (server.py:35-69): required symbol, market, timestamp, price, volume,
      bid/ask prices and sizes; optional exchange (null = absent), reference_price, price_limits [floor, ceiling]
   -> MarketTick.__post_init__ (models.py:148-187): finite numbers; a VN tick needs HOSE/HNX/UPCOM, a reference, a price in range
-     a missing or invalid field, or a VN tick without an exchange, returns 422 (server.py:85-90)
-  -> StreamingQuantEngine.process_tick (server.py:91)
-  -> {"signal": QuantSignalReport.__dict__, "vn_ceiling_floor": [ceiling, floor] or null, "disclaimer"} (server.py:92-96)
+     a missing or invalid field, or a VN tick without an exchange, returns 422 (server.py:86-91)
+  -> StreamingQuantEngine.process_tick (server.py:92)
+  -> {"signal": QuantSignalReport.__dict__, "vn_ceiling_floor": [ceiling, floor] or null, "disclaimer"} (server.py:93-97)
 
-GET /v1/rag/search      (server.py:99-114)
+GET /v1/rag/search      (server.py:100-126)
+  -> decision time = the as_of query parameter, or the request time when absent (the only clock read on this path)
   -> LinUCBModelRouter.select_model: the chosen arm is returned, never called
-  -> HybridTemporalRAGEngine.search: always [] because nothing ingests into the app's engine
-  -> {"routed_model", "router_ucb_scores", "results", "disclaimer"}
+  -> HybridTemporalRAGEngine.search(as_of=decision time): drops filings with published_at > as_of before ranking;
+     always [] because nothing ingests into the app's engine
+  -> {"routed_model", "router_ucb_scores", "results", "as_of", "disclaimer"}
 
 tests/test_end_to_end.py only:
   connectors parse 2 ticks (asserted only, test:40-59) and 2 filings -> HybridTemporalRAGEngine (test:124-145)
@@ -80,7 +82,7 @@ tests/test_end_to_end.py only:
   raw strings -> MinHashDeduplicator (test:63-64) and LinUCBModelRouter (test:149-152)
 ```
 Where state lives:
-- Process memory only: module-level singletons in `api/server.py:16-20`, and per-instance dicts/lists in `kalman_microstructure.py:61-63`, `hybrid_temporal_rag.py:37-41`, `deduplicator.py:20`, `linucb_bandit.py:15-16`.
+- Process memory only: module-level singletons in `api/server.py:17-21`, and per-instance dicts/lists in `kalman_microstructure.py:61-63`, `hybrid_temporal_rag.py:42-44`, `deduplicator.py:20`, `linucb_bandit.py:15-16`.
 - Nothing is persisted or replayable. A restart, or each `--reload` from `Makefile:10`, drops all state; multiple uvicorn workers would each hold separate state.
 
 ### Target core loop (PLANNED, roadmap §3)
@@ -115,13 +117,13 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
   - Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
   - Declared in the `prod` extra (`pyproject.toml:25`), not imported in `src/`.
 - **Telegram Bot API**: the alert channel (DECIDED §9.8; built in Phase 4). It is not in AGENTS.md "Verified Facts"; see roadmap §4 for its source.
-- **LLM providers**: none called. The model IDs in `api/server.py:19` and `tests/test_end_to_end.py:149` are unverified. Provider choice is deferred to the Phase 5 gate (DECIDED §9.11); extraction starts rule-based.
+- **LLM providers**: none called. The model IDs in `api/server.py:20` and `tests/test_end_to_end.py:149` are unverified. Provider choice is deferred to the Phase 5 gate (DECIDED §9.11); extraction starts rule-based.
 - **docker-compose services** (`docker-compose.yml`): Qdrant (6333/6334), TimescaleDB (5432), Redpanda (19092). Unused, floating `latest` / `latest-pg16` tags, hard-coded password (`docker-compose.yml:17`, repeated in `.env.example:15`), ports published on all interfaces. Per §9.9 and roadmap §5.1: Redpanda is removed, TimescaleDB waits for Phase 6 ticks, Qdrant for Phase 7 at the earliest.
 
 ## Boundaries & trust
 - **Exposed surface:** the FastAPI app `finsec_alpharadar.api.server:app` on port 8000.
   - `make run-api` binds `0.0.0.0` (`Makefile:10`), so the API is reachable from the local network. Binding to 127.0.0.1 is a planned Phase 0 fix (roadmap §5.2); until then, run it only on a trusted network.
-  - No authentication, rate limit or request model: the body is an untyped dict (`server.py:77`), and a missing or invalid field returns 422 (since 2026-10-21).
+  - No authentication, rate limit or request model: the body is an untyped dict (`server.py:78`), and a missing or invalid field returns 422 (since 2026-10-21).
   - Any caller of `POST /v1/ticks/ingest` mutates shared in-memory engine state.
 - **Secrets:** keys live in `.env` (gitignored, `.gitignore:20`; `*.pem` and `*.key` ignored at lines 26-27). `src/` reads no environment variables today. Guidance (roadmap §4, §8; not an AGENTS.md rule): never commit keys, and never put secrets or personal data in prompts, URLs or logs.
 - **Order-execution boundary (DECIDED):** no trading client in `src/`; keep `ALPACA_PAPER_TRADE=true` (`.env.example:4`); no `trading` MCP toolset; never register SSI FC Trading. `tests/test_no_order_execution.py` enforces this (since 2026-10-21).
@@ -132,9 +134,8 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
   - API request bodies, and any LLM output (Phase 5, behind a planned number-faithfulness validator).
 - **Agent configuration:** AGENTS.md is the single shared contract for every coding agent (AGENTS.md intro). `.agents/rules/quant-and-market-rules.md:11` (rule 3: BM25 + dense + MaxSim in every `*.py`) is not an AGENTS.md rule. Rewriting the `.agents/` rules as pointers to AGENTS.md is DECIDED (§9.13) and scheduled for Phase 0.
 - **Known gaps against binding rules** (do not copy; fix within scope when touched):
-  - RAG gives future-dated documents full weight (`hybrid_temporal_rag.py:112,138`).
   - Forensics has no gate excluding banks, insurers and securities firms (`forensics/xbrl_bctc_auditor.py`).
-  - Unverified model IDs (`api/server.py:19`) break the external-facts rule.
+  - Unverified model IDs (`api/server.py:20`) break the external-facts rule.
 
 ## Key decisions
 
@@ -171,7 +172,7 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
 - **Point-in-time (DECIDED: no look-ahead).** A plan that adds a feature, label or retrieval step must name its decision time and show that every input was available at or before it. Do not:
   - fall back to `now()` for a data timestamp;
   - use XBRL Frames for history, or overwrite a restated value;
-  - reuse the RAG ranking until its `as_of` filter is fixed.
+  - feed the RAG ranking into features before `published_at` is the point-in-time `information_time` / `first_seen_at` (roadmap Phase 1); since 2026-10-21 its `as_of` filter reads `published_at` only.
 - **VN market constraints.**
   - Shares bought on T can be sold from the T+2 afternoon session (VERIFIED, AGENTS.md). DECIDED (AGENTS.md "Engineering Rules"; roadmap §6.3): a 1-session VN stock target never counts as a tradable call.
   - Validate prices against the band (DECIDED). Treating band-locked sessions as unfillable, and adjusting for corporate actions ourselves from raw bars, are binding too (AGENTS.md "Engineering Rules"; roadmap §6.3).

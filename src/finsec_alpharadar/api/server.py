@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 from fastapi import FastAPI, HTTPException, Query
 
@@ -102,13 +103,24 @@ def search_disclosures(
     market: Optional[MarketRegion] = Query(None),
     symbol: Optional[str] = Query(None),
     top_k: int = Query(5, ge=1, le=20),
+    as_of: Optional[float] = Query(None, description="Decision time, epoch seconds UTC; default = request time"),
 ) -> Dict[str, Any]:
+    """Search the filings published at or before the decision time and echo that time as "as_of".
+
+    The decision time is `as_of`, or the time the request arrives when it is absent. This is the only clock read on
+    the search path: the RAG engine never reads the clock. A non-finite as_of (nan, inf) returns 422.
+    """
+    decision_time = as_of if as_of is not None else datetime.now(timezone.utc).timestamp()
     ctx = bandit_router.extract_context_vector(q, requires_xbrl_forensics=True, is_realtime_spike=False)
     model_arm, ucb_scores = bandit_router.select_model(ctx)
-    passages = rag_engine.search(q, top_k=top_k, market_filter=market, symbol_filter=symbol)
+    try:
+        passages = rag_engine.search(q, top_k=top_k, market_filter=market, symbol_filter=symbol, as_of=decision_time)
+    except ValueError as err:  # a non-finite as_of (nan, inf), which the engine refuses
+        raise HTTPException(status_code=422, detail=str(err)) from err
     return {
         "routed_model": model_arm,
         "router_ucb_scores": ucb_scores,
         "results": [p.__dict__ for p in passages],
+        "as_of": decision_time,
         "disclaimer": DISCLAIMER,
     }

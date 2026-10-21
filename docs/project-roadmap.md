@@ -238,7 +238,7 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `forensics/xbrl_bctc_auditor.py` | fix | 2 | Guards for zero division and missing data (return None with a reason). Sector gate. Altman Z'' for non-manufacturers. Beneish on trade receivables only. Piotroski's dilution test ignores stock dividends and bonus shares. Mapping for Circular 99 vs Circular 200. Return the raw components as features. |
 | `quant/kalman_microstructure.py` | defer | 6 | Known bugs are recorded: foreign flow is summed over a 50-tick deque (line 99), but fix it only after reading the SSI field semantics, because the test at tests/test_end_to_end.py:94-95 feeds increments. It is also session-blind, never validates the band, and gives OBI = ±1 on a limit lock. The volume z-score and foreign-net logic can be reused on daily bars in Phases 2-3. |
 | `quant/deduplicator.py` | keep | 0, 4 | Fix the "O(1)" docstring (it is a linear scan). Use it to collapse disclosures reposted by several sources. |
-| `rag/hybrid_temporal_rag.py` | minimal fix, then defer | 0, 5, 7 | Phase 0: add a `published_at <= as_of` filter, fix the falsy `reference_time or now` (line 112) and the age clamp (line 138), with a regression test, and label the "dense"/ColBERT legs as hash-based placeholders. Phase 5: NFC-aware Unicode tokenizer. Phase 7: real embeddings. |
+| `rag/hybrid_temporal_rag.py` | minimal fix, then defer | 0, 5, 7 | Phase 0: add a `published_at <= as_of` filter, fix the falsy `reference_time or now` and the age clamp, with a regression test, and label the "dense"/ColBERT legs as hash-based placeholders (all done 2026-10-21). Phase 5: NFC-aware Unicode tokenizer. Phase 7: real embeddings. |
 | `router/linucb_bandit.py` | remove from API | 0 | On a cold start the arms tie and the first arm always wins (line 40); no LLM is called and there is no reward. Move it to `experimental/`. |
 | `api/server.py` | rewrite | 4 | Read-only GET /v1/events, /v1/predictions, /v1/scoreboard and /v1/data-health, with pydantic models, bound to localhost. Remove the tick ingest, the empty RAG search, the bandit and the hard-coded model IDs. |
 | `scripts/train_unsloth_slm.py`, `configs/unsloth_qwen3_catalyst.yaml` | defer | 7 | Use only as a distilled extractor. Drop `abnormal_return_sign_accuracy_reward`; keep the schema and number-faithfulness rewards. |
@@ -387,7 +387,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
    - Makefile: bind run-api to 127.0.0.1;
    - document the PowerShell commands.
 5. Correctness:
-   - the RAG as_of fix, with a regression test;
+   - the RAG as_of fix, with a regression test (done 2026-10-21);
    - `models.py` raises on an unknown exchange (done 2026-10-21);
    - connectors stop defaulting timestamps to `now()` (done 2026-10-21);
    - fix `.agents/rules` rule 3 and the band rule.

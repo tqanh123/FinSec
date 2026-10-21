@@ -1,14 +1,16 @@
-"""`POST /v1/ticks/ingest` and `GET /v1/rag/search` handlers, called directly: no HTTP client, no network, no clock.
+"""`POST /v1/ticks/ingest` and `GET /v1/rag/search` handlers, called directly: no HTTP client, no network.
 
 Needs fastapi: without it (the global Python on the dev machine) pytest skips this whole module. The handlers share
 the module-level engines of `api/server.py`, so every test sends its own symbol. A direct call bypasses FastAPI's
 query handling: always pass every search parameter (an omitted `Query(...)` parameter receives the `Query` object).
+No test reads the clock. The search test that passes `as_of=None` lets the handler read it, as a live request does,
+and asserts only the type and sign of the echoed decision time.
 """
 from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -18,6 +20,8 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi import HTTPException
 
 from finsec_alpharadar.api import server
+from finsec_alpharadar.domain import MarketRegion, RegulatoryFiling
+from finsec_alpharadar.rag import HybridTemporalRAGEngine
 
 TS = 1_792_211_400.0  # 2026-10-17T04:30:00Z
 REQUIRED: List[str] = ["symbol", "market", "timestamp", "price", "volume", "bid_price", "ask_price", "bid_size", "ask_size"]
@@ -81,9 +85,53 @@ def test_ingest_response_carries_disclaimer() -> None:
 
 
 def test_search_response_carries_disclaimer() -> None:
-    response = server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5)
+    response = server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5, as_of=TS)
     assert response["disclaimer"] == server.DISCLAIMER
-    assert {"routed_model", "router_ucb_scores", "results", "disclaimer"} <= set(response)
+    assert {"routed_model", "router_ucb_scores", "results", "as_of", "disclaimer"} <= set(response)
+
+
+def test_search_echoes_explicit_as_of() -> None:
+    response = server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5, as_of=TS)
+    assert response.get("as_of") == TS
+
+
+def test_search_defaults_as_of_to_request_time() -> None:
+    # None is what FastAPI passes for an omitted as_of. The handler then reads the clock, so only the type and sign of
+    # the echoed decision time are asserted, never its value.
+    response = server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5, as_of=None)
+    as_of = response.get("as_of")
+    assert isinstance(as_of, float) and as_of > 0, as_of
+
+
+def test_search_forwards_as_of_to_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The handler must search as of the decision time it echoes; a private engine keeps the shared one untouched.
+    engine = HybridTemporalRAGEngine()
+    engine.ingest_filings([
+        RegulatoryFiling(
+            filing_id=filing_id, symbol="TSTRAG", market=MarketRegion.US, form_type="8-K", published_at=published_at,
+            title="", section="", text_content="alpha guidance", citation_url=f"https://example.invalid/{filing_id}",
+        )
+        for filing_id, published_at in (("EPOCH", 0.0), ("LATE", TS + 86_400.0))
+    ])
+    monkeypatch.setattr(server, "rag_engine", engine)
+
+    def search(as_of: Optional[float]) -> Tuple[Any, List[str]]:
+        response = server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5, as_of=as_of)
+        return response["as_of"], sorted(result["filing_id"] for result in response["results"])
+
+    assert search(TS) == (TS, ["EPOCH"])
+    assert search(TS + 2 * 86_400.0) == (TS + 2 * 86_400.0, ["EPOCH", "LATE"])
+    assert search(0.0) == (0.0, ["EPOCH"])  # 0.0 is a decision time, not a missing one
+    echoed, filing_ids = search(None)  # the request time: only the type and the old filing are asserted
+    assert isinstance(echoed, float) and "EPOCH" in filing_ids
+
+
+@pytest.mark.parametrize("as_of", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_search_non_finite_as_of_returns_422(as_of: float) -> None:
+    with pytest.raises(HTTPException) as excinfo:
+        server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5, as_of=as_of)
+    assert excinfo.value.status_code == 422
+    assert "as_of" in str(excinfo.value.detail)
 
 
 def test_disclaimer_text_invariants() -> None:

@@ -143,7 +143,7 @@ def run_modular_verification() -> dict:
             "citation_url": "https://congbothongtin.ssc.gov.vn/fpt-q3-2026",
         }),
     ])
-    hits_vn = rag.search("FPT doanh thu CNTT Nhat Ban AI Factory", market_filter=MarketRegion.VN, reference_time=now_ts)
+    hits_vn = rag.search("FPT doanh thu CNTT Nhat Ban AI Factory", market_filter=MarketRegion.VN, as_of=now_ts)
     assert len(hits_vn) == 1 and hits_vn[0].symbol == "FPT"
 
     router = LinUCBModelRouter(["finsec-qwen3-1.7b-qlora", "gemini-3.6-flash", "gemini-4-argon-pro"])

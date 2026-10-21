@@ -46,7 +46,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); it has no zero-division guards and is not valid for banks, insurers or brokers;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
-- **Tests (OBSERVED 2026-10-21).** pytest collects 145 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39604961516 (commit 840ca61): success, 8 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-21).
+- **Tests (OBSERVED 2026-10-21).** pytest collects 165 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39616156377 (commit 69fd8d1): success, 145 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-21).
 - **Stub or placeholder:**
   - connectors are static dict parsers; the Alpaca and SSI tick parsers raise on missing, null or malformed fields, and an Alpaca quote must share the trade's symbol and not postdate it (2026-10-21);
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
@@ -54,7 +54,6 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - `scripts/train_unsloth_slm.py` only prints a recipe;
   - the docker-compose services (Qdrant, TimescaleDB, Redpanda) are unused.
 - **Known bugs:**
-  - RAG gives future-dated documents full weight (`rag/hybrid_temporal_rag.py:112,138`).
   - Foreign flow is summed over a 50-tick deque (`quant/kalman_microstructure.py:99`).
   - On a cold start the router always picks the first arm (`router/linucb_bandit.py:40`).
 
@@ -63,9 +62,9 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - `connectors/`: payload parsers for Alpaca and SEC EDGAR (`us_alpaca_edgar.py`) and for SSI FastConnect and vnstock (`vn_ssi_vnstock.py`). No network clients yet.
 - `quant/`: `MinHashDeduplicator`, `KalmanPriceFilter` + `StreamingQuantEngine` (VWAP, OBI, CUSUM, volume z-score, VN foreign net flow), `EventStudyAnalyzer` (CAR).
 - `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score.
-- `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors.
+- `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors. `search` requires `as_of` and ignores documents published after it (2026-10-21); this is as-of `published_at` only, not yet the point-in-time `information_time`.
 - `router/linucb_bandit.py`: disjoint LinUCB contextual bandit that chooses a model name.
-- `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`; required tick fields, 422 on bad input, a bilingual disclaimer on research responses (2026-10-21). The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
+- `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`; required tick fields, 422 on bad input, a bilingual disclaimer on research responses (2026-10-21); `GET /v1/rag/search` takes an optional `as_of` (default: request time), echoes it, and returns 422 for a non-finite one (2026-10-21). The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
 - `harness/` (repo root): vendored SDLC harness v7.3.0 (upgraded 2026-10-21), driven by `/hs:plan`, `/hs:cook`, `/hs:test` and `/hs:ship`. It reads `docs/system-architecture.md` and `docs/code-standards.md` (written 2026-10-20) before every plan and code change; keep both in sync with this file.
 
 ## Product Direction (ADOPTED 2026-10-21; detail in docs/project-roadmap.md)
@@ -121,7 +120,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **`.gitignore` (OBSERVED 2026-10-20).** The unanchored `data/` and `models/` patterns ignore any directory with those names. `harness/**/data/` is re-included explicitly. With `core.autocrlf=true` the checked-out `.gitignore` is CRLF, and git reads its blank lines as an empty pattern that matches every path ending in `/`; query a file inside a directory, or read the `-v` pattern (OBSERVED 2026-10-21, Git for Windows 2.55.0).
 - **Harness install state (OBSERVED 2026-10-21).**
   - Strict verify reads the omitted-skills record in the gitignored `harness/state/`. A fresh clone or worktree therefore reports files as "missing" until you run the installer there: the default-off skills stashed in `disabled-skills/` (477 files in v7.3.0) plus `harness/state/.gitkeep`. The main checkout was installed on 2026-10-21 and passes.
-  - The pre-push transport gate lives in the shared `.git/hooks/pre-push`, which an install in the main checkout wrote on 2026-10-21. It runs for every worktree. It blocks a delete or non-fast-forward of a protected branch, and a detected secret. A missing stage receipt only warns. An install from a worktree skips this hook because there `.git` is a file.
+  - The pre-push transport gate lives in the shared `.git/hooks/pre-push`, which an install in the main checkout wrote on 2026-10-21. It runs for every worktree. It blocks a delete or non-fast-forward of a protected branch, and a detected secret. A missing stage receipt only warns. An install from a worktree skips this hook because there `.git` is a file. On Windows the gate crashes and blocks the push when the pushed diff carries non-ASCII text, because its Python reads git output as cp1252; push with `PYTHONUTF8=1` (OBSERVED 2026-10-21, Git for Windows 2.55.0, Python 3.13).
   - Claude Code hooks are OFF in this project. Desktop sessions in `.claude/worktrees/*` run hooks with `CLAUDE_PROJECT_DIR` set to the main checkout.
     - `protected_ref_guard` then reads the main checkout's branch (`main`) and refuses every `git commit` made from a worktree.
     - The main checkout's `.claude/settings.json` is therefore parked as `harness/state/claude-settings.json.harness-off`. Move it back to turn the hooks on again, once the guard reads the worktree's branch.
@@ -162,7 +161,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
 - **Tests (2026-10-21).**
   - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
-  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-21: `source .venv/Scripts/activate && pytest -q` → 145 passed.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-21: `source .venv/Scripts/activate && pytest -q` → 165 passed.
 - **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
 - **FastAPI server:** `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --reload --port 8000`. fastapi installs into `.venv` with the dev setup (2026-10-21).
 - **Harness integrity:** `python3.13 harness/scripts/verify_install.py --root . --strict`. Local gate: `/hs:test`.
