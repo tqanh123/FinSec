@@ -113,6 +113,9 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Claude Code hooks are OFF in this project. Desktop sessions in `.claude/worktrees/*` run hooks with `CLAUDE_PROJECT_DIR` set to the main checkout.
     - `protected_ref_guard` then reads the main checkout's branch (`main`) and refuses every `git commit` made from a worktree.
     - The main checkout's `.claude/settings.json` is therefore parked as `harness/state/claude-settings.json.harness-off`. Move it back to turn the hooks on again, once the guard reads the worktree's branch.
+  - The hs plugin (`/hs:*` skills) is ON through the main checkout's gitignored `.claude/settings.local.json` (OBSERVED 2026-10-21). That file holds only `extraKnownMarketplaces` (`hs-local`, a directory source at `./harness/plugins`) and `enabledPlugins` (`"hs@hs-local": true`). The plugin ships no hooks.
+    - Use `settings.local.json`, not a plugin-only `settings.json`: strict verify's hook-wiring check reads `settings.json` and fails hard when that file has no hook groups.
+    - A worktree session cannot write the base repo's `.claude/`, so create or change this file from the main checkout or by hand.
 
 ## Engineering Rules (binding)
 - **No order execution anywhere.**
