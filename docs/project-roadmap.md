@@ -217,7 +217,7 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 |---|---|---|---|
 | `AGENTS.md` | fix | 0 | Done 2026-10-20: honest status, proposed direction, verified facts, rules and the agent memory protocol; the WebSocket, semantic-vector, O(1)-dedup and SSI-endpoint claims were corrected. |
 | `CLAUDE.md` | keep | 0 | Owner decision 2026-10-20: CLAUDE.md only imports `@AGENTS.md` and keeps the generated harness block. All project knowledge lives in AGENTS.md. |
-| `docs/system-architecture.md`, `docs/code-standards.md` | add | 0 | Required by /hs:plan and /hs:cook at Step 0 (harness/standards/README.md). They hold the PIT contract, the event clock, the layering and the testing rules. |
+| `docs/system-architecture.md`, `docs/code-standards.md` | add | 0 | Done 2026-10-20 (conform to `scaffold_standards.py --check`). Required by /hs:plan and /hs:cook at Step 0 (harness/standards/README.md). They hold the as-built vs proposed architecture, the binding rules and the coding/testing conventions. |
 | `docs/project-roadmap.md` | add | 0 | This document. |
 | `src/finsec_alpharadar/domain/models.py` | fix | 0-1 | Use tz-aware datetimes. Add Event, FundamentalFact (long format, with accn and published_at), Prediction and Outcome. Raise on an unknown exchange instead of silently using 7% (line 44). Round ceiling/floor to ticks and use full VND. Replace the static `VNExchangeBand` (lines 13-16) with time-versioned exchange membership. |
 | `connectors/us_alpaca_edgar.py` | rewrite | 1 | Add a real EDGAR client: header acceptance time, at most 5 rps, User-Agent from EDGAR_IDENTITY, submissions, Form 4 via edgartools, companyfacts by accn, bulk zips. Add an Alpaca daily-bar client with `adjustment=all` and an explicit feed. Remove the `now()` fallback (line 20) and the fabricated bid/ask sizes. Data endpoints only. |
@@ -372,7 +372,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 - **Output:** a counts table (events per type per year, share with intraday timestamps) and a go/no-go per VN target against the power rule.
 
 **0b. Foundations.**
-1. Write `docs/system-architecture.md` and `docs/code-standards.md` with `/hs:docs` or `harness/scripts/scaffold_standards.py`. They cover the PIT contract, the event clock, the layering, the module status and the testing rules. `/hs:plan` stops without them.
+1. Done 2026-10-20: `docs/system-architecture.md` and `docs/code-standards.md` are written and pass `harness/scripts/scaffold_standards.py --check`. Re-check them whenever an owner decision in section 9 is answered.
 2. AGENTS.md now carries the status, proposed direction, facts and rules (done 2026-10-20). CLAUDE.md stays a bare `@AGENTS.md` import. Update AGENTS.md as each owner decision in section 9 is answered.
 3. Tests:
    - pytest config with `pythonpath`, the `test_end_to_end()` wrapper and the dev extras;

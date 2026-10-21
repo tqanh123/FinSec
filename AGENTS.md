@@ -46,7 +46,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors.
 - `router/linucb_bandit.py`: disjoint LinUCB contextual bandit that chooses a model name.
 - `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`. The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
-- `harness/` (repo root): vendored SDLC harness v7.2.0, driven by `/hs:plan`, `/hs:cook`, `/hs:test` and `/hs:ship`. It reads `docs/system-architecture.md` and `docs/code-standards.md`, which are not written yet.
+- `harness/` (repo root): vendored SDLC harness v7.2.0, driven by `/hs:plan`, `/hs:cook`, `/hs:test` and `/hs:ship`. It reads `docs/system-architecture.md` and `docs/code-standards.md` (written 2026-10-20) before every plan and code change; keep both in sync with this file.
 
 ## Product Direction (PROPOSED 2026-10-20; pending owner decisions in docs/project-roadmap.md §9)
 - **Vision.** A private research and alerting tool. Each US/VN disclosure becomes a calibrated probability of abnormal return. The probability is logged in an append-only ledger before the outcome exists and scored automatically when its horizon matures.
@@ -64,7 +64,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 ## Roadmap (PROPOSED; detail in docs/project-roadmap.md §7)
 - **Phase 0 (next, ~2 weeks):**
   - a verification spike (EDGAR time, Alpaca, vnstock, SSI);
-  - `docs/system-architecture.md` and `docs/code-standards.md`;
+  - `docs/system-architecture.md` and `docs/code-standards.md` (done 2026-10-20);
   - test and safety hygiene;
   - a capture-only VN disclosure poller.
 - **Phase 1 (~3 weeks):** US point-in-time event set (EDGAR + Alpaca daily bars) and CAR labels.
