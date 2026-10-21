@@ -38,25 +38,25 @@ def run_modular_verification() -> dict:
 
     # 1. Test US & VN Connectors
     us_tick_from_adapter = AlpacaStreamAdapter.parse_trade_and_quote(
-        {"S": "NVDA", "p": 189.50, "s": 2500, "x": "IEX"},
-        {"bp": 189.48, "ap": 189.52, "bs": 1200, "as": 800},
+        {"S": "NVDA", "p": 189.50, "s": 2500, "x": "V", "t": "2026-10-17T04:30:00.123456789Z"},
+        {"S": "NVDA", "t": "2026-10-17T04:29:59.950000Z", "bp": 189.48, "ap": 189.52, "bs": 1200, "as": 800},
     )
     vn_tick_from_adapter = SSIFastConnectAdapter.parse_market_data_message({
         "Symbol": "FPT",
-        "LastPrice": 142.5,
+        "LastPrice": 142500.0,
         "LastVol": 45000,
-        "BidPrice1": 142.4,
-        "AskPrice1": 142.6,
+        "BidPrice1": 142400.0,
+        "AskPrice1": 142600.0,
         "BidVol1": 90000,
         "AskVol1": 15000,
-        "RefPrice": 138.0,
+        "RefPrice": 138000.0,
         "Exchange": "HOSE",
         "ForeignBuyVolTotal": 125000,
         "ForeignSellVolTotal": 15000,
         "Timestamp": now_ts,
     })
     assert us_tick_from_adapter.market == MarketRegion.US
-    assert vn_tick_from_adapter.vn_ceiling_floor_proximity == (147.66, 128.34)
+    assert vn_tick_from_adapter.vn_ceiling_floor_proximity == (147660.0, 128340.0)
 
     # 2. Test MinHash Deduplicator
     dedup = MinHashDeduplicator()
@@ -83,13 +83,13 @@ def run_modular_verification() -> dict:
             symbol="FPT",
             market=MarketRegion.VN,
             timestamp=now_ts + step,
-            price=138.0 + 0.15 * step + (2.9 if is_spike else 0.0),
+            price=138_000.0 + 150.0 * step + (2_900.0 if is_spike else 0.0),
             volume=50_000.0 + 6_500.0 * math.cos(step * 0.9) if not is_spike else 115_000.0,
-            bid_price=142.8,
-            ask_price=142.9,
+            bid_price=142_800.0,
+            ask_price=142_900.0,
             bid_size=180_000.0 if is_spike else 20_000.0,
             ask_size=22_000.0 if is_spike else 19_000.0,
-            reference_price=138.0,
+            reference_price=138_000.0,
             exchange="HOSE",
             foreign_buy_volume=160_000.0 if is_spike else 15_000.0,
             foreign_sell_volume=10_000.0 if is_spike else 12_000.0,

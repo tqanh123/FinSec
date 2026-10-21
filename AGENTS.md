@@ -8,6 +8,10 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-21 — VN price validation (D4): a VN `MarketTick` raises on a missing or unknown exchange, a missing reference price, or a price outside its allowed range.
+  - With `price_limits` (floor, ceiling) from the feed or the caller the check is strict; without them it uses the normal band (HOSE 7%, HNX 10%, UPCOM 15%, unrounded, around `reference_price`) widened by one tick on each side.
+  - Special sessions (first listing day, resumption after 25+ sessions, some ex-rights days, the 2026-12-28 HNX-to-HOSE transfer) must pass `price_limits`.
+  - VN prices are full VND at the domain boundary. The check assumes full VND: a tick whose price and reference are both in thousands of VND passes undetected (unit checks wait for the vnstock probe).
 - 2026-10-21 — Phase 0b foundations (plan 261021-1314-phase0b-foundations), owner choices:
   - CI: a GitHub Actions workflow (`.github/workflows/ci.yml`) runs pytest on Python 3.11 and 3.13; the repository is public.
   - `requires-python` is `>=3.11` (Python 3.10 reached end of life on 2026-10-01).
@@ -36,15 +40,15 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **VN sources:** SSI FastConnect Data; `vnstock`; consolidated financial statements (BCTC hợp nhất); board and shareholder resolutions (Nghị quyết HĐQT/ĐHĐCĐ).
 
 ## Current Status (verified 2026-10-20)
-- **Prototype.** About 850 lines of numpy-only, in-memory code. There is no live connector, no database and no LLM call. No prediction has been made or scored yet.
+- **Prototype.** About 1,200 lines of numpy-only, in-memory code (OBSERVED 2026-10-21). There is no live connector, no database and no LLM call. No prediction has been made or scored yet.
 - **Works, smoke-tested by `tests/test_end_to_end.py`:**
   - OLS market-model CAR (`quant/event_study.py`);
   - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); it has no zero-division guards and is not valid for banks, insurers or brokers;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
-- **Tests (OBSERVED 2026-10-21).** pytest collects 8 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`.
+- **Tests (OBSERVED 2026-10-21).** pytest collects 145 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39604961516 (commit 840ca61): success, 8 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-21).
 - **Stub or placeholder:**
-  - connectors are static dict parsers;
+  - connectors are static dict parsers; the Alpaca and SSI tick parsers raise on missing, null or malformed fields, and an Alpaca quote must share the trade's symbol and not postdate it (2026-10-21);
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
   - the LinUCB router picks a model that is never called;
   - `scripts/train_unsloth_slm.py` only prints a recipe;
@@ -52,18 +56,16 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **Known bugs:**
   - RAG gives future-dated documents full weight (`rag/hybrid_temporal_rag.py:112,138`).
   - Foreign flow is summed over a 50-tick deque (`quant/kalman_microstructure.py:99`).
-  - The VN price band is computed but never validated, and an unknown exchange silently gets 7% (`domain/models.py:44`).
   - On a cold start the router always picks the first arm (`router/linucb_bandit.py:40`).
-  - The SSI endpoint constant `wss://stream.ssi.com.vn` is wrong (see Verified Facts).
 
 ## Package Layout (`src/finsec_alpharadar/`)
-- `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`).
+- `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`); VN tick validation (D4), `price_limits`; every tick rejects non-finite numbers (2026-10-21).
 - `connectors/`: payload parsers for Alpaca and SEC EDGAR (`us_alpaca_edgar.py`) and for SSI FastConnect and vnstock (`vn_ssi_vnstock.py`). No network clients yet.
 - `quant/`: `MinHashDeduplicator`, `KalmanPriceFilter` + `StreamingQuantEngine` (VWAP, OBI, CUSUM, volume z-score, VN foreign net flow), `EventStudyAnalyzer` (CAR).
 - `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score.
 - `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors.
 - `router/linucb_bandit.py`: disjoint LinUCB contextual bandit that chooses a model name.
-- `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`. The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
+- `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`; required tick fields, 422 on bad input, a bilingual disclaimer on research responses (2026-10-21). The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
 - `harness/` (repo root): vendored SDLC harness v7.3.0 (upgraded 2026-10-21), driven by `/hs:plan`, `/hs:cook`, `/hs:test` and `/hs:ship`. It reads `docs/system-architecture.md` and `docs/code-standards.md` (written 2026-10-20) before every plan and code change; keep both in sync with this file.
 
 ## Product Direction (ADOPTED 2026-10-21; detail in docs/project-roadmap.md)
@@ -101,6 +103,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - IEX-only real-time data, 30 WebSocket symbols, 200 historical calls/min. VERIFIED https://docs.alpaca.markets/docs/about-market-data-api
   - The bars `adjustment` parameter defaults to raw; request `all` for return labels. VERIFIED https://docs.alpaca.markets/reference/stockbars
   - SIP history on Basic: ASSUMED.
+- **Alpaca stream fields (2026-10-21).** `t` is RFC-3339 with 0-9 fractional digits and "Z" (VERIFIED https://docs.alpaca.markets/us/docs/real-time-stock-pricing-data); exchange code `V` is IEX (VERIFIED https://docs.alpaca.markets/us/reference/stockmetaexchanges-1); SIP quote sizes are shares since 2025-11-03 (VERIFIED https://docs.alpaca.markets/us/changelog/marketdata-bid-and-ask-size-display-change); the IEX-feed size unit is ASSUMED.
 - **SSI FastConnect Data.**
   - Needs an SSI account plus ConsumerID and ConsumerSecret (no private key).
   - REST `https://fc-data.ssi.com.vn/v2.0/Market`; streaming `https://fc-datahub.ssi.com.vn/v2.0`.
@@ -110,6 +113,10 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - HNX-listed stocks move to HOSE: last HNX day 2026-12-23, HOSE from 2026-12-28. VERIFIED (secondary press) https://vietnamnews.vn/economy/1784883/nearly-300-stocks-to-move-from-hnx-to-hose-under-market-restructuring-plan.html
   - The band for those stocks is ASSUMED.
   - FTSE secondary-emerging status is effective 2026-09-21. VERIFIED https://www.lseg.com/en/media-centre/press-releases/ftse-russell/2025/ftse-russell-country-classification-september-2025
+- **VN price limits (2026-10-21).**
+  - Ticks: HOSE stocks 10 VND below 10,000, 50 VND from 10,000 to 49,950, 100 VND from 50,000; HNX and UPCOM 100 VND. Ceilings round down and floors round up to the tick; a limit equal to the reference moves one tick. VERIFIED https://www.cts.vn/wp-content/uploads/2025/08/KRX_1.Quy-dinh-giao-dich-chung-khoan-tai-HSX.pdf and https://www.cts.vn/wp-content/uploads/2025/08/KRX_2.Quy-dinh-giao-dich-chung-khoan-tai-HNX.pdf
+  - First trading day, resumption after 25+ sessions and some ex-rights days: ±20% HOSE, ±30% HNX, ±40% UPCOM. VERIFIED (UPCOM, 2026) https://luatvietnam.vn/chung-khoan/quyet-dinh-23-qd-hdtv-2026-ban-hanh-quy-che-dang-ky-va-quan-ly-giao-dich-chung-khoan-chua-niem-yet-435227-d1.html; HOSE/HNX figures from the 2025 brochures above (the 2026 appendix was not readable).
+  - SSI X-TRADE messages carry `Ceiling`, `Floor` and `RefPrice`; the doc samples are in VND. VERIFIED https://guide.ssi.com.vn/ssi-products/fastconnect-data/streaming-data.md
 - **vnstock licence.** The Community licence allows personal, study or research use only, with no redistribution. VERIFIED https://github.com/thinh-vu/vnstock. Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
 - **`.gitignore` (OBSERVED 2026-10-20).** The unanchored `data/` and `models/` patterns ignore any directory with those names. `harness/**/data/` is re-included explicitly. With `core.autocrlf=true` the checked-out `.gitignore` is CRLF, and git reads its blank lines as an empty pattern that matches every path ending in `/`; query a file inside a directory, or read the `-v` pattern (OBSERVED 2026-10-21, Git for Windows 2.55.0).
 - **Harness install state (OBSERVED 2026-10-21).**
@@ -155,7 +162,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
 - **Tests (2026-10-21).**
   - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
-  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-21: `source .venv/Scripts/activate && pytest -q` → 8 passed.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-21: `source .venv/Scripts/activate && pytest -q` → 145 passed.
 - **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
 - **FastAPI server:** `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --reload --port 8000`. fastapi installs into `.venv` with the dev setup (2026-10-21).
 - **Harness integrity:** `python3.13 harness/scripts/verify_install.py --root . --strict`. Local gate: `/hs:test`.

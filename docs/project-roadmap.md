@@ -219,9 +219,9 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `CLAUDE.md` | keep | 0 | Owner decision 2026-10-20: CLAUDE.md only imports `@AGENTS.md` and keeps the generated harness block. All project knowledge lives in AGENTS.md. |
 | `docs/system-architecture.md`, `docs/code-standards.md` | add | 0 | Done 2026-10-20 (conform to `scaffold_standards.py --check`). Required by /hs:plan and /hs:cook at Step 0 (harness/standards/README.md). They hold the as-built vs proposed architecture, the binding rules and the coding/testing conventions. |
 | `docs/project-roadmap.md` | add | 0 | This document. |
-| `src/finsec_alpharadar/domain/models.py` | fix | 0-1 | Use tz-aware datetimes. Add Event, FundamentalFact (long format, with accn and published_at), Prediction and Outcome. Raise on an unknown exchange instead of silently using 7% (line 44). Round ceiling/floor to ticks and use full VND. Replace the static `VNExchangeBand` (lines 13-16) with time-versioned exchange membership. |
-| `connectors/us_alpaca_edgar.py` | rewrite | 1 | Add a real EDGAR client: header acceptance time, at most 5 rps, User-Agent from EDGAR_IDENTITY, submissions, Form 4 via edgartools, companyfacts by accn, bulk zips. Add an Alpaca daily-bar client with `adjustment=all` and an explicit feed. Remove the `now()` fallback (line 20) and the fabricated bid/ask sizes. Data endpoints only. |
-| `connectors/vn_ssi_vnstock.py` | rewrite | 0, 3 | Add a vnstock adapter pinned to the probed version, using KBS for statements as vnstock's docs recommend. Fix the SSI endpoints now; defer the live client to Phase 6, and write per-channel parsers only after reading the R-channel spec. Remove the `now()` fallback and the BidVol/AskVol = 100 defaults. |
+| `src/finsec_alpharadar/domain/models.py` | fix | 0-1 | Use tz-aware datetimes. Add Event, FundamentalFact (long format, with accn and published_at), Prediction and Outcome. Raise on an unknown exchange instead of silently using 7% (done 2026-10-21). Round ceiling/floor to ticks and use full VND (full VND done 2026-10-21, decision D4; tick rounding still planned). Replace the static `VNExchangeBand` (lines 14-17) with time-versioned exchange membership. |
+| `connectors/us_alpaca_edgar.py` | rewrite | 1 | Add a real EDGAR client: header acceptance time, at most 5 rps, User-Agent from EDGAR_IDENTITY, submissions, Form 4 via edgartools, companyfacts by accn, bulk zips. Add an Alpaca daily-bar client with `adjustment=all` and an explicit feed. Remove the `now()` fallback and the fabricated bid/ask sizes (done 2026-10-21). Data endpoints only. |
+| `connectors/vn_ssi_vnstock.py` | rewrite | 0, 3 | Add a vnstock adapter pinned to the probed version, using KBS for statements as vnstock's docs recommend. Fix the SSI endpoints now (done 2026-10-21); defer the live client to Phase 6, and write per-channel parsers only after reading the R-channel spec. Remove the `now()` fallback and the BidVol/AskVol = 100 defaults (done 2026-10-21). |
 | `connectors/base.py` | add | 1 | SourceAdapter protocol, RawRecord, token-bucket limiter, retry with backoff, idempotent key (source, source_id). |
 | `capture/` | add | 0 | Capture-only VN disclosure poller with no parsing: raw payload, sha256, first_seen_at, outage log, heartbeat. |
 | `store/` | add | 1 | Raw archive writer, SQLite schema, DuckDB views, `as_of()`. |
@@ -388,8 +388,8 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
    - document the PowerShell commands.
 5. Correctness:
    - the RAG as_of fix, with a regression test;
-   - `models.py` raises on an unknown exchange;
-   - connectors stop defaulting timestamps to `now()`;
+   - `models.py` raises on an unknown exchange (done 2026-10-21);
+   - connectors stop defaulting timestamps to `now()` (done 2026-10-21);
    - fix `.agents/rules` rule 3 and the band rule.
 6. VN capture-only poller (`capture/`):
    - **Schedule:** every 2-5 minutes from 08:00 to 17:30 ICT on trading days, hourly otherwise.

@@ -7,10 +7,10 @@
 - FinSec AlphaRadar is a research and alerting platform for US (NYSE/NASDAQ) and Vietnam (HOSE/HNX/UPCOM) equities. It aims to turn disclosures, financial statements and market data into probabilities that are scored against what actually happened (target; nothing does this yet).
 - It never places orders and is not investment advice (DECIDED, AGENTS.md "Engineering Rules").
 - Maturity: **prototype** (AGENTS.md "Current Status", verified 2026-10-20).
-  - About 850 lines of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.11`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:4`).
+  - About 1,200 lines (OBSERVED 2026-10-21) of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.11`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:4`).
   - No HTTP/WebSocket client, database driver, environment-variable read or LLM SDK anywhere in `src/`.
   - No prediction has been made or scored yet.
-  - Tests (OBSERVED 2026-10-21): pytest collects 8 tests from `tests/`: the `test_end_to_end()` smoke wrapper plus the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`. `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 8 pass in `.venv` (Python 3.13) and on Python 3.11. CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) calls bare `pytest`, which is not on PATH on the dev machine (OBSERVED 2026-10-20).
+  - Tests (OBSERVED 2026-10-21): pytest collects 145 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py` and `tests/test_api_server.py` (handlers called directly; skipped without fastapi). `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 145 pass in `.venv` (Python 3.13) and on Python 3.11. CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) calls bare `pytest`, which is not on PATH on the dev machine (OBSERVED 2026-10-20).
 - Shape today: independent engines plus a 3-endpoint FastAPI app. Target shape (PLANNED): a disclosure poller feeding an append-only prediction ledger that is scored automatically (see Data flow).
 
 ## Components
@@ -18,16 +18,16 @@
 ### As-built (`src/finsec_alpharadar/`)
 | Path | Job | Status (2026-10-20) |
 |---|---|---|
-| `domain/models.py` | `MarketRegion`, `VNExchangeBand` enums; `MarketTick`, `RegulatoryFiling`, `FinancialStatementSnapshot` dataclasses | Real. Times are float epoch seconds (`timestamp` line 23, `published_at` line 54), not tz-aware datetimes. Static exchange-to-band map (lines 13-16); an unknown exchange silently gets 7% (line 44); prices are never validated against the band. |
-| `connectors/us_alpaca_edgar.py` | `AlpacaStreamAdapter`, `SecEdgarFilingAdapter`: dict to `MarketTick` / `RegulatoryFiling` | Stub. Static parsers, no client, called only by the smoke test. Missing timestamp falls back to `now()` (line 20); bid/ask sizes default to 100.0 (lines 29-30). |
-| `connectors/vn_ssi_vnstock.py` | `SSIFastConnectAdapter`, `VnstockBCTCAdapter` | Stub, as above. `now()` fallback (line 22), 100.0 depth defaults (lines 27-28), exchange defaults to HOSE (line 30), wrong `WS_ENDPOINT` (line 15). |
+| `domain/models.py` | `MarketRegion`, `VNExchangeBand` enums; `MarketTick`, `RegulatoryFiling`, `FinancialStatementSnapshot` dataclasses; `TickValidationError` and its subclasses, `vn_tick_size`, `vn_price_limits` | Real. Times are float epoch seconds (`timestamp` line 135, `published_at` line 215), not tz-aware datetimes. Static exchange-to-band map (lines 14-17). Since 2026-10-21 every tick rejects non-finite numbers, and a VN tick needs a listed exchange, a positive reference and a price within `price_limits` or within the band widened by one tick (decision D4; lines 148-187). |
+| `connectors/us_alpaca_edgar.py` | `AlpacaStreamAdapter`, `SecEdgarFilingAdapter`: dict to `MarketTick` / `RegulatoryFiling` | Stub. Static parsers, no client, called only by tests. Since 2026-10-21 the Alpaca parser requires trade `S, p, s, t, x` and quote `S, t, bp, ap, bs, as`, raises `PayloadFieldError` (`connectors/errors.py`) on a missing, null or malformed field, and rejects a quote for another symbol or later than the trade (lines 46-81). |
+| `connectors/vn_ssi_vnstock.py` | `SSIFastConnectAdapter`, `VnstockBCTCAdapter` | Stub, as above. Since 2026-10-21 the SSI parser requires its 10 tick fields (names ASSUMED until the Phase 6 R-channel spec), turns `Ceiling` and `Floor` into `price_limits`, and holds the VERIFIED `STREAM_URL`/`REST_URL` (lines 36-37) instead of the old, wrong `WS_ENDPOINT`. Absent foreign volumes still read as 0.0, and a malformed one raises a bare error (Phase 6). |
 | `quant/event_study.py` | `EventStudyAnalyzer.compute_car`: OLS market-model AR/CAR and t-stat | Real, test-only (no caller in `src/`). Bare arrays: no timestamp alignment or window checks. |
 | `quant/kalman_microstructure.py` | `KalmanPriceFilter`, `StreamingQuantEngine`: VWAP, OBI, CUSUM, volume z-score, VN foreign net flow, alert reasons | Real; wired to `POST /v1/ticks/ingest`. Session-blind. Foreign flow is summed over the 50-tick deque (line 99). Deferring that fix until the SSI field semantics are read (Phase 6) is planned (roadmap §5.2); `tests/test_end_to_end.py:94-95` feeds increments. |
 | `quant/deduplicator.py` | `MinHashDeduplicator`: near-duplicate text check | Real, test-only. Linear scan (lines 38-42) despite the "O(1)" docstring (line 10). |
 | `forensics/xbrl_bctc_auditor.py` | `ForensicAccountingEngine.evaluate`: Altman Z, 8-variable Beneish M, 9-point Piotroski F | Real, test-only. No zero-division guards (e.g. line 28) and no sector gate. |
 | `rag/hybrid_temporal_rag.py` | `HybridTemporalRAGEngine`: BM25 + RRF + exponential time decay; sentence-level diff | BM25, RRF and decay are real. The "dense" and ColBERT MaxSim legs use per-token hash vectors (lines 47-52) with no semantics. Look-ahead bug: lines 112 and 138, and no `published_at <= as_of` filter (lines 118-122). |
 | `router/linucb_bandit.py` | `LinUCBModelRouter`: disjoint LinUCB over model-name arms | Math is real, but no model is ever called. Only the smoke test calls `update_reward` (hard-coded 0.98, test:151); the app never does, so `GET /v1/rag/search` always picks the first arm (line 40). |
-| `api/server.py` | FastAPI: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search` | Thin. No WebSocket, no auth, untyped `Dict[str, Any]` body (line 29), hard-coded unverified model IDs (lines 18-20). fastapi installs into `.venv` with the dev setup (AGENTS.md). |
+| `api/server.py` | FastAPI: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search` | Thin. No WebSocket, no auth, untyped `Dict[str, Any]` body (line 77), hard-coded unverified model IDs (lines 18-20). Since 2026-10-21 ingest requires its tick fields and returns 422 on a missing or invalid one (lines 34-90), and both research responses carry the bilingual `DISCLAIMER` (line 23). fastapi installs into `.venv` with the dev setup (AGENTS.md). |
 
 Outside `src/`:
 - `scripts/train_unsloth_slm.py` only prints a hard-coded training recipe; it does not read `configs/unsloth_qwen3_catalyst.yaml`. Stub.
@@ -59,15 +59,18 @@ Also planned: move `router/` to `experimental/` (Phase 0); rewrite `api/server.p
 
 ### As-built
 ```
-POST /v1/ticks/ingest   raw JSON dict (server.py:28-44)
-  -> MarketTick built inline, NOT via connectors/ (defaults: market=US, exchange=IEX, sizes=100.0)
-     a VN tick posted without "exchange" gets exchange="IEX" (server.py:41), so the band silently falls back to 7% (models.py:44)
-  -> StreamingQuantEngine.process_tick (server.py:45)
-  -> {"signal": QuantSignalReport.__dict__, "vn_ceiling_floor": [ceiling, floor] or null} (server.py:46-49)
+POST /v1/ticks/ingest   raw JSON dict (server.py:76-90)
+  -> MarketTick built inline, NOT via connectors/ (server.py:34-68): required symbol, market, timestamp, price, volume,
+     bid/ask prices and sizes; optional exchange (null = absent), reference_price, price_limits [floor, ceiling]
+  -> MarketTick.__post_init__ (models.py:148-187): finite numbers; a VN tick needs HOSE/HNX/UPCOM, a reference, a price in range
+     a missing or invalid field, or a VN tick without an exchange, returns 422 (server.py:85-90)
+  -> StreamingQuantEngine.process_tick (server.py:91)
+  -> {"signal": QuantSignalReport.__dict__, "vn_ceiling_floor": [ceiling, floor] or null, "disclaimer"} (server.py:92-96)
 
-GET /v1/rag/search      (server.py:52-66)
+GET /v1/rag/search      (server.py:99-114)
   -> LinUCBModelRouter.select_model: the chosen arm is returned, never called
   -> HybridTemporalRAGEngine.search: always [] because nothing ingests into the app's engine
+  -> {"routed_model", "router_ucb_scores", "results", "disclaimer"}
 
 tests/test_end_to_end.py only:
   connectors parse 2 ticks (asserted only, test:40-59) and 2 filings -> HybridTemporalRAGEngine (test:124-145)
@@ -106,7 +109,7 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
   - SIP history on Basic: ASSUMED.
 - **SSI FastConnect Data** (VN; live use is Phase 6 per §9.3. No SSI account or client before Phase 6: DECIDED §9.5, 2026-10-21).
   - Needs an SSI account plus ConsumerID and ConsumerSecret (no private key). REST `https://fc-data.ssi.com.vn/v2.0/Market`; streaming `https://fc-datahub.ssi.com.vn/v2.0`. VERIFIED https://guide.ssi.com.vn/ssi-products/tieng-viet/fastconnect-data/huong-dan-ket-noi
-  - The code constant `wss://stream.ssi.com.vn` (`vn_ssi_vnstock.py:15`) is wrong; never reuse it. `SSI_PRIVATE_KEY_PATH` (`.env.example:11`) is not needed for FC Data.
+  - The old code constant `wss://stream.ssi.com.vn` was wrong; fixed 2026-10-21 (`STREAM_URL`/`REST_URL`, `vn_ssi_vnstock.py:36-37`); never reuse it. `SSI_PRIVATE_KEY_PATH` (`.env.example:11`) is not needed for FC Data.
 - **vnstock** (VN prices, statements, events over unofficial broker endpoints).
   - Community licence: personal, study or research use only, no redistribution. VERIFIED https://github.com/thinh-vu/vnstock
   - Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
@@ -118,7 +121,7 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
 ## Boundaries & trust
 - **Exposed surface:** the FastAPI app `finsec_alpharadar.api.server:app` on port 8000.
   - `make run-api` binds `0.0.0.0` (`Makefile:10`), so the API is reachable from the local network. Binding to 127.0.0.1 is a planned Phase 0 fix (roadmap §5.2); until then, run it only on a trusted network.
-  - No authentication, rate limit or request model: the body is an untyped dict (`server.py:29`), and a missing key raises a 500.
+  - No authentication, rate limit or request model: the body is an untyped dict (`server.py:77`), and a missing or invalid field returns 422 (since 2026-10-21).
   - Any caller of `POST /v1/ticks/ingest` mutates shared in-memory engine state.
 - **Secrets:** keys live in `.env` (gitignored, `.gitignore:20`; `*.pem` and `*.key` ignored at lines 26-27). `src/` reads no environment variables today. Guidance (roadmap §4, §8; not an AGENTS.md rule): never commit keys, and never put secrets or personal data in prompts, URLs or logs.
 - **Order-execution boundary (DECIDED):** no trading client in `src/`; keep `ALPACA_PAPER_TRADE=true` (`.env.example:4`); no `trading` MCP toolset; never register SSI FC Trading. `tests/test_no_order_execution.py` enforces this (since 2026-10-21).
@@ -130,11 +133,8 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
 - **Agent configuration:** AGENTS.md is the single shared contract for every coding agent (AGENTS.md intro). `.agents/rules/quant-and-market-rules.md:11` (rule 3: BM25 + dense + MaxSim in every `*.py`) is not an AGENTS.md rule. Rewriting the `.agents/` rules as pointers to AGENTS.md is DECIDED (§9.13) and scheduled for Phase 0.
 - **Known gaps against binding rules** (do not copy; fix within scope when touched):
   - RAG gives future-dated documents full weight (`hybrid_temporal_rag.py:112,138`).
-  - VN band never validated; unknown exchange silently gets 7% (`domain/models.py:44`).
   - Forensics has no gate excluding banks, insurers and securities firms (`forensics/xbrl_bctc_auditor.py`).
-  - Connectors stamp missing timestamps with `now()` (`us_alpaca_edgar.py:20`, `vn_ssi_vnstock.py:22`), which fakes availability time.
-  - API responses carry no not-investment-advice notice (`api/server.py:46-49`, `62-66`).
-  - Unverified model IDs (`api/server.py:19`) and the wrong SSI endpoint (`vn_ssi_vnstock.py:15`) break the external-facts rule.
+  - Unverified model IDs (`api/server.py:19`) break the external-facts rule.
 
 ## Key decisions
 
@@ -142,9 +142,9 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
 - **No order execution anywhere** (binding), including never registering SSI FC Trading. Why: the project is research and alerting only; accidental execution is a listed risk (roadmap §8), and the paper flag is only defense in depth.
 - **Probabilities only, with a not-investment-advice notice; no buy/sell wording** (binding). Why: publishing predictions could count as unlicensed investment advice (roadmap §8).
 - **No look-ahead** (binding): windows, Kalman updates, CAR and features use only data available at or before the decision time; keep every restated fundamental; never backtest on SEC XBRL Frames. Why: the product is a scoreboard of predictions against outcomes, and one leak invalidates it. Frames return the latest filed value, so restatements leak (roadmap §4).
-- **VN band validation** (binding): HOSE ±7% / HNX ±10% / UPCOM ±15% around `reference_price`; raise on an unknown exchange. Why: a silent default gives wrong ceiling/floor values, as `domain/models.py:44` does today.
+- **VN band validation** (binding): HOSE ±7% / HNX ±10% / UPCOM ±15% around `reference_price`; raise on an unknown exchange. Why: a silent default gives wrong ceiling/floor values. Built 2026-10-21 (decision D4 in AGENTS.md).
 - **No Altman/Beneish/Piotroski for banks, insurers or securities firms** (binding). Why: AGENTS.md "Current Status" records the auditor as not valid for these firms. They stay in the research universe and event studies (DECIDED §9.7).
-- **Label external facts VERIFIED, OBSERVED or ASSUMED; never invent API names, fields, model IDs or prices** (binding). Why: the prototype already carries a wrong SSI endpoint and unverified model IDs.
+- **Label external facts VERIFIED, OBSERVED or ASSUMED; never invent API names, fields, model IDs or prices** (binding). Why: the prototype carried a wrong SSI endpoint (fixed 2026-10-21) and still carries unverified model IDs.
 - **No package named `data/` or `models/`; use `modeling/`** (binding until `.gitignore` is anchored). Why: the unanchored patterns at `.gitignore:32-33` would silently keep such packages out of git (OBSERVED 2026-10-20).
 - **"Real-time" = disclosure capture first; ticks in Phase 6** (owner, 2026-10-20, §9.3). Why: free tick feeds are thin (Alpaca Basic is IEX-only with 30 WebSocket symbols), and VN shares cannot be sold before the T+2 afternoon, so intraday single-stock forecasts cannot be acted on.
 - **AGENTS.md holds all project knowledge; `CLAUDE.md` only imports `@AGENTS.md`, plus the generated harness block** (owner, 2026-10-20; AGENTS.md "Decisions"). Why: one contract for every coding agent. Record module status, decisions and verified facts in AGENTS.md in the same change as the code (AGENTS.md "Agent Memory Protocol").
@@ -175,7 +175,7 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
 - **VN market constraints.**
   - Shares bought on T can be sold from the T+2 afternoon session (VERIFIED, AGENTS.md). DECIDED (AGENTS.md "Engineering Rules"; roadmap §6.3): a 1-session VN stock target never counts as a tradable call.
   - Validate prices against the band (DECIDED). Treating band-locked sessions as unfillable, and adjusting for corporate actions ourselves from raw bars, are binding too (AGENTS.md "Engineering Rules"; roadmap §6.3).
-  - Exchange membership is not static: HNX-listed stocks move to HOSE (last HNX day 2026-12-23, HOSE from 2026-12-28; VERIFIED secondary press), and the band they will use is ASSUMED. Today `exchange` arrives as a per-record string and `VNExchangeBand` (`models.py:13-16`) only maps exchange to band. Time-versioned exchange membership is planned (roadmap §5.2).
+  - Exchange membership is not static: HNX-listed stocks move to HOSE (last HNX day 2026-12-23, HOSE from 2026-12-28; VERIFIED secondary press), and the band they will use is ASSUMED. Today `exchange` arrives as a per-record string and `VNExchangeBand` (`models.py:14-17`) only maps exchange to band. Time-versioned exchange membership is planned (roadmap §5.2).
 - **Complexity gate** (RAG, the bandit, SLM fine-tuning or a new database enter the pipeline only with a measured scoreboard or latency gain): DECIDED (§9.10, 2026-10-21).
 - **Out of scope before Phase 6** (DECIDED, §9.3): live tick streaming (Alpaca IEX, SSI FastConnect). Deferring the intraday `quant/kalman_microstructure.py` fixes to Phase 6, and SLM fine-tuning, bandit routing and semantic RAG to Phase 7, is planned (roadmap §5.2, §7).
 - Build and verification commands (bash and PowerShell) are in AGENTS.md "Build & Verification Commands"; do not duplicate them here.
