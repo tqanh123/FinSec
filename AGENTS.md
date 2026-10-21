@@ -108,8 +108,11 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **vnstock licence.** The Community licence allows personal, study or research use only, with no redistribution. VERIFIED https://github.com/thinh-vu/vnstock. Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
 - **`.gitignore` (OBSERVED 2026-10-20).** The unanchored `data/` and `models/` patterns ignore any directory with those names. `harness/**/data/` is re-included explicitly.
 - **Harness install state (OBSERVED 2026-10-21).**
-  - Strict verify reads the omitted-skills record in the gitignored `harness/state/`. A fresh clone or worktree therefore reports files as "missing" until you run the installer there: the default-off skills stashed in `disabled-skills/` (477 files in v7.3.0) plus `harness/state/.gitkeep`.
-  - The installer skips the pre-push transport gate when `.git` is a file (a worktree), so no pre-push hook is installed.
+  - Strict verify reads the omitted-skills record in the gitignored `harness/state/`. A fresh clone or worktree therefore reports files as "missing" until you run the installer there: the default-off skills stashed in `disabled-skills/` (477 files in v7.3.0) plus `harness/state/.gitkeep`. The main checkout was installed on 2026-10-21 and passes.
+  - The pre-push transport gate lives in the shared `.git/hooks/pre-push`, which an install in the main checkout wrote on 2026-10-21. It runs for every worktree. It blocks a delete or non-fast-forward of a protected branch, and a detected secret. A missing stage receipt only warns. An install from a worktree skips this hook because there `.git` is a file.
+  - Claude Code hooks are OFF in this project. Desktop sessions in `.claude/worktrees/*` run hooks with `CLAUDE_PROJECT_DIR` set to the main checkout.
+    - `protected_ref_guard` then reads the main checkout's branch (`main`) and refuses every `git commit` made from a worktree.
+    - The main checkout's `.claude/settings.json` is therefore parked as `harness/state/claude-settings.json.harness-off`. Move it back to turn the hooks on again, once the guard reads the worktree's branch.
 
 ## Engineering Rules (binding)
 - **No order execution anywhere.**
