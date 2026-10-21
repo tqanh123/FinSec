@@ -7,18 +7,19 @@ declared one is how a wrong destination gets a `--delete` run against it.
 In a LINKED worktree `.git` is a file, so `find_repo` stops at the worktree and its
 own `.rops.env` is usually absent; the main checkout's file (the parent of `git
 rev-parse --git-common-dir`) is then read as its own, weaker layer, printed as
-`.rops.env (main checkout)`, and `doctor` does not write a second file over it.
+`.rops.env (main checkout)`, and `doctor` does not write a second file over it --
+all but `TREE_PLACE_KEYS`, which name the main checkout's own place on the far side.
 """
 from __future__ import annotations
 
 import os
 import pathlib
 import shutil
-import subprocess
 from dataclasses import dataclass
 
 from hs_family import UsageError
 from rops.ropslib.prog import PROG
+from rops.ropslib.worktree import _common_dir, main_checkout
 
 ENV_FILENAME = ".rops.env"
 PREFIX = "ROPS_"
@@ -26,6 +27,10 @@ PREFIX = "ROPS_"
 # Source ranks, weakest first. `doctor` prints these verbatim.
 SRC_DEFAULT, SRC_DETECTED, SRC_FILE, SRC_ENV = "default", "detected", ".rops.env", "env"
 SRC_MAIN_FILE = ".rops.env (main checkout)"
+#: Where ONE tree lives on the far side. The main checkout's values name its own tree,
+#: so a linked worktree does not inherit them: it keeps its detected `~/rops/<dir>`, or
+#: names its lane itself (its own `.rops.env`, env, `--lane`).
+TREE_PLACE_KEYS = frozenset({"ROPS_LANE", "ROPS_REMOTE_DIR"})
 #: `ROPS_REMOTE_DIR` derived from `ROPS_LANE` (config.py::_apply_lane) rather than
 #: read from any layer directly — its own tag, so `doctor` never prints this as if
 #: someone had typed `ROPS_REMOTE_DIR=` themselves.
@@ -163,32 +168,6 @@ def _parse_lines(text: str) -> dict[str, str]:
     return out
 
 
-def _common_dir(repo: pathlib.Path) -> pathlib.Path | None:
-    """`git rev-parse --git-common-dir` resolved against `repo`, or None."""
-    if not (repo / ".git").exists():
-        return None
-    try:
-        common = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"], cwd=str(repo),
-            capture_output=True, text=True, timeout=10, check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return None
-    return (repo / common).resolve() if common else None
-
-
-def main_checkout(repo: pathlib.Path) -> pathlib.Path | None:
-    """The main checkout a LINKED worktree belongs to; None for the main checkout
-    itself or a directory that is not a worktree."""
-    if not (repo / ".git").is_file():
-        return None
-    common = _common_dir(repo)
-    if common is None:
-        return None
-    main = common.parent
-    return None if main == repo.resolve() else main
-
-
 def main_env_file(repo: pathlib.Path) -> pathlib.Path | None:
     """The main checkout's `.rops.env` when `repo` is a linked worktree and it exists."""
     main = main_checkout(repo)
@@ -208,7 +187,7 @@ def load(repo: pathlib.Path | None = None, *, detect: bool = True) -> Config:
                 values[k] = Value(v, SRC_DETECTED)
     main_file = main_env_file(repo)
     for k, v in (parse_env_file(main_file) if main_file else {}).items():
-        if k.startswith(PREFIX):
+        if k.startswith(PREFIX) and k not in TREE_PLACE_KEYS:
             values[k] = Value(v, SRC_MAIN_FILE)
     for k, v in parse_env_file(repo / ENV_FILENAME).items():
         if k.startswith(PREFIX):

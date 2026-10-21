@@ -279,9 +279,16 @@ def _trim_store(p) -> None:
         Path(p), "\n".join(lines[i] for i in sorted(keep)) + "\n")
 
 
-def has_spawn(*, session, run_id, subagent_type, env=None):
+def has_spawn(*, session, run_id, subagent_type, since=None, until=None, env=None):
     """Did a Task spawn of `subagent_type` happen for this session, attributable
-    to `run_id`?
+    to `run_id` -- stamped with it, or (with `since`, the call's own epoch clock)
+    recorded at or after it and, with `until`, before the next call that could
+    claim it?
+
+    The clock half is what holds when other calls land between the prompt and the
+    spawn: the stamp is the session's LATEST `hs-run` call at spawn time, so a
+    second role's prompt, or a `next`, between them leaves the spawn carrying
+    another call's id.
 
     TRI-STATE, and the third state is the load-bearing one:
       True  — a matching record is on disk.
@@ -319,10 +326,15 @@ def has_spawn(*, session, run_id, subagent_type, env=None):
                 rec = json.loads(line)
             except Exception:  # noqa: BLE001 — a torn line must not drop its neighbours
                 continue
-            if (isinstance(rec, dict)
-                    and rec.get("run_id") == run_id
+            if not (isinstance(rec, dict)
                     and rec.get("session") == _bucket(session)
                     and rec.get("subagent_type") == subagent_type):
+                continue
+            if run_id and rec.get("run_id") == run_id:
+                return True
+            ts = rec.get("ts")
+            if (since is not None and isinstance(ts, (int, float)) and ts >= since
+                    and (until is None or ts < until)):
                 return True
         return False
     except Exception:  # noqa: BLE001 — an unexpected fault is "could not look"

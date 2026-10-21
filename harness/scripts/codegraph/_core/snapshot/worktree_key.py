@@ -26,7 +26,7 @@ import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import codegraph_snapshot_reader
 import tree_content_key
@@ -40,7 +40,7 @@ from ..git import GitError, git_text
 # layout without importing the whole `codegraph` measurement engine — see
 # that module's own docstring). Rebound to the SAME function objects, not
 # reimplemented beside them: `codegraph_snapshot_reader.descriptor.model.
-# KERNEL_SCHEMA_VERSION` already re-exports its constant this exact way, so
+# DESCRIPTOR_SCHEMA_VERSION` already re-exports its constant this exact way, so
 # this is the second use of one pattern, not a new one. `worktree_key is
 # codegraph_snapshot_reader.worktree_key` holds — one definition.
 _digest = codegraph_snapshot_reader._digest
@@ -122,17 +122,24 @@ def _descriptor_file_rel(repo: Path, descriptor: Any) -> "tuple[str, ...]":
     return (rel.as_posix(),)
 
 
-def dirty_scope(repo: Path, descriptor: Any) -> "tuple[str, ...]":
+def dirty_scope(repo: Path, descriptor: Any,
+                config_inputs: "Optional[Sequence[str]]" = None) -> "tuple[str, ...]":
     """`root_paths(descriptor)` PLUS the descriptor's own file (see
-    `_descriptor_file_rel`) — the full path set whose uncommitted state
+    `_descriptor_file_rel`) PLUS each enabled language pack's config inputs
+    (a workspace's `package.json`s, its tsconfigs: outside a narrow root, yet
+    they change what the snapshot says) — the full path set whose uncommitted state
     decides both "is this tree dirty" (the caller's own `working_tree_
     dirty(repo, dirty_scope(...))` call) and the dirty content key below;
     the two must never be computed over two different scopes, or a build
     could stamp `content_key` as clean while `dirty` itself said otherwise."""
-    return tuple(root_paths(descriptor)) + _descriptor_file_rel(repo, descriptor)
+    from ..lang import registry as lang_registry
+    own = tuple(root_paths(descriptor)) + _descriptor_file_rel(repo, descriptor)
+    cfg = lang_registry.config_inputs(repo, descriptor) if config_inputs is None else config_inputs
+    return own + tuple(x for x in cfg if x not in own)
 
 
-def content_key(repo: Path, descriptor: Any, *, dirty: bool) -> "Optional[str]":
+def content_key(repo: Path, descriptor: Any, *, dirty: bool,
+                scope: "Optional[tuple[str, ...]]" = None) -> "Optional[str]":
     """The tree's own content identity for reuse matching. Clean ->
     `head_tree_hash(repo)`, same as before. Dirty -> delegates to
     `tree_content_key.content_key(repo, dirty_scope(repo, descriptor))` — the
@@ -146,7 +153,8 @@ def content_key(repo: Path, descriptor: Any, *, dirty: bool) -> "Optional[str]":
     `working_tree_dirty` call shared with everything else that needs it, same
     law `SNAPSHOT` already followed for `tree_hash`) — never recomputed
     here. `None` off a non-git tree or an unresolved HEAD, or when the git
-    calls this needs fail.
+    calls this needs fail. `scope` is the caller's own `dirty_scope` when it has one:
+    the same scope its `dirty` was measured over, computed once.
 
     A snapshot stored under the OLD local assembly may miss ONE reuse round
     after this change (the two algorithms may not byte-assemble identically
@@ -154,7 +162,7 @@ def content_key(repo: Path, descriptor: Any, *, dirty: bool) -> "Optional[str]":
     fresh dirty measurement replaces it and the drift never repeats."""
     if not dirty:
         return head_tree_hash(repo)
-    return tree_content_key.content_key(repo, dirty_scope(repo, descriptor))
+    return tree_content_key.content_key(repo, dirty_scope(repo, descriptor) if scope is None else scope)
 
 
 def descriptor_digest(descriptor: Any) -> str:
@@ -171,12 +179,13 @@ def descriptor_digest(descriptor: Any) -> str:
         json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
 
 
-def reuse_key(repo: Path, descriptor: Any, *, dirty: bool) -> "Optional[str]":
+def reuse_key(repo: Path, descriptor: Any, *, dirty: bool,
+              scope: "Optional[tuple[str, ...]]" = None) -> "Optional[str]":
     """The FULL identity a build is reused against — `content_key` folded
     with `descriptor_digest`. `None` when `content_key` itself is `None`
     (non-git tree, unresolved HEAD, or a git failure): nothing safe to key
     reuse on."""
-    key = content_key(repo, descriptor, dirty=dirty)
+    key = content_key(repo, descriptor, dirty=dirty, scope=scope)
     if key is None:
         return None
     return hashlib.sha256(f"{key}|{descriptor_digest(descriptor)}".encode("utf-8")).hexdigest()

@@ -22,6 +22,7 @@ Exit 0 on success (changed or already-completed no-op); exit 1 on error
 """
 import sys
 
+import plan_family
 from plan_status import Result, flip_status  # noqa: F401  (Result re-exported)
 
 # Only a plan that actually ran is finalized; a pending plan (never started) is
@@ -35,8 +36,12 @@ def close_plan(plan_dir, root=None) -> Result:
 
     Returns Result(ok, changed, message). ok=False on any structural error; the
     file is never partially written. An off-source status (e.g. pending) is a
-    benign no-op, not an error.
+    benign no-op, not an error. A plan the human split is refused: its children
+    close, never it.
     """
+    split = plan_family.never_cooked(plan_dir)
+    if split:
+        return Result(False, False, split)
     return flip_status(plan_dir, allowed_from=_FINALIZABLE, to="completed",
                        error_on_other=False, root=root)
 

@@ -19,7 +19,9 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol, runtime_checkable
 
-from ..descriptor.model import KERNEL_SCHEMA_VERSION
+from codegraph_snapshot_reader import SNAPSHOT_SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION_MIXED
+
+from ..lang.ids import PYTHON, lang_of
 
 
 #: A scalar made only of these, not starting with a digit, and not one of the
@@ -55,6 +57,25 @@ def yaml_str(s: str) -> str:
     if not set(s) <= _PLAIN_SAFE:
         return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return s
+
+
+def snapshot_schema_version(records: "Any") -> int:
+    """The `schema_version` a snapshot of `records` is written at: a record of a
+    language other than Python (one carrying `lang`) makes it the mixed version."""
+    return SNAPSHOT_SCHEMA_VERSION_MIXED if any(r.get("lang") for r in records) \
+        else SNAPSHOT_SCHEMA_VERSION
+
+
+def language_summary(records: "Any") -> "dict[str, dict[str, int]]":
+    """`{lang: {modules: n}}` over `records`, or {} when every record is Python --
+    a Python-only snapshot keeps the bytes it always had."""
+    counts: "dict[str, int]" = {}
+    for r in records:
+        lang = lang_of(r)
+        counts[lang] = counts.get(lang, 0) + 1
+    if set(counts) <= {PYTHON}:
+        return {}
+    return {k: {"modules": counts[k]} for k in sorted(counts)}
 
 
 @runtime_checkable
@@ -102,7 +123,8 @@ class KernelFormat:
         L: list[str] = []
         L.append(f"# codemap snapshot unit `{unit}` at {commit[:8]}. "
                  f"GENERATED — do not edit by hand.")
-        L.append(f"schema_version: {KERNEL_SCHEMA_VERSION}")
+        schema_version = int(ctx.get("schema_version", SNAPSHOT_SCHEMA_VERSION))
+        L.append(f"schema_version: {schema_version}")
         L.append("unit: " + yaml_str(unit))
         L.append("root: " + yaml_str(ctx["root"]))
         L.append("frozen_at: " + commit)
@@ -116,6 +138,10 @@ class KernelFormat:
         for m in mods:
             L.append(f"  - path: {yaml_str(m['path'])}")
             L.append("    module: " + yaml_str(m['module']))
+            if m.get("lang"):
+                L.append("    lang: " + yaml_str(m["lang"]))
+            if m.get("role"):
+                L.append("    role: " + yaml_str(m["role"]))
             L.append(f"    loc: {m['loc']}")
             L.append(f"    bytes: {m['bytes']}")
             L.append("    file_sha: " + yaml_str(m['file_sha']))
@@ -138,6 +164,12 @@ class KernelFormat:
             if m.get("imports_type_only"):
                 L.append("    imports_type_only: [" + ", ".join(yaml_str(x) for x in m["imports_type_only"]) + "]"
                          "   # under `if TYPE_CHECKING:`: never loaded, still coupling")
+            if m.get("import_flags"):
+                L.append("    import_flags:   # a package boundary each edge crosses")
+                for f in m["import_flags"]:
+                    L.append("      - {" + ", ".join("%s: %s" % (k, yaml_str(v) if isinstance(v, str) else
+                                                         str(v).lower() if isinstance(v, bool) else v)
+                                                   for k, v in f.items()) + "}")
             if not m["symbols"]:
                 L.append("    symbols: []")
                 continue
@@ -163,7 +195,7 @@ class KernelFormat:
 
     def index_json(self, ctx: dict[str, Any]) -> str:
         index = {
-            "schema_version": KERNEL_SCHEMA_VERSION,
+            "schema_version": ctx.get("schema_version", SNAPSHOT_SCHEMA_VERSION),
             "callers": ctx["callers"],
             "snapshot": ctx["snapshot"],
             "mode": ctx["mode"],
@@ -191,6 +223,16 @@ class KernelFormat:
         # a tree whose roots already hold every test keeps its bytes.
         if ctx.get("descriptor_sha") is not None:
             index["descriptor_sha"] = ctx["descriptor_sha"]
+        if ctx.get("languages"):
+            index["languages"] = ctx["languages"]
+        # The language packs' config files outside the roots (a tsconfig, a
+        # workspace's package.json) whose edits change this measurement: a reader
+        # asks git about them alongside the roots. Omitted when none, so a
+        # Python tree keeps its bytes.
+        if ctx.get("config_inputs"):
+            index["config_inputs"] = ctx["config_inputs"]
+        if ctx.get("skipped_files"):
+            index["skipped_files"] = ctx["skipped_files"]
         if ctx.get("test_modules"):
             index["test_modules"] = ctx["test_modules"]
         if ctx.get("test_modules_unparsed"):

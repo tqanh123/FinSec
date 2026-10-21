@@ -7,7 +7,8 @@ current-phase verdict the gate reads O(1)). That makes it useless for "are all N
 phases done?" — by the time you ask, only the last phase's verdict survives. This
 hook keeps a per-phase copy so completion can be DERIVED, not asserted: when a
 verification carrying verdict PASS + a phase id is written, copy it once to
-verification-<phase>.json (first-wins, never overwriting an existing snapshot).
+verification-<phase>.json (first-wins; `verification_snapshot._supersede` names when
+a later write replaces it).
 
 Enforced, not advised: the agent keeps writing ONE verification.json per phase as
 it already does (per-phase-tdd.md); the hook owns the per-phase naming. So the

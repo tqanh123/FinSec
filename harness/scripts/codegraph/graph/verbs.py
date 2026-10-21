@@ -76,12 +76,11 @@ def _snapshot_base(project: str, out_override: str | None, root: Path) -> Path:
     """
     if out_override:
         return Path(out_override)
-    base = harness_paths.tool_data_root()
+    base, why = harness_paths.tool_data_root_and_reason()
     if harness_paths.data_root_unresolved(base):
         raise SnapshotBaseUnresolved(
-            "cannot resolve the snapshot store's data home — set "
-            "HARNESS_DATA_ROOT (or run from inside an initialized project) "
-            "so `graph snapshot` knows where to write")
+            "cannot resolve the snapshot store's data home, so `graph snapshot` "
+            "has nowhere to write: %s" % why)
     return codegraph_snapshot_reader.snapshot_base(base, project, root)
 
 

@@ -142,6 +142,14 @@ def cmd_trust(args) -> int:
         print("%s: %s" % (label, exc), file=sys.stderr)
         return int(exc.exit_code)
     print("trusted: %s" % rp)
+    fp = trust_store.command_fingerprint(rp)
+    if fp is not None:
+        print("commands (fingerprint %s):" % fp[:16])
+        cmds = trust_store.declared_commands(rp)
+        for argv in cmds:
+            print("  " + " ".join(argv))
+        files = trust_store.command_files(rp, cmds)
+        print("  fingerprinted: %s (modules those scripts import are not)" % (", ".join(files) or "no script in the repo"))
     return 0
 
 
@@ -341,10 +349,9 @@ def _gates_switch(args) -> int:
         if rc:
             return rc
     if gates["off"] or gates["on"]:
-        home = harness_paths.data_root()
+        home, why = harness_paths.data_root_and_reason()
         if harness_paths.data_root_unresolved(home):
-            print("error: no project data home resolved — set HARNESS_DATA_ROOT or "
-                  "CLAUDE_PROJECT_DIR", file=sys.stderr)
+            print("error: no project data home resolved — %s" % why, file=sys.stderr)
             return 2
         path = home / gate_registry.GATES_LAYER
         try:

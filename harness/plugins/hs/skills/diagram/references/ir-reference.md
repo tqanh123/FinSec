@@ -30,7 +30,9 @@ must be unique across the whole document (schemas/common.schema.json `$defs.id`)
 ```
 
 - `components[]` (1-250): `role` in `frontend | backend | database | cache | queue | storage |
-  gateway | auth | external | worker`. `layer`: integer 0-10, picks the layout column; omitted
+  gateway | auth | external | worker | person | system`. Optional `technology` and
+  `description` turn the box into a C4 box: `[technology]` and the description (wrapped, up to
+  three lines) under the label. `layer`: integer 0-10, picks the layout column; omitted
   nodes take the longest path from their predecessors.
 - `boundaries[]`: `role` in `cloud | vpc | cluster | trust-boundary | private-network |
   external-zone`; `components` lists member component ids (rendered as a dashed frame).

@@ -75,6 +75,7 @@ import artifact_check  # noqa: E402
 import derive_plan_completion  # noqa: E402
 import frontmatter_parser  # noqa: E402
 import fs_guard  # noqa: E402
+import plan_family  # noqa: E402
 import plan_layout_check  # noqa: E402
 import plan_status  # noqa: E402
 import redteam_disposition  # noqa: E402
@@ -479,6 +480,7 @@ def _graph_state(plan_dir: Path):
     if missing:
         reasons.append("missing 'post' declaration for node(s): %s" % ", ".join(missing))
     reasons += plan_graph.find_post_problems(graph)
+    reasons += plan_graph.find_cross_plan_problems(graph, plan_dir)
     cycles = plan_graph.find_cycles(graph)
     if cycles:
         reasons.append("cycle(s) detected: %s"
@@ -506,15 +508,15 @@ _GRID_ARTIFACT = "coverage-grid.json"
 # receipt already on disk (carrying just `sizing.*`, from before this gate
 # existed) still merges cleanly with a new `decided_by`/`decision` pair rather
 # than colliding with it.
-_SCOPE_RECEIPT = "scope-sizing.json"
+_SCOPE_RECEIPT = plan_family.SCOPE_RECEIPT
 
 
 # The plan-approval step's size-decision gate. Never a machine verdict a human
 # answers: the machine gives no split recommendation at all — it only ever
 # reports facts (`plan_facts.describe`), and the choice is the human's alone,
 # made at the SAME approval step rather than a separate one (no new state, no
-# new exit code — the shared `ask_user` block carries the facts instead).
-_SIZE_DECISION_VALUES = ("keep", "split")
+# new exit code — the shared `ask_user` block carries the facts instead). The
+# answer itself is read by `plan_family.size_decision`, which cook reads too.
 
 
 def _size_facts_for_ask_user(plan_dir: Path, root) -> "list[str]":
@@ -548,19 +550,38 @@ def _size_decision_receipt(plan_dir: Path):
     or malformed all fold to the same honest `(False, reason)` a fresh plan
     has by default, matching `_read_json_or_yaml`'s own degrade-to-{}
     contract for every other artifact reader in this module."""
-    receipt = plan_dir / "artifacts" / _SCOPE_RECEIPT
-    if not receipt.is_file():
-        return False, "no scope-sizing decision recorded at %s" % receipt
-    rec = _read_json_or_yaml(receipt)
-    decided_by = str(rec.get("decided_by") or "").strip().lower()
-    if decided_by != "user":
-        return False, ("%s's decided_by is %r, not \"user\" — a machine-attributed "
-                       "size decision is refused" % (receipt, rec.get("decided_by")))
-    decision = str(rec.get("decision") or "").strip().lower()
-    if decision not in _SIZE_DECISION_VALUES:
-        return False, ("%s's decision is %r, expected one of %s"
-                       % (receipt, rec.get("decision"), _SIZE_DECISION_VALUES))
-    return True, None
+    decision, why = plan_family.size_decision(plan_dir)
+    return decision is not None, why
+
+
+def _split_result(plan_dir: Path, view: dict) -> dict:
+    """The answer for a plan the human chose to split: never a cook command. Done
+    once a child names it and it holds no phase; until then, what the split still
+    owes."""
+    kids = view["children"]
+    if view["done"]:
+        return hs_run.StepResult(
+            state="split",
+            exit_code=EXIT_DONE,
+            next_action=("plan was split (the human's size decision) — it holds no phase "
+                         "and is never cooked itself; each of its %d child plan(s) is "
+                         "reviewed, approved and cooked on its own: %s"
+                         % (len(kids), "; ".join("hs-run plan next --plan %s" % k
+                                                  for k in kids))),
+            artifacts=[str(k) for k in kids],
+            warnings=[],
+            extra={"children": [str(k) for k in kids], "pending": []},
+        ).as_dict()
+    return hs_run.StepResult(
+        state="split_pending",
+        exit_code=EXIT_NEEDS_MODEL,
+        next_action=("plan was split (the human's size decision) and is never cooked "
+                     "itself, but the split is not finished: %s"
+                     % plan_family.split_sentence(view, plan_dir)),
+        artifacts=[str(plan_dir)] + [str(k) for k in kids],
+        warnings=[],
+        extra={"children": [str(k) for k in kids], "pending": ["split"]},
+    ).as_dict()
 
 
 def _attestation_result(plan_dir: Path, root, *, extra_warning=None,
@@ -795,14 +816,37 @@ def _cook_recommendation(plan_dir: Path, fm: dict) -> str:
 
 # ------------------------------------------------------------------- targeting
 
+_SCAFFOLD_HINT = ("hs-run plan scaffold --slug <slug> --title <title> --phases <a,b,c> "
+                  "[--mode fast|hard]")
+
+
+def _scaffold_hint_for(plan_dir: Path, root: Path) -> str:
+    """The scaffold line that lands in `plan_dir` itself: its `<id>-<slug>` name
+    carried over, so the new plan.md fills the dir the caller already named. Only a
+    dir scaffold could have made — under `<root>/plans/`, a slug its own rule accepts —
+    gets one; any other gets the placeholder line rather than a command that fails."""
+    import scaffold as scaffold_mod
+    m = re.fullmatch(r"(\d{6}-\d{4})-(.+)", Path(plan_dir).name)
+    under_plans = Path(plan_dir).resolve().parent == (Path(root) / "plans").resolve()
+    if not m or not under_plans or not scaffold_mod._SLUG_RE.match(m.group(2)):
+        return _SCAFFOLD_HINT
+    return ("hs-run plan scaffold --id %s --slug %s --title <title> --phases <a,b,c> "
+            "[--mode fast|hard]" % (m.group(1), m.group(2)))
+
+
 def _resolve_plan_arg(root: Path, plan_arg: str) -> Path:
     """Same permissive resolution plan_approval.py's own `--plan` uses: a plan
-    dir, a path to a file inside it, or a bare name under plans/."""
+    dir, a path to a file inside it (from the cwd, then from the repo root), or a
+    bare name under plans/. A path with a separator is never nested under plans/
+    again: `plans/<dir>` from another cwd named `plans/plans/<dir>`."""
     p = Path(plan_arg)
-    if p.is_file():
-        return p.parent
-    if p.is_dir():
-        return p
+    for cand in ((p,) if p.is_absolute() else (p, Path(root) / p)):
+        if cand.is_file():
+            return cand.parent
+        if cand.is_dir():
+            return cand
+    if p.is_absolute() or len(p.parts) > 1:
+        return p if p.is_absolute() else Path(root) / p
     return Path(root) / "plans" / plan_arg
 
 
@@ -907,8 +951,17 @@ def _project(plan_dir: Path, fast: bool = False, root=None) -> dict:
     result.setdefault("checklist", _checklist(plan_dir, fast, root))
     result.setdefault("summary_numbers", _summary_numbers(result["checklist"]))
     _attach_layout_warnings(plan_dir, result)
+    _attach_family_warnings(plan_dir, result)
     _attach_route_flags(plan_dir, result)
     return result
+
+
+def _attach_family_warnings(plan_dir: Path, result: dict) -> None:
+    """A `parent_plan:` the parent cannot answer to, ADVISORY like the layout drift
+    above: the child is still a plan of its own, but its parent will not list it."""
+    found = plan_family.child_problems(plan_dir)
+    if found:
+        result["warnings"] = list(result.get("warnings") or []) + found
 
 
 def _attach_route_flags(plan_dir: Path, result: dict) -> None:
@@ -1062,7 +1115,8 @@ def _project_inner(plan_dir: Path, fast: bool, root) -> dict:
             # the difference lived only in the rung a caller had to notice.
             state="not_a_plan_dir",
             exit_code=EXIT_BROKEN,
-            next_action="%s has no plan.md — not a scaffolded plan dir" % plan_dir,
+            next_action="%s has no plan.md — not a scaffolded plan dir; start it with %s"
+                        % (plan_dir, _scaffold_hint_for(plan_dir, root)),
             artifacts=[str(plan_dir)],
             warnings=["hs-run cannot resolve a plan without plan.md"],
         ).as_dict()
@@ -1093,7 +1147,18 @@ def _project_inner(plan_dir: Path, fast: bool, root) -> dict:
             warnings=[],
         ).as_dict()
 
-    if not _phase_files(plan_dir) and not (
+    split = plan_family.split_view(plan_dir)
+    if split is not None:
+        # The human chose to split: this plan is never cooked, whatever its status
+        # or its phases. Its approval is not re-judged here — moving the phases out
+        # is exactly the edit that drifts it — save a REJECTED verdict, which still
+        # reads as rejected below.
+        art = _approval_artifact(plan_dir)
+        verdict = (_approval_verdict(plan_dir, _read_json_or_yaml(art), root)[0]
+                   if art is not None else None)
+        if verdict != "REJECTED":
+            return _split_result(plan_dir, split)
+    if not _phase_files(plan_dir) and split is None and not (
             status not in ("in_progress", "completed") and (plan_dir / "phases").is_dir()):
         # A `phases/` dir with no phase file in it, on a plan that claims no
         # progress, is the scaffold's own shape mid-authoring: the planner
@@ -1517,6 +1582,11 @@ def _checklist(plan_dir: Path, fast: bool, root=None) -> list:
     false}` in the checklist). One shared truth function closes that gap by
     construction, not by coincidence."""
     plan_dir = Path(plan_dir)
+    # A split parent whose phases moved out never holds the three steps below: they
+    # are the children's. Owed here, they would stay pending forever.
+    moved_why = _moved_to_children(plan_dir)
+    moved = bool(moved_why)
+    moved_kind = NOT_APPLICABLE if moved else None
     scaffolded = bool(_phase_files(plan_dir))
     content_ok = scaffolded and not _content_unfilled(plan_dir)
     if scaffolded:
@@ -1533,15 +1603,16 @@ def _checklist(plan_dir: Path, fast: bool, root=None) -> list:
         _, reason = _approval_verdict(plan_dir, rec, root)
         approved = reason is None
     rows = [
-        ChecklistRow(step="scaffold", done=scaffolded,
-                     evidence=str(plan_dir / "phases")),
+        ChecklistRow(step="scaffold", done=scaffolded or moved, skip_kind=moved_kind,
+                     reasons=moved_why, evidence=str(plan_dir / "phases")),
         ChecklistRow(step="research", done=research_present or fast,
                      skip_kind=WAIVED if fast and not research_present else None,
                      evidence=str(plan_dir / "research")),
-        ChecklistRow(step="planner_content", done=content_ok,
-                     evidence=str(plan_dir / "plan.md")),
-        ChecklistRow(step="plan_graph", done=graph_ok,
-                     evidence=str(plan_dir / "plan-graph.yaml"), reasons=graph_reasons),
+        ChecklistRow(step="planner_content", done=content_ok or moved, skip_kind=moved_kind,
+                     reasons=moved_why, evidence=str(plan_dir / "plan.md")),
+        ChecklistRow(step="plan_graph", done=graph_ok or moved, skip_kind=moved_kind,
+                     evidence=str(plan_dir / "plan-graph.yaml"),
+                     reasons=moved_why if moved else graph_reasons),
         # The grid leg, keyed off the SAME `_grid_state` the projection returns —
         # never a second reading of the same artifacts. `_checklist` shipped without
         # it for one commit and the board said "all done" while `next` was asking for
@@ -1564,6 +1635,18 @@ def _checklist(plan_dir: Path, fast: bool, root=None) -> list:
                      evidence=str(approval) if approval else None),
     ]
     return [r.as_dict() for r in rows]
+
+
+def _moved_to_children(plan_dir):
+    """Why a split parent no longer holds its phases, or [] when it still does (or was
+    not split): its children, or what the split still owes."""
+    split = plan_family.split_view(plan_dir)
+    if split is None or split["own_phases"]:
+        return []
+    if split["children"]:
+        return ["phases live in the child plans: %s"
+                % ", ".join(k.name for k in split["children"])]
+    return [plan_family.split_sentence(split, plan_dir)]
 
 
 def _summary_numbers(checklist: list) -> str:
@@ -1797,6 +1880,7 @@ def _cmd_graph_impl(args, root) -> dict:
     batches = plan_graph.find_parallel_batches(graph)
     missing = plan_graph.find_missing_post(graph)
     bad_post = plan_graph.find_post_problems(graph)
+    cross = plan_graph.find_cross_plan_problems(graph, plan_dir)
     blocked = plan_graph.phase_holds(graph)["blocked"]
     # The same list plan_graph.py prints, grounded against the tree `plan_dir`
     # LIVES IN — never the ambient `root` this verb was invoked under.
@@ -1810,7 +1894,7 @@ def _cmd_graph_impl(args, root) -> dict:
     # fixable authoring defect (a node missing its `post:` obligation) — the
     # same shape as a secret scan finding a real secret. `absent`/`malformed`
     # above (the graph could not even be READ) are the genuinely broken cases.
-    invalid = bool(missing or bad_files or bad_post)
+    invalid = bool(missing or bad_files or bad_post or cross)
     exit_code = EXIT_FINDINGS if invalid else EXIT_DONE
     state = "invalid" if invalid else "ok"
     if not invalid:
@@ -1821,7 +1905,8 @@ def _cmd_graph_impl(args, root) -> dict:
              if missing else [])
             + ([("plan-graph.yaml `file:` points nowhere usable for node(s): %s"
                  % ", ".join(bad_files))] if bad_files else [])
-            + ["plan-graph.yaml %s" % p for p in bad_post])
+            + ["plan-graph.yaml %s" % p for p in bad_post]
+            + ["plan-graph.yaml %s" % p for p in cross])
     return hs_run.StepResult(
         state=state,
         next_action=next_action,
@@ -2232,8 +2317,9 @@ def _cmd_next_impl(args, root) -> dict:
             # the caller to disambiguate cannot be finished, then reverted: the
             # measurement (this exits 0) was right, the framing was not.
             exit_code=EXIT_DONE,
-            next_action=("more than one plan dir found — pick one via --plan <dir>: %s"
-                         % ", ".join(str(d) for d in dirs)),
+            next_action=("more than one plan dir found — pick one via --plan <dir>: %s; "
+                         "or start a new plan: %s"
+                         % (", ".join(str(d) for d in dirs), _SCAFFOLD_HINT)),
             artifacts=[str(d) for d in dirs], warnings=[],
             # No single target resolved, so the board has nothing to walk either
             # — same reasoning as the `no_plan` branch just above.
@@ -2243,13 +2329,18 @@ def _cmd_next_impl(args, root) -> dict:
     result = _project(plan_dir, fast=fast, root=root)
     if conflict:
         result.setdefault("warnings", []).append(conflict)
-    handoff = _handoff_report(plan_dir, root)
+    # The `plans/...` paths a plan cites name its own project's plans, so they are
+    # read there, never in the tree the command happens to run from.
+    import plan_graph
+    plan_root = plan_graph.root_for_plan_dir(plan_dir)
+    handoff = _handoff_report(plan_dir, plan_root)
     result["handoff_anchors"] = handoff["counts"]
     if handoff["warnings"]:
         result.setdefault("warnings", []).extend(handoff["warnings"])
-    if redteam_disposition.disposition_rows(Path(plan_dir) / "plan.md") is not None:
+    parsed = redteam_disposition.sections(Path(plan_dir) / "plan.md")
+    if any(parsed):
         try:
-            cites = redteam_disposition.check_cites(plan_dir, root)
+            cites = redteam_disposition.check_cites(plan_dir, plan_root, parsed)
         except Exception as e:  # noqa: BLE001 — an advisory never breaks `next`
             cites = {"counts": {"error": "%s: %s" % (type(e).__name__, e)}, "warnings": [
                 "disposition cites could not be checked: %s: %s" % (type(e).__name__, e)]}

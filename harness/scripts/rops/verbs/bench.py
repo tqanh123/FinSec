@@ -80,6 +80,10 @@ def _rev(cfg, host) -> str:
         return ""
 
 
+#: `contract.parse`: the command is taken only after `--`.
+after_dashdash = "command"
+
+
 def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--label", required=True)
     p.add_argument("--repeat", type=int, default=None)
@@ -144,7 +148,9 @@ def run(args: argparse.Namespace) -> int:
         # /usr/bin/time writes to the shell's own stderr and `timing` stays empty —
         # measured. The wall figure still reaches the wrapper's log, so the run reports
         # `wall=TIMEOUT` while its number sits one file away: misfiled, not lost.
-        res = run_remote(cfg, host, timed_line(command, base),
+        # The whole cpu pool, whatever the command's own width: a suite let in beside
+        # the measured run lands in its wall time.
+        res = run_remote(cfg.override("ROPS_CORES", "all", "bench"), host, timed_line(command, base),
                          timeout_s=args.timeout, tail=6, label=f"bench-{args.label}-{i}")
         w = host.out(f"grep -o 'WALL=[0-9.]*' {base}.time | cut -d= -f2")
         print(f"--- run {i}: rc={res.rc} wall={w or 'TIMEOUT'}  log={res.log}")

@@ -90,4 +90,4 @@ class StaleRenameCheck:
         return RuleResult(self.rule_id, "error", tuple(v), (), {"stale": len(v)})
 
 
-register_kind("stale_rename")(StaleRenameCheck)
+register_kind("stale_rename", languages="*")(StaleRenameCheck)

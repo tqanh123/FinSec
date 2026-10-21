@@ -340,4 +340,4 @@ class PkgDoorCheck:
         return RuleResult(self.rule_id, "error", tuple(v), tuple(notes))
 
 
-register_kind("pkg_door")(PkgDoorCheck)
+register_kind("pkg_door", languages=("python",))(PkgDoorCheck)

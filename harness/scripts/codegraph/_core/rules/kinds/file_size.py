@@ -328,4 +328,4 @@ class FileSizeCheck:
                                    "files_excluded": dropped})
 
 
-register_kind("file_size")(require_params("roots")(FileSizeCheck))
+register_kind("file_size", languages=("python",))(require_params("roots")(FileSizeCheck))

@@ -134,7 +134,7 @@ def _tmux_too_old(version_line: str) -> bool:
     """`tmux 1.8` / `tmux 2.0` -> True; `tmux 3.4`, `tmux next-3.6`, `tmux master` -> False:
     a version it cannot read is not called old."""
     m = re.search(r"(\d+)\.(\d+)", version_line)
-    return bool(m) and (int(m[1]), int(m[2])) < TMUX_MIN
+    return m is not None and (int(m[1]), int(m[2])) < TMUX_MIN
 
 
 def _stale_aliases(cfg) -> "list[tuple[str, str]]":

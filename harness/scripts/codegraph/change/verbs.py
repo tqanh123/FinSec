@@ -68,11 +68,9 @@ import argparse
 import contextlib
 import json
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
-import threading
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -145,28 +143,6 @@ def _diff_name_only(repo: Path, base_ref: str) -> "list[str]":
 
 
 @contextlib.contextmanager
-def _raise_on_termination() -> "Iterator[None]":
-    """SIGTERM/SIGHUP end the process without running a single `finally` — the
-    default action is an immediate exit. For as long as a throwaway worktree
-    exists, turn them into `SystemExit` so its cleanup runs, then put the
-    previous handlers back. Only the main thread can own a signal handler; a
-    call from any other thread gets no such cover and says nothing."""
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-
-    def _exit(signum, _frame):
-        raise SystemExit(128 + signum)
-
-    saved = {s: signal.signal(s, _exit) for s in (signal.SIGTERM, signal.SIGHUP)}
-    try:
-        yield
-    finally:
-        for s, h in saved.items():
-            signal.signal(s, h)
-
-
-@contextlib.contextmanager
 def _ref_worktree(repo: Path, ref: str) -> "Iterator[Path]":
     """`ref`'s tree as a throwaway `git worktree` for the body of the `with`
     (see this module's own WHAT IT CANNOT SEE for why not a bare `git
@@ -176,7 +152,7 @@ def _ref_worktree(repo: Path, ref: str) -> "Iterator[Path]":
     left both the registration and the directory under /tmp."""
     parent = Path(tempfile.mkdtemp(prefix="hs-code-change-impact-old-wt-"))
     wt = parent / "tree"
-    with _raise_on_termination():
+    with process_group.raise_on_termination():
         try:
             # Its own process group: `worktree add` runs the checkout in a child
             # git, and killing only the parent left that child writing files
@@ -252,7 +228,7 @@ def _base_mode(argv: "list[str]", base_ref: str, root: Path, *,
     except DescriptorError as e:
         raise _ImpactUsageError(str(e)) from e
 
-    with _raise_on_termination():     # the new tree's scratch is ours to remove too
+    with process_group.raise_on_termination():     # the new tree's scratch is ours to remove too
         return _measure_both(argv, base_ref, root, descriptor, changed_file=changed_file,
                              symbol=symbol, run=run)
 
@@ -330,7 +306,7 @@ def _data_key_mode(argv: "list[str]", key_arg: str, root: Path, *, base_ref: "st
         descriptor = load(root / "codemap.yaml", root).descriptor
     except (ValueError, DescriptorError) as e:
         raise _ImpactUsageError(f"impact: {e}") from e
-    with _raise_on_termination():
+    with process_group.raise_on_termination():
         _snap, idx, scratch = fresh_scratch(root, descriptor, "impact")
         try:
             found = data_key.find(root, idx, key)
@@ -512,6 +488,8 @@ def _test_select(args: argparse.Namespace) -> int:
              "%d in the blind spot" % (len(changed), len(sel.selected), len(sel.blind_spot)))
         for t in sel.selected:
             print("  " + t)
+        for t in sel.stories:
+            print("  story (not run): " + t)
         if sel.blind_spot:
             print("  (skip cost for %d blind-spot test(s): unknown, not 0 — run the full "
                  "suite before merge)" % len(sel.blind_spot))

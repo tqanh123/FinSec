@@ -96,7 +96,7 @@ def preflight(root: Path) -> dict:
             artifacts=[stack],
         ).as_dict())
     primary = stacks[0]
-    test_cmd = primary.get("test_cmd")
+    test_cmd = detect_techstack.full_test_command(primary, root)
     if not test_cmd:
         return hs_run_next_command.finalize(hs_run.StepResult(
             state="stack_no_test_cmd", exit_code=EXIT_NEEDS_MODEL,

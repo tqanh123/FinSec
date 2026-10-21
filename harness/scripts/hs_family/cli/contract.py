@@ -4,6 +4,7 @@ exit code or an `Outcome`. `ns.ctx` is the `Context` the CLI resolved for this c
 from __future__ import annotations
 
 import argparse
+import shlex
 from pathlib import Path
 from typing import Any, Callable, Mapping, Union
 
@@ -81,7 +82,11 @@ class CommandParser(argparse.ArgumentParser):
 
 def parse(cmd: Any, parser: argparse.ArgumentParser, args: list) -> argparse.Namespace:
     """`args` against the parser `cmd.add_args` filled — or whole, for a passthrough
-    command. A leading `--` of any list value (argparse's REMAINDER keeps it) is dropped."""
+    command. A leading `--` of any list value (argparse's REMAINDER keeps it) is dropped.
+
+    A command naming one of those values in `after_dashdash` takes it only after `--`:
+    a stray word after a flag (`--lock x ly do`, meant as a reason) was otherwise the
+    command, and ran. Only here is the `--` still visible to tell the two apart."""
     if getattr(cmd, "passthrough", False):
         return argparse.Namespace(args=list(args))
     if getattr(cmd, "lenient", False):
@@ -89,6 +94,12 @@ def parse(cmd: Any, parser: argparse.ArgumentParser, args: list) -> argparse.Nam
         ns.unknown, ns.argv = unknown, list(args)
     else:
         ns = parser.parse_args(list(args))
+    tail = getattr(cmd, "after_dashdash", None)
+    stray = getattr(ns, tail, None) if tail else None
+    if stray and stray[:1] != ["--"]:
+        raise UsageError("%s: the command goes after `--` (%s [flags] -- <command>); %s came "
+                         "before it and was not run — a flag's value is one word, quote it"
+                         % (parser.prog, parser.prog, shlex.join(stray)))
     for name, val in vars(ns).items():
         if isinstance(val, list) and val[:1] == ["--"]:
             setattr(ns, name, val[1:])

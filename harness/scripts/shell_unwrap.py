@@ -119,9 +119,35 @@ def _quote_contexts(s):
     """
     out = []
     quote = ""
+    pending = []                              # heredoc delimiters opened on this line
     i, n = 0, len(s)
     while i < n:
         ch = s[i]
+        if not quote and ch == "<":
+            m = _HEREDOC_RE.match(s, i)
+            if m and (i == 0 or s[i - 1] != "<"):
+                pending.append(m.group(2))
+        if not quote and ch == "\n" and pending:
+            # A heredoc body is data, read line by line up to its closer -- never
+            # scanned for quotes, or an apostrophe in one body unbalances the rest
+            out.append("")
+            i += 1
+            for delim in pending:
+                closer = re.compile(r"[ \t]*%s[ \t]*" % re.escape(delim))
+                while i < n:
+                    end = s.find("\n", i)
+                    end = n if end < 0 else end
+                    if closer.fullmatch(s, i, end):
+                        out.extend([""] * (end - i))
+                        i = end
+                        if i < n:
+                            out.append("")
+                            i += 1
+                        break
+                    out.extend([_HEREDOC_CTX] * (min(end + 1, n) - i))
+                    i = end + 1
+            pending = []
+            continue
         if ch == "\\" and quote != "'":
             out.append(quote)                 # the backslash
             if i + 1 < n:
@@ -154,20 +180,29 @@ def _heredoc_spans(command, contexts):
     changes which text a caller believes is data.
     """
     spans = []
+    line_nl, body_from = -1, 0
     for m in _HEREDOC_RE.finditer(command):
         if contexts[m.start()]:
             continue                      # the `<<` is itself quoted or in a body
         newline = command.find("\n", m.end())
         if newline < 0:
             continue                      # no body follows on this command
+        # Two heredocs opened on one line (`cat <<A <<B`): B's body follows A's closer.
+        same_line = newline == line_nl and spans
+        start = body_from if same_line else newline + 1
         closer = re.compile(r"^[ \t]*%s[ \t]*$" % re.escape(m.group(2)), re.M)
-        found = closer.search(command, newline + 1)
+        found = closer.search(command, start)
         # An unterminated body runs to the end of the string, which is what the
         # shell does too (it reads until EOF and errors).
         body_end = found.start() if found else len(command)
-        for k in range(newline + 1, body_end):
+        end = found.end() if found else len(command)
+        for k in range(start, body_end):
             contexts[k] = _HEREDOC_CTX
-        spans.append((m.start(), found.end() if found else len(command)))
+        if same_line:
+            spans[-1] = (spans[-1][0], end)
+        else:
+            spans.append((m.start(), end))
+        line_nl, body_from = newline, min(end + 1, len(command))
     return spans
 
 

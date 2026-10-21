@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -85,9 +85,15 @@ class ModuleSymbols:
     nbytes: int
     file_sha: str
     text: str = field(repr=False, default="")
-    imports: tuple[ImportRecord, ...] = ()
+    #: the reader's import payload: `ImportRecord`s from the Python reader and a
+    #: project's command reader; a language pack's own records (`lang.typescript.
+    #: facts.TsImport`) from its reader -- read only by that pack's resolver
+    imports: "tuple[Any, ...]" = ()
     symbols: tuple[SymbolInfo, ...] = ()
     dup_module_assign: tuple[str, ...] = ()
+    #: where the file did not parse cleanly: `{kind, line, col}` per region (a
+    #: region may hide symbols). The Python reader raises `SyntaxError` instead.
+    problems: "tuple[dict[str, Any], ...]" = ()
 
 
 @runtime_checkable

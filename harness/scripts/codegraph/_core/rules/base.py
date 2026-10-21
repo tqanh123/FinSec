@@ -29,7 +29,7 @@ SEVERITY IS VALIDATED HERE, NOT JUST INTERPRETED
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
@@ -104,12 +104,22 @@ class RuleCheck(Protocol):
 
 #: kind name -> factory(rule_id, params) -> RuleCheck
 _KINDS: dict[str, Callable[[str, dict[str, Any]], RuleCheck]] = {}
+#: kind name -> the language ids its check reads (`ALL_LANGUAGES`: whatever the snapshot holds)
+_KIND_LANGUAGES: dict[str, frozenset[str]] = {}
+ALL_LANGUAGES: frozenset[str] = frozenset({"*"})
 
 
-def register_kind(name: str) -> Callable:
+def register_kind(name: str, languages: "str | tuple[str, ...] | None" = None) -> Callable:
+    """`languages`: the ids the kind's check reads, or `"*"` for a check over the
+    snapshot's language-neutral facts (edges, per-module metrics). Required -- a kind
+    that reads Python syntax over a tree holding TypeScript would pass in silence."""
     def deco(factory: Callable[[str, dict[str, Any]], RuleCheck]) -> Callable:
         if name in _KINDS:
             raise RulesError(f"rule kind {name!r} registered twice")
+        if not languages:
+            raise RulesError(f"kind {name!r} declares no languages: register_kind({name!r}, "
+                             f"languages=('python',)) or languages='*'")
+        _KIND_LANGUAGES[name] = ALL_LANGUAGES if languages == "*" else frozenset(languages)
         _KINDS[name] = factory
         return factory
     return deco
@@ -117,6 +127,51 @@ def register_kind(name: str) -> Callable:
 
 def kind_names() -> list[str]:
     return sorted(_KINDS)
+
+
+def kind_languages(name: str) -> frozenset[str]:
+    return _KIND_LANGUAGES[name]
+
+
+def _records(idx: "dict | None") -> "list[dict]":
+    if not idx:
+        return []
+    return [m for ms in (idx.get("units") or {}).values() for m in ms] + list(idx.get("test_modules") or [])
+
+
+def _language_unsupported(rule_id: str, kind: str, langs: frozenset[str],
+                          idx: "dict | None") -> "Violation | None":
+    """One violation naming the modules of a language `kind` cannot read, or None."""
+    out = [m for m in _records(idx) if (m.get("lang") or "python") not in langs]
+    if not out:
+        return None
+    counts: dict[str, int] = {}
+    for m in out:
+        lang = m.get("lang") or "python"
+        counts[lang] = counts.get(lang, 0) + 1
+    paths = sorted(str(m.get("path") or m["module"]) for m in out)
+    reads = ", ".join(sorted(langs))
+    return Violation(rule_id, "language_unsupported",
+                     "kind %s reads %s; the snapshot holds %s (%s%s) -- declare `languages: [%s]` "
+                     "on the rule to check those alone"
+                     % (kind, reads, ", ".join("%d %s" % (n, k) for k, n in sorted(counts.items())),
+                        ", ".join(paths[:5]), ", ..." if len(paths) > 5 else "", reads),
+                     {"languages": counts, "paths": paths})
+
+
+def _narrowed(ctx: RuleContext, langs: "frozenset[str]") -> RuleContext:
+    """`ctx` holding only the records of `langs`: a rule declaring `languages:` checks
+    those modules alone, its graph rebuilt over them."""
+    if not ctx.idx:
+        return ctx
+
+    def keep(ms: "list[dict]") -> "list[dict]":
+        return [m for m in ms if (m.get("lang") or "python") in langs]
+    units = {u: kept for u, ms in (ctx.idx.get("units") or {}).items() if (kept := keep(ms))}
+    idx = {**ctx.idx, "units": units, "test_modules": keep(list(ctx.idx.get("test_modules") or []))}
+    graph = None if ctx.graph is None else Graph.from_snapshot(
+        idx, ctx.graph.ladder, getattr(ctx.descriptor, "groups", None))
+    return replace(ctx, idx=idx, graph=graph)
 
 
 def _require(params: dict[str, Any], rule_id: str, *keys: str) -> None:
@@ -143,6 +198,8 @@ class RulesEngine:
 
     def __init__(self, rules: list[dict[str, Any]] | None = None) -> None:
         self._rules: list[tuple[str, RuleCheck, str]] = []
+        #: rule id -> (kind, the languages it reads, the languages the rule narrowed to or None)
+        self._langs: dict[str, tuple[str, frozenset[str], "frozenset[str] | None"]] = {}
         seen: set[str] = set()
         for raw in rules or []:
             if not isinstance(raw, dict):
@@ -163,16 +220,34 @@ class RulesEngine:
                 raise RulesError(
                     f"rule {rid!r}: severity {severity!r} is not valid — the whole "
                     f"vocabulary is {', '.join(sorted(SEVERITIES))}")
-            params = {k: v for k, v in raw.items() if k not in ("id", "kind")}
+            reads = kind_languages(kind)
+            declared = raw.get("languages")
+            if declared is not None:
+                if not isinstance(declared, list) or not declared or \
+                        not all(isinstance(x, str) for x in declared):
+                    raise RulesError(f"rule {rid!r}: `languages` is a list of language ids, "
+                                     f"got {declared!r}")
+                if reads != ALL_LANGUAGES and not set(declared) <= reads:
+                    raise RulesError(
+                        f"rule {rid!r}: `languages` names {', '.join(sorted(set(declared) - reads))}; "
+                        f"kind {kind} reads {', '.join(sorted(reads))}")
+            self._langs[rid] = (kind, reads, None if declared is None else frozenset(declared))
+            params = {k: v for k, v in raw.items() if k not in ("id", "kind", "languages")}
             check = factory(rid, params)
             self._rules.append((rid, check, severity))
 
     def run(self, ctx: RuleContext) -> list[RuleResult]:
         out: list[RuleResult] = []
+        views: "dict[frozenset[str], RuleContext]" = {}
         for rid, check, sev in self._rules:
-            raw = check.check(ctx)          # run ONCE: checks may be expensive
+            kind, reads, narrowed = self._langs[rid]
+            if narrowed is not None and narrowed not in views:
+                views[narrowed] = _narrowed(ctx, narrowed)
+            raw = check.check(ctx if narrowed is None else views[narrowed])   # run ONCE: checks may be expensive
+            extra = None if reads == ALL_LANGUAGES or narrowed is not None else \
+                _language_unsupported(rid, kind, reads, ctx.idx)
             out.append(RuleResult(rule_id=rid, severity=sev,
-                                  violations=tuple(raw.violations),
+                                  violations=tuple(raw.violations) + ((extra,) if extra else ()),
                                   notes=tuple(raw.notes),
                                   metrics=dict(getattr(raw, "metrics", None) or ())))
         return out

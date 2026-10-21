@@ -55,6 +55,23 @@ def truncate_to_width(text: str, max_width: float, font_size: float = 12.0,
     return out.rstrip() + ellipsis
 
 
+def wrap_to_width(text: str, max_width: float, font_size: float = 12.0, weight: int = 400,
+                  max_lines: int = 3) -> list:
+    """Break `text` at spaces into lines no wider than `max_width`; the last kept line
+    ends in an ellipsis when the text runs past `max_lines`. A word wider than the
+    line on its own is truncated rather than allowed to overflow the box."""
+    lines: list = []
+    for word in (text or "").split():
+        if lines and text_width(lines[-1] + " " + word, font_size, weight) <= max_width:
+            lines[-1] += " " + word
+        else:
+            lines.append(truncate_to_width(word, max_width, font_size, weight))
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = truncate_to_width(lines[-1] + "…", max_width, font_size, weight)
+    return lines
+
+
 def fmt(value: float) -> str:
     """Round to one decimal so serialized coordinates stay compact and stable."""
     rounded = round(value * 10) / 10

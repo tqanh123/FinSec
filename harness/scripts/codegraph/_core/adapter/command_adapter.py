@@ -19,10 +19,17 @@ THE CONTRACT
     same way for every reader. Anything else on stdout, a non-zero exit, or a
     timeout is broken, named by the reader's id and the file.
 
+    A row that also names a `resolver:` is a language of its own
+    (`lang.resolver_command`): its request carries `"protocol": "hs-code-read/1"`, and
+    each of its `imports` is a JSON object of the reader's own shape, handed to the
+    project's resolver as written -- the kernel reads none of it.
+
 TRUST
     The command is the project's code. It runs only when the repo is trusted
-    (`trust_store.is_trusted`, the same store `hs-cli trust` writes); otherwise
-    `AdapterRefused` -- a deliberate stop the snapshot reports as exit 3.
+    (`trust_store.is_trusted`, the same store `hs-cli trust` writes) AND every command
+    `codemap.yaml` declares, with the bytes of the scripts it names inside the repo, is
+    what it was when trusted (`trust_store.commands_trusted`); otherwise `AdapterRefused`
+    -- a deliberate stop the snapshot reports as exit 3, naming both fingerprints.
 
 WHAT IT CANNOT SEE
     * Whatever the project's reader leaves out: the kernel checks the answer's
@@ -43,6 +50,36 @@ from .book import AdapterError, AdapterRefused, AdapterRow
 
 #: seconds one file may take
 TIMEOUT = 60
+#: the request's `protocol` for a reader whose imports a project resolver reads
+READ_PROTOCOL = "hs-code-read/1"
+
+
+def require_commands_trusted(repo: Path, what: str, argv: "tuple[str, ...] | list[str]") -> None:
+    """Raise `AdapterRefused` unless `repo` is trusted and its declared commands are the
+    ones it was trusted with (`trust_store.commands_trusted`). Fail closed: a store that
+    cannot answer is no trust."""
+    import trust_store
+    try:
+        trusted = trust_store.is_trusted(repo)
+        ok, recorded, current = trust_store.commands_trusted(repo) if trusted else (False, None, None)
+    except Exception:  # noqa: BLE001 -- an unanswerable store is no trust
+        trusted, ok, recorded, current = False, False, None, None
+    if not trusted:
+        raise AdapterRefused(
+            "%s is %s's own command (%s); it runs only in a trusted repo -- run `hs-cli trust %s` "
+            "if you mean it" % (what, repo, " ".join(argv), repo))
+    if not ok:
+        was = "trusted before command fingerprints were recorded" if recorded is None else \
+            "changed since it was trusted (%s -> %s)" % (recorded[:8], (current or "")[:8])
+        raise AdapterRefused(
+            "%s: %s's commands %s; review codemap.yaml's commands and the scripts they run, "
+            "then run `hs-cli trust %s`" % (what, repo, was, repo))
+    own = trust_store.program_in_repo(repo, argv)
+    if own is not None:
+        raise AdapterRefused(
+            "%s: `%s` is found on PATH as %s, a file of %s that trust does not fingerprint; "
+            "name it by its path in codemap.yaml (%s) and run `hs-cli trust %s`"
+            % (what, argv[0], own, repo, own, repo))
 
 
 class CommandAdapter:
@@ -54,16 +91,8 @@ class CommandAdapter:
 
     def require_trust(self) -> None:
         if self._trusted is None:
-            import trust_store
-            try:
-                self._trusted = trust_store.is_trusted(self.repo)
-            except Exception:  # noqa: BLE001 -- fail closed: an unanswerable store is no trust
-                self._trusted = False
-        if not self._trusted:
-            raise AdapterRefused(
-                "reader %r is %s's own command (%s); it runs only in a trusted repo -- "
-                "run `hs-cli trust %s` if you mean it"
-                % (self.row.id, self.repo, " ".join(self.row.command), self.repo))
+            require_commands_trusted(self.repo, "reader %r" % self.row.id, self.row.command)
+            self._trusted = True
 
     def parse(self, path: Path, text: str, container: "tuple[str, ...]",
               module: str) -> ModuleSymbols:
@@ -73,8 +102,9 @@ class CommandAdapter:
         except ValueError:
             rel = str(path)
         at = "reader %r on %s" % (self.row.id, rel)
-        req = json.dumps({"path": rel, "module": module, "container": list(container),
-                          "text": text})
+        own = bool(self.row.resolver)
+        body = {"path": rel, "module": module, "container": list(container), "text": text}
+        req = json.dumps({"protocol": READ_PROTOCOL, **body} if own else body)
         import process_group
         try:
             r = process_group.run(list(self.row.command), timeout=TIMEOUT, input=req,
@@ -87,7 +117,7 @@ class CommandAdapter:
             raise AdapterError("%s: exit %d: %s" % (at, r.returncode, (r.stderr or "").strip()[-300:]))
         try:
             doc = json.loads(r.stdout)
-            imports = tuple(_import(i) for i in doc.get("imports") or ())
+            imports = tuple((_payload(i) if own else _import(i)) for i in doc.get("imports") or ())
             symbols = tuple(_symbol(s) for s in doc.get("symbols") or ())
         except (ValueError, TypeError, KeyError, AttributeError) as e:
             raise AdapterError("%s: answer is not the reader contract (%s): %r"
@@ -102,6 +132,12 @@ def _strs(v: Any) -> "tuple[str, ...]":
     if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
         raise TypeError("expected a list of strings, got %r" % (v,))
     return tuple(v)
+
+
+def _payload(d: Any) -> "dict[str, Any]":
+    if not isinstance(d, dict):
+        raise TypeError("import %r is not a JSON object" % (d,))
+    return d
 
 
 def _import(d: Any) -> ImportRecord:

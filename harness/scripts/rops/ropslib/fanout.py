@@ -11,7 +11,7 @@ import concurrent.futures
 import sys
 
 from rops.ropslib import hosts as hosts_mod
-from rops.ropslib.exec import Result, run_remote
+from rops.ropslib.exec import Result, reaps_on_stop, run_remote
 
 
 def execute(args, command: str, *, label: str = "run") -> int:
@@ -26,7 +26,8 @@ def execute(args, command: str, *, label: str = "run") -> int:
         return 2
 
     results: dict[str, Result] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as pool:
+    # each host runs on a worker, where no signal lands: the stop handler is held here
+    with reaps_on_stop(), concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as pool:
         futures = {
             pool.submit(run_remote, cfg, h, command,
                         timeout_s=args.timeout,

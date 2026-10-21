@@ -20,9 +20,12 @@
           "role": {
             "type": "string",
             "enum": ["frontend", "backend", "database", "cache", "queue",
-                     "storage", "gateway", "auth", "external", "worker"]
+                     "storage", "gateway", "auth", "external", "worker",
+                     "person", "system"]
           },
-          "layer": { "type": "integer", "minimum": 0, "maximum": 10 }
+          "layer": { "type": "integer", "minimum": 0, "maximum": 10 },
+          "technology": { "$ref": "#/$defs/safe_text" },
+          "description": { "$ref": "#/$defs/safe_text" }
         }
       }
     },

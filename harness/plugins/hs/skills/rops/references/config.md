@@ -25,8 +25,8 @@ truncated — keep values quote-free and comment-free.
 
 | Key | Default | Notes |
 |---|---|---|
-| `ROPS_REMOTE_DIR` | `~/rops/<repo-name>` | Detected. A directory the tool owns, not a mirror of a real checkout — so `--delete` cannot eat someone's working tree. |
-| `ROPS_RSYNC_EXCLUDES` | detected | Comma-separated; the floor (`.git/`, `.venv/`, `__pycache__/`, `node_modules/`, caches) is always present, plus whatever `.gitignore` lists. Negations (`!x`) are dropped — rsync has no equivalent and passing one through would exclude a literal `!` filename. |
+| `ROPS_REMOTE_DIR` | `~/rops/<repo-name>` | Detected. A directory the tool owns, not a mirror of a real checkout — so `--delete` cannot eat someone's working tree. A linked worktree: `~/rops/<main>--<dir>`. |
+| `ROPS_RSYNC_EXCLUDES` | detected | Comma-separated; the floor (`.git/`, `.venv/`, `__pycache__/`, `node_modules/`, caches) is always present, plus whatever `.gitignore` lists. Negations (`!x`) are dropped: rsync would read a literal `!` filename. |
 | `ROPS_LANE_KEEP` | empty | Comma-separated directories a `lane` REBUILD carries over from the old tree, on top of the floor. See **Keeping a directory across a rebuild** below. |
 | `ROPS_LOG_DIR` | `/tmp/rops`, or `/tmp/rops/<lane>` when a lane is in effect | Where full logs stay, ON THE REMOTE. Behavior 4. A value declared in a layer weaker than the one naming the lane (a `.rops.env` value under an exported `ROPS_LANE`) yields to the per-lane dir, so two lanes never share one. |
 | `ROPS_TAIL` | `60` | Lines returned. The rest stays remote; rops prints the path and line count so you can `fetch` it. |
@@ -38,6 +38,10 @@ The floor a `lane` rebuild always carries is `.venv` + `logs`, plus whatever the
 that way and needs no entry. Every kept name is also protected from the lane's
 `--delete`, so the two can never disagree.
 
+The shared excludes are perishable on a push: a dir removed locally leaves the lane whole,
+caches included. A kept name guards the lane root (`/logs/`), not `app/logs/`. `sync --back` keeps
+plain excludes.
+
 Declare a name in `ROPS_LANE_KEEP` only when it lives ONLY on the lane and detection
 cannot see it — a model cache, a fixture corpus. A venv named in no list is destroyed twice over, by `rm -rf` on a rebuild and by `--delete` on every
 run after.
@@ -46,11 +50,14 @@ run after.
 
 | Key | Default | Notes |
 |---|---|---|
-| `ROPS_PATH_PREPEND` | — | Prepended to `PATH`. A non-interactive ssh shell often lacks `~/.local/bin`, so `uv` is simply missing — and rc=127 "command not found" reads as "uv is not installed over there", not as "PATH is wrong". `doctor` checks every alias's binary for exactly this reason. |
+| `ROPS_PATH_PREPEND` | — | Prepended to `PATH`. A non-interactive ssh shell often lacks `~/.local/bin`: rc=127 then reads as "uv is not installed", not "PATH is wrong". `doctor` checks every alias's binary. |
 | `ROPS_ENV` | — | Comma-separated `K=V` exported before every command. Database URLs belong here. |
 | `ROPS_LOCK_ENV` | — | Comma-separated `ROPS_ENV` names that are exclusive (a DB URL): two runs exporting the same value take turns. Every run also locks its remote dir, so two runs on one lane always take turns; a `--at` worktree has its own dir but the lane's env, which only this key covers. The waiting run prints who holds the lock (names, never values). |
-| `ROPS_LOCK` | — | Comma-separated lock names a run queues on machine-wide for its whole life, behind any run holding the same name — for what no lane dir or `ROPS_LOCK_ENV` names (two full suites that must not share the CPU). `run --lock NAME` (repeatable, also on every `ROPS_CMD_*` alias) adds to it for one call. At most 5 names per run. |
-| `ROPS_LOCK_WAIT` | `1800` | Seconds a run waits for a lock, then gives up with rc 75. A lane rebuild waits the same way before it rewrites the tree. |
+| `ROPS_LOCK` | — | Comma-separated lock names a run queues on machine-wide for its whole life, behind any run holding the same name — for what no lane dir or `ROPS_LOCK_ENV` names (a shared fixture server). `run --lock NAME` (repeatable, also on every `ROPS_CMD_*` alias) adds to it for one call. |
+| `ROPS_LOCK_WAIT` | `1800` | Seconds a run waits for a seat in any pool, then gives up with rc 75 and nothing run. A lane rebuild waits the same way before it rewrites the tree. |
+| `ROPS_CORES` | its pytest `-n` (`all` if none) | A plain `run`'s `cpu` seats (N or `all`), under `--cores`; an alias asks its own width (`references/pools.md`). |
+| `ROPS_CPU_CAP` | 70% of `nproc` | Seats in the `cpu` pool (a container's quota). |
+| `ROPS_CPU_BRAKE` | `on` | `off`: free seats ignore the 1-minute load. |
 | `ROPS_LANE_SETUP` | — | A command every `lane` build or rebuild runs in the lane after its sync (so also a `run --lane` that rebuilds): the repo's own idempotent setup, such as creating the database its `ROPS_ENV` names. Runs with `ROPS_ENV` exported; prints `setup: rc=0`, and a failure fails the build naming this key. rops knows nothing of what it sets up. |
 | `ROPS_LANE_SYNC_CMD` | `uv sync --frozen --group dev --all-extras` | The sync a `lane` runs after rsync; set = always runs as typed. The default is skipped — with the reason printed — where the repo has no `uv.lock` (`--frozen` would refuse there and the lane died after every earlier step was right) or neither `pyproject.toml` nor `uv.lock` at all; set this key to force a sync anyway. |
 | `ROPS_TMUX_SESSION` | `live` | Only used with `--tmux`. Created on demand with `window-size latest`, so the pane sizes to whichever client is attached rather than the smallest one. |
@@ -65,6 +72,11 @@ ROPS_CMD_TEST=uv run python -m pytest -q      ->  hs-rops test -- -n 8
 ROPS_CMD_LINT=uv run ruff check .             ->  hs-rops lint
 ROPS_CMD_BUILD=docker build -t app .          ->  hs-rops build
 ```
+
+An alias reads its own options (`--timeout`, `--lock`, `--sync`, ...) off the front; from the
+first token they do not take, the rest is appended to the command as it stands —
+`hs-rops test --lock x -n 8` sends `-n 8`. A `--` ends the alias's own options early, so an
+option the alias also has (`--timeout`) can reach the command.
 
 Detection proposes these from the repo's own files: `pyproject.toml` (+`uv.lock`/`[tool.uv]`),
 `package.json` scripts (with pnpm/yarn/npm chosen by lockfile), `Makefile` targets, `go.mod`,
@@ -84,7 +96,7 @@ can never disagree about what "complete" means):
 
 `hs-run suite next` and `doctor` both refuse, before either hands out a chain or checks a PATH,
 when `ROPS_CMD_<NAME>` is not declared, or when `<name>` lowercased collides with a built-in verb
-(`sync`, `lane`, `run`, `fetch`, `ci`, `gitlab`, `bench`, `kill`, `doctor`). A collision does not
+(`sync`, `lane`, `run`, `fetch`, `ci`, `gitlab`, `bench`, `kill`, `lock`, `doctor`). A collision does not
 lose quietly to the alias: it crashes every `hs-rops` invocation for the whole process.
 
 ```
@@ -166,3 +178,25 @@ WHOLE file before it picks a service, so a variable another service marks requir
 set even when you only touch postgres. Leaving it out fails with an interpolation error naming a
 service you never asked to start — and if the verb pipes that through `tail`, the error reaches
 you as rc=0 and a reset that silently did nothing.
+
+## Lane ownership
+
+A lane records the checkout that built it in `~/rops/.lane-src/<name>` as `<host>:<path>` plus the
+checkout's own id (kept in its git dir, one per worktree). The id decides, so a hostname change does
+not lock a tree out of its own lane; a record without an id matches by `<host>:<path>`.
+
+- A rebuild from another checkout refuses with rc 3 and names both trees; `--rebind` hands the lane over.
+- A lane built before owners were recorded has none: its first rebuild refuses once (rc 3) and names
+  this tree's HEAD and the local worktrees whose history holds the lane's HEAD. Rebuild it with
+  `--rebind` from THAT tree, not from wherever the shell stands after a cwd reset.
+- An owner that cannot be read (ssh timeout) refuses rather than counting as absent.
+- A name is one shell-safe segment (letters of any script, digits, `.`, `_`, `+`, `@`, `-`; not
+  starting with `.` or `-`). The bare repo's name and an existing non-lane dir under `~/rops/` are
+  refused with rc 2 before anything is pushed: a build moves such a dir aside and deletes it.
+- The rebuild a `--lane`/`--sync` call runs first does not take the call's `--lock`/`ROPS_LOCK`
+  names or its `cpu` seats: it holds the lane's own locks, waiting up to `ROPS_LOCK_WAIT`. When it fails, the
+  command is NOT run, and the envelope's `warnings` say so (with the `--rebind` retry when that
+  is the way out).
+- A `--at` worktree's sync is the same: lane locks only, the same wait. When the command times
+  out, the process group it recorded is killed before its worktree is removed, so a run still
+  waiting on a lock is stopped too; one that cannot be stopped is named (`hs-rops kill <pgid>`).

@@ -3,8 +3,8 @@ shared by every reader that compares a document's declared version against a
 known set.
 
 Measured before this module existed: `codegraph_snapshot_reader.read_index`
-(`got not in KNOWN_SCHEMA_VERSIONS`) and `codegraph/_core/descriptor/store.py`
-(`version != KERNEL_SCHEMA_VERSION`) each did the comparison with a bare `in`/
+(`got not in <its known versions>`) and `codegraph/_core/descriptor/store.py`
+(`version != <its one schema version>`) each did the comparison with a bare `in`/
 `!=`, and Python's numeric-tower equality makes BOTH shapes accept a value
 that is not really the version the reader thinks it read: `2.0 == 2` is
 True, so `2.0 in frozenset({2})` is True, and `2.0 != 2` is False — a

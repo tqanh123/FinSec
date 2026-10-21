@@ -12,7 +12,10 @@ A plan approved with `defer_suite: true` (set via `/hs:plan --defer-suite`, pinn
 the approval hash) runs each phase's 3.V verify against ONLY the test files that phase's
 own `plan-graph.yaml` node declares (`files_to_create`/`files_to_modify`, filtered
 through the repo's test-path pattern) — not the full suite. The full suite runs once,
-before `cook close`, instead of once per phase.
+after the last phase and BEFORE the code review, instead of once per phase: `cook next`
+answers `needs_suite_run` until it is paid, and `cook close` refuses with
+`suite_debt_unpaid`. Run after the review, a fix the suite forces would go unreviewed,
+and the finalize step's docs commit would ask for the review again.
 
 Without the flag: byte-identical to today. `pending` stays `[]`, no `route_flags` key
 rides the envelope, no state here ever fires.

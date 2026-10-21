@@ -36,6 +36,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from codegraph.check import baseline
 from codegraph.check.tree import CheckError, workspace
 from hs_family.cli import Command
 
@@ -120,28 +121,28 @@ def render(found: Dict[str, Counter]) -> str:
     return _HEAD + yaml_io.safe_dump(body, sort_keys=False)
 
 
-def compare(found: Dict[str, Counter], base: Dict[str, Counter]) -> Dict[str, List[dict]]:
-    new: List[dict] = []
-    stale: List[dict] = []
-    for s in sorted(set(found) | set(base)):
-        f, b = found.get(s, Counter()), base.get(s, Counter())
-        for key in sorted(set(f) | set(b)):
+def _keys(scoped: Dict[str, Counter]) -> Counter:
+    """f821's `{scope: {path::name: n}}` as engine keys: the name is the code, no message."""
+    out: Counter = Counter()
+    for s, c in scoped.items():
+        for key, n in c.items():
             path, _, name = key.rpartition("::")
-            row = {"scope": s, "file": path, "name": name, "found": f[key], "baseline": b[key]}
-            if f[key] > b[key]:
-                new.append(row)
-            elif b[key] > f[key]:
-                stale.append(row)
-    return {"new": new, "stale": stale}
+            out[baseline.Key("f821", path, name, "", s)] += n
+    return out
+
+
+def compare(found: Dict[str, Counter], base: Dict[str, Counter]) -> Dict[str, List[dict]]:
+    diff = baseline.compare(_keys(found), _keys(base))
+    return {side: [{"scope": r["key"].scope, "file": r["key"].file, "name": r["key"].code,
+                    "found": r["found"], "baseline": r["baseline"]}
+                   for r in sorted(rows, key=lambda r: (r["key"].scope, "%s::%s" % (r["key"].file, r["key"].code)))]
+            for side, rows in diff.items()}
 
 
 def shrink(found: Dict[str, Counter], base: Dict[str, Counter]) -> Dict[str, Counter]:
     out: Dict[str, Counter] = {}
-    for s, b in base.items():
-        f = found.get(s, Counter())
-        c = Counter({k: min(v, f[k]) for k, v in b.items() if f[k] > 0})
-        if c:
-            out[s] = c
+    for k, n in baseline.shrink(_keys(found), _keys(base)).items():
+        out.setdefault(k.scope, Counter())["%s::%s" % (k.file, k.code)] = n
     return out
 
 

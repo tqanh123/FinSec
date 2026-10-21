@@ -46,9 +46,10 @@ ROOT_KINDS: frozenset[str] = frozenset({"src", "flat", "workspace"})
 #: have to import this whole package to reach one int (measured: `import
 #: codegraph._core.snapshot.store` alone pulls 150 modules into `sys.modules`,
 #: `ruamel.yaml` among them; 2026-09-26, @4d201e849). Re-exported under the SAME name here so every
-#: existing `from .model import KERNEL_SCHEMA_VERSION` call site in this
-#: package keeps working unchanged — one constant, not two.
-KERNEL_SCHEMA_VERSION = codegraph_snapshot_reader.KERNEL_SCHEMA_VERSION
+#: existing `from .model import DESCRIPTOR_SCHEMA_VERSION` call site in this
+#: package keeps working unchanged — one constant, not two. The snapshot's own
+#: version is a separate number (`codegraph_snapshot_reader.SNAPSHOT_SCHEMA_VERSION`).
+DESCRIPTOR_SCHEMA_VERSION = codegraph_snapshot_reader.DESCRIPTOR_SCHEMA_VERSION
 
 
 class DescriptorError(Exception):
@@ -334,6 +335,13 @@ class ProjectDescriptor:
     #: `descriptor.obligations.parse`: what a dist owes the repo's own
     #: registries, read by `hs-code check dist-obligations`. Empty when absent.
     obligations: "tuple[dict[str, Any], ...]" = ()
+    #: `languages:` -- pack id -> the options this project sets for it, in the
+    #: bin's language book order (`lang.registry.enabled`). Absent: Python alone.
+    languages: "dict[str, dict[str, Any]]" = field(default_factory=lambda: {"python": {}})
+    #: `coverage:` -- `{metric, runner, provider, floors: {<group>: {line: N}}}`, read by
+    #: `hs-code test run --all --coverage` (`coverage_floors`): a floor names a `groups:`
+    #: entry. Empty when absent: every group is reported, none is judged.
+    coverage: "dict[str, Any]" = field(default_factory=dict)
     #: Which packs (`packs/<name>/`, living outside `harness/`, never in the
     #: release manifest) THIS project turned on -- one path per pack. Unlike
     #: every other path in this descriptor, these are relative to the

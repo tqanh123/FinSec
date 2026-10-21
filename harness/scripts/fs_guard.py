@@ -32,6 +32,7 @@ via their fail-closed wrapper.
 """
 
 import os
+import subprocess
 from pathlib import Path
 
 def _config_path(name, explicit=None):
@@ -101,11 +102,11 @@ def _zone_base(zone: str, root):
     # Global layout: fs_guard picks the base per zone, authoritative over `root`.
     if zone in _BIN_ZONES:
         return harness_paths.bin_root()
-    dr = harness_paths.data_root()
+    dr, why = harness_paths.data_root_and_reason()
     if harness_paths.data_root_unresolved(dr):
         raise FenceError(
-            "zone %r needs a project root but none resolved (CLAUDE_PROJECT_DIR "
-            "unset under a global bin) — refusing to widen the fence to the bin" % zone)
+            "zone %r needs a project root but none resolved (%s) — refusing to "
+            "widen the fence to the bin" % (zone, why))
     return dr.parent
 
 
@@ -170,6 +171,44 @@ def assert_under_root(path, zone: str, root) -> Path:
                 "bin %s, and a project zone never resolves into the bin"
                 % (zone, base, bin_root))
     return _contain(path, zone, base)
+
+
+def assert_under_plan_tree(path, plan_dir, root=None) -> Path:
+    """`assert_under(path, "plans")` for a write into an EXISTING plan named by path: the
+    zone is anchored at the working tree the plan lives in, as the plan's other writers
+    read it (`plan_graph.root_for_plan_dir`), when that tree is the project or the same
+    project in another worktree of its repo -- a plan in the host checkout named from a
+    linked worktree (or the reverse). A plan anywhere else gets the project zone, and its
+    refusal. `root` is the project hint `assert_under` takes (default: the session's)."""
+    import harness_paths
+    import plan_graph
+    base = _zone_base("plans", root if root is not None else harness_paths.project_root())
+    tree = Path(plan_graph.root_for_plan_dir(plan_dir)).resolve()
+    if tree != base and _same_project(tree, base):
+        return _contain(path, "plans", tree)
+    return _contain(path, "plans", base)
+
+
+def _same_project(a: Path, b: Path) -> bool:
+    """Both dirs sit at the same path inside worktrees of one repo: the same git common
+    dir and the same prefix below the worktree's top (a monorepo's `sub/` matches only
+    another `sub/`). A dir outside git is no worktree of anything."""
+    ids = [_git_identity(d) for d in (a, b)]
+    return ids[0] is not None and ids[0] == ids[1]
+
+
+def _git_identity(d: Path):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        # no --path-format: a git before 2.31 echoes a flag it does not know as a line
+        r = subprocess.run(["git", "-C", str(d), "rev-parse", "--git-common-dir", "--show-prefix"],
+                           capture_output=True, text=True, env=env, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = r.stdout.splitlines()
+    if r.returncode != 0 or not lines or not lines[0]:
+        return None
+    return (str((Path(d) / lines[0]).resolve()), lines[1] if len(lines) > 1 else "")
 
 
 def _contain(path, zone: str, base) -> Path:

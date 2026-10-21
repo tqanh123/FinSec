@@ -84,9 +84,21 @@ def dirty_paths(repo: Path, roots: "Sequence[str] | None" = None) -> "list[str]"
     """Every path with uncommitted state inside `roots` (the whole repo when
     `roots` is `None`/empty) — modified, staged, deleted, or untracked-not-
     ignored — repo-relative, in `git status` order; `[]` off a git checkout.
-    `-z`: git's default `core.quotePath=true` would C-quote a non-ASCII path."""
+    `-z`: git's default `core.quotePath=true` would C-quote a non-ASCII path.
+    Inside a checkout a `git status` that fails (a pathspec outside the work tree,
+    a broken index) raises `GitError`: an unanswered question is no clean tree."""
     argv = ("status", "--porcelain", "-z", "--", *roots) if roots else ("status", "--porcelain", "-z")
-    fields = run_git(repo, *argv, check=False).decode("utf-8", "surrogateescape").split("\0")
+    try:
+        raw = run_git(repo, *argv)
+    except GitError:
+        try:
+            run_git(repo, "rev-parse", "--is-inside-work-tree")
+        except (GitError, OSError):
+            return []
+        raise
+    except OSError:
+        return []
+    fields = raw.decode("utf-8", "surrogateescape").split("\0")
     out: "list[str]" = []
     i = 0
     while i < len(fields):
@@ -108,6 +120,16 @@ def working_tree_dirty(repo: Path, roots: "Sequence[str] | None" = None) -> bool
     snapshot instead of rebuilding) ask through -- so the two can never
     silently define "dirty" two different ways."""
     return bool(dirty_paths(repo, roots))
+
+
+def snapshot_scope(roots: "Sequence[str] | None", idx: "dict | None") -> "list[str]":
+    """The paths whose change changes what a snapshot says: its roots plus the config
+    inputs it recorded (`config_inputs`, a tsconfig outside the roots). No roots is
+    the whole tree, which already holds them."""
+    roots = list(roots or ())
+    if not roots or "." in roots:
+        return roots
+    return roots + [str(x) for x in (idx or {}).get("config_inputs") or () if str(x) not in roots]
 
 
 def check_freshness(repo: Path, snap_commit: str, *, allow_stale: bool,
@@ -163,6 +185,15 @@ def check_freshness(repo: Path, snap_commit: str, *, allow_stale: bool,
     return None, None
 
 
+def _dirty_or_unknown(repo: Path, roots: "Sequence[str] | None") -> "bool | None":
+    """`working_tree_dirty`, or None when git cannot answer: a provenance row says
+    unknown rather than failing the envelope that carries it."""
+    try:
+        return working_tree_dirty(repo, roots)
+    except GitError:
+        return None
+
+
 def measured_row(repo: Path, roots: "Sequence[str] | None" = None) -> dict:
     """A fresh measurement of `repo` as one provenance row: the tree on disk, so no
     snapshot id or commit; `dirty` = uncommitted changes inside `roots`
@@ -170,7 +201,7 @@ def measured_row(repo: Path, roots: "Sequence[str] | None" = None) -> dict:
     a git checkout — unknown, never a guessed False."""
     head = head_of(repo)
     return {"repo": str(Path(repo).resolve()), "head": head,
-            "dirty": None if head is None else working_tree_dirty(repo, roots),
+            "dirty": None if head is None else _dirty_or_unknown(repo, roots),
             "stale": None if head is None else False,
             "mode": "fresh", "snapshot": None, "snapshot_commit": None}
 
@@ -198,7 +229,7 @@ def provenance_rows(events: "Sequence[dict]", repo: Path) -> "list[dict]":
             commit = e["snapshot_commit"]
             row = {"repo": str(Path(repo).resolve()), "head": head,
                    "dirty": None if head is None
-                   else working_tree_dirty(repo, e.get("roots") or None),
+                   else _dirty_or_unknown(repo, e.get("roots") or None),
                    "stale": None if head is None or commit is None
                    else not commits_match(head, commit),
                    "mode": "snapshot", "snapshot": e["snapshot"], "snapshot_commit": commit}

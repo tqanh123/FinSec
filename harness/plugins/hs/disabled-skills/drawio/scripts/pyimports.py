@@ -14,6 +14,7 @@ path); pass --no-reduce to keep every import edge. Only intra-project imports
 are kept — third-party and stdlib imports are ignored.
 
 Usage: python3 pyimports.py <project_dir> [-o graph.json] [--direction TB|LR] [--no-reduce]
+       [--snap REF [--snap-store DIR]]
 """
 import argparse
 import ast
@@ -46,10 +47,37 @@ def _under(path, base):
         return False
 
 
-def snapshot_records(project):
+class PinnedSnapshotRefused(Exception):
+    """A snapshot the caller named (`snap`) that the door would not read, and why."""
+
+
+def add_snapshot_args(ap):
+    # Not `--out`: argparse reads it as a prefix of `--output`, and callers write it so.
+    ap.add_argument("--snap", metavar="REF",
+                    help="read this stored codegraph snapshot (id, prefix or hash, from "
+                         "`hs-code graph snapshot`; refused unless its commit is HEAD) "
+                         "instead of measuring the tree now")
+    ap.add_argument("--snap-store", metavar="DIR",
+                    help="the snapshot store --snap resolves in (default: the project's own)")
+
+
+def door_or_exit(answer, args):
+    """`answer` of a door call made with the CLI's --snap/--snap-store, or exit: a pin
+    the door cannot honour is the caller's to fix, never a silent switch to the scan."""
+    if args.snap_store and not args.snap:
+        sys.exit("error: --snap-store needs --snap REF: without a pin the tree is measured now")
+    try:
+        return answer()
+    except PinnedSnapshotRefused as e:
+        sys.exit("error: --snap %s: %s" % (args.snap, e))
+
+
+def snapshot_records(project, snap=None, out=None):
     """The shared codegraph snapshot's module records for the files under
     `project`, or None when the door cannot answer for it -- which the caller
-    reads as "fall back to the direct scan, unchanged".
+    reads as "fall back to the direct scan, unchanged". `snap` (with its store
+    `out`) reads that stored snapshot instead of measuring the tree now; a pin the
+    door cannot take raises PinnedSnapshotRefused with the reason instead of None.
 
     The door only answers when `project` is EXACTLY one of the nearest
     ancestor project's declared `import_roots`: that is the one case where
@@ -58,50 +86,60 @@ def snapshot_records(project):
     keeps the AST resolver, which has no equivalent "absolute dotted name" to
     compare its own project-relative one against.
 
-    Returns None, never raises, on every one of: no ancestor `codemap.yaml`
-    (the ordinary case for a project the harness is not installed into), the
-    vendored `codegraph` package missing beside that descriptor, `project`
-    itself a package (`__init__.py` present -- the base-prefix case
-    `discover()` already handles), `project` not an exact `import_roots`
-    entry, or the snapshot measurement itself failing (no git checkout, or
-    any other `CheckError`)."""
+    Unpinned, returns None, never raises, on every one of: no ancestor
+    `codemap.yaml` (the ordinary case for a project the harness is not installed
+    into), the vendored `codegraph` package missing beside that descriptor,
+    `project` itself a package (`__init__.py` present -- the base-prefix case
+    `discover()` already handles), `project` not an exact `import_roots` entry,
+    or the snapshot measurement itself failing (no git checkout, or any other
+    `CheckError`)."""
+    def cannot(why):
+        if snap:
+            raise PinnedSnapshotRefused(why)
+        return None
+
     project = Path(project).resolve()
     if (project / "__init__.py").is_file():
-        return None
+        return cannot("%s is a package; the snapshot names its modules without its prefix"
+                      % project)
     repo = _project_root_for(project)
     if repo is None:
-        return None
+        return cannot("no codemap.yaml above %s" % project)
     codegraph_scripts = repo / "harness" / "scripts"
     if not (codegraph_scripts / "codegraph").is_dir():
-        return None
+        return cannot("no codegraph package at %s" % (codegraph_scripts / "codegraph"))
     if str(codegraph_scripts) not in sys.path:
         sys.path.insert(0, str(codegraph_scripts))
     try:
         from codegraph._core.descriptor import DescriptorError, load
-        from codegraph.check.tree import CheckError, measure
-    except ImportError:
-        return None
+        from codegraph.check.tree import CheckError, Pin, measure
+    except ImportError as e:
+        return cannot("codegraph does not import: %s" % e)
     try:
         descriptor = load(repo / "codemap.yaml", repo).descriptor
-    except DescriptorError:
-        return None
+    except DescriptorError as e:
+        return cannot("%s: %s" % (repo / "codemap.yaml", e))
     rel = "." if project == repo else project.relative_to(repo).as_posix()
     if rel not in (descriptor.import_roots or ()):
-        return None
+        return cannot("%s is not a declared import root of %s (import_roots: %s)"
+                      % (rel, repo / "codemap.yaml", ", ".join(descriptor.import_roots or ())
+                         or "none"))
     try:
-        tree = measure(repo)
-    except CheckError:
-        return None
+        # Not quiet: a snapshot of HEAD read over uncommitted edits says so on stderr.
+        tree = measure(repo, Pin(snap=snap, out=out) if snap else None)
+    except CheckError as e:
+        return cannot(str(e))
     records = tree.records()
     under = [rec for rec in records if _under(repo / rec["path"], project)]
-    return (records, under) if under else None
+    return (records, under) if under else cannot("the snapshot holds no module under %s"
+                                                  % project)
 
 
-def snapshot_graph(project):
+def snapshot_graph(project, snap=None, out=None):
     """(module names, edges) read off the shared codegraph snapshot instead of
     this file's own `discover()`/`edges_of()` AST resolver -- None when
     `snapshot_records` cannot answer for `project`."""
-    got = snapshot_records(project)
+    got = snapshot_records(project, snap, out)
     if got is None:
         return None
     from codegraph.check.tree import module_graph
@@ -199,9 +237,11 @@ def main():
                     help="group nodes into containers by sub-package")
     ap.add_argument("--no-reduce", action="store_true",
                     help="keep every edge (skip transitive reduction)")
+    add_snapshot_args(ap)
     args = ap.parse_args()
 
-    via_door = snapshot_graph(args.project)
+    via_door = door_or_exit(lambda: snapshot_graph(args.project, args.snap, args.snap_store),
+                            args)
     if via_door is not None:
         node_names, edges = via_door
         modules, base = {m: None for m in node_names}, ""

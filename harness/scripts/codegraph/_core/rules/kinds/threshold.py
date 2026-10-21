@@ -136,5 +136,5 @@ class ThresholdCheck:
         return RuleResult(self.rule_id, "error", tuple(violations), notes)
 
 
-register_kind("threshold")(
+register_kind("threshold", languages="*")(
     require_params("warn")(ThresholdCheck))

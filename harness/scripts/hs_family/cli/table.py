@@ -26,6 +26,8 @@ class CommandRow:
     origin: Origin
     load: Callable[[], Any] = attrs.field(eq=False, repr=False)
     moved_to: Optional[str] = None
+    #: the language ids the command reads (`languages:` of its row); None = any
+    languages: Optional[tuple] = None
 
 
 class CommandSource(Protocol):

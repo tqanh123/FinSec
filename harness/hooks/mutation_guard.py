@@ -196,6 +196,9 @@ def _named_in(rel: str, repo_root: Path, text: str) -> bool:
 
 def do_stop(payload: dict) -> None:
     """Diff snapshot against current state; report mutations as advisory."""
+    # Bound once, first: an import in a later branch made the name local to the whole
+    # function, so every early skip raised before its trace was written.
+    import hook_runtime
     key = _snapshot_key(payload)
     if key is None:
         hook_runtime.trace_skip(__name__, "identity-unresolvable", session=payload.get("session_id"))
@@ -250,7 +253,6 @@ def do_stop(payload: dict) -> None:
                 changed = [rel for rel in changed if rel not in unnamed]
 
         if unnamed:
-            import hook_runtime
             hook_runtime.emit_nudge(
                 _HOOK,
                 "[advisory] mutation_guard: %d tracked file(s) changed during advisory "
@@ -260,7 +262,6 @@ def do_stop(payload: dict) -> None:
 
         if changed:
             import trace_log
-            import hook_runtime
             session = payload.get("session_id")
             trace_log.append_event(
                 hook=_HOOK,

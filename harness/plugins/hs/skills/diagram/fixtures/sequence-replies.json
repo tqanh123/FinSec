@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "trình tự alert → agent"
+  },
+  "participants": [
+    {
+      "id": "al",
+      "label": "vsf-alert",
+      "role": "service"
+    },
+    {
+      "id": "api",
+      "label": "idp-studio API",
+      "role": "gateway"
+    },
+    {
+      "id": "db",
+      "label": "Postgres",
+      "role": "database"
+    },
+    {
+      "id": "wk",
+      "label": "worker",
+      "role": "service"
+    },
+    {
+      "id": "llm",
+      "label": "LLMGW",
+      "role": "external"
+    }
+  ],
+  "messages": [
+    {
+      "from": "al",
+      "to": "api",
+      "label": "POST webhook drift",
+      "kind": "async-signal"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "INSERT run + outbox",
+      "kind": "sync-call"
+    },
+    {
+      "from": "api",
+      "to": "al",
+      "label": "202 Accepted",
+      "kind": "return"
+    },
+    {
+      "from": "wk",
+      "to": "db",
+      "label": "claim step (lease)",
+      "kind": "sync-call"
+    },
+    {
+      "from": "wk",
+      "to": "llm",
+      "label": "Reader/Author",
+      "kind": "sync-call"
+    },
+    {
+      "from": "llm",
+      "to": "wk",
+      "label": "kết quả",
+      "kind": "return"
+    }
+  ]
+}

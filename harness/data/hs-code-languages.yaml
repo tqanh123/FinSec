@@ -1,0 +1,157 @@
+# The bin's language packs: which reader parses, and which resolver names and
+# resolves, which files. Read by `codegraph._core.lang.registry.load` (the one
+# reader); every key is checked, a book with no row is broken.
+#
+#   files.include/exclude  basename globs, multi-dot allowed (`*.d.ts`); the
+#                          suffix of each include glob is the reader's suffix
+#   reader                 per-file parse -> ModuleSymbols (`adapter.base`)
+#   engines                instead of `reader`: the readers a project picks among
+#                          (`languages.<id>.engine`, then required); each names what
+#                          it needs -- Python modules (`requires.python`), a Node.js
+#                          floor (`requires.node`), pinned npm packages (`requires.npm`:
+#                          name, version, lockfile integrity, the shipped pin pair
+#                          relative to harness/scripts) -- and the line that installs
+#                          them; anything missing refuses the snapshot
+#   resolver               module naming + import classification (`lang.base.Resolver`)
+#   capabilities           what the pack's records carry
+#   offer                  codemap adoption offers a map for a repo in this language
+#   stamp                  data files (relative to harness/) the pack reads; each is
+#                          hashed into the snapshot tool stamp
+#   options                keys a project may set under `languages.<id>:` in its
+#                          codemap.yaml (`units` is read by the kernel itself)
+#   runners                the pack's test runners (`test_runners`, which checks
+#                          every key): id, executor agent|harness, argv holding
+#                          "{targets}" once, detect/select/empty_ok/result/coverage;
+#                          a repo adds or overrides them under `languages.<id>.runners`
+#   checks                 the pack's static checks (`static_checks`, which checks every
+#                          key): bin, argv, parser, type, broken_codes, suppressions_file,
+#                          write_flags, emit, config_inputs, reads (suffixes the tool
+#                          reads beyond the pack's files); a repo turns one on and sets
+#                          its policy under `languages.<id>.checks.<check id>`
+#
+# A PROJECT adds a reader for its own language in its `codemap.yaml`
+# `adapters:` block, as a command (see `codegraph._core.adapter.command_adapter`);
+# a row naming a `resolver:` command too is a whole language of its own, resolved
+# over the `hs-code-resolve/1` protocol (`codegraph._core.lang.resolver_command`).
+# Those commands run only in a repo the operator trusted (`hs-cli trust`), and
+# only while they are the commands it trusted.
+schema_version: 1
+# MB of uncommitted files `dirty_tree_guard` copies aside before a project tool runs;
+# over it, the run is refused before it starts
+guard_backup_max_mb: 64
+languages:
+  - id: python
+    files: {include: ["*.py"], exclude: []}
+    reader: {module: codegraph._core.adapter.python_adapter, class: PythonAdapter}
+    resolver: {module: codegraph._core.lang.python.resolver, class: PythonResolver}
+    capabilities: [imports, symbols, refs, type_only]
+    offer: true
+    stamp: []
+    options: [max_file_bytes, runners]
+    runners:
+      - id: pytest
+        executor: agent
+        argv: [python3, -m, pytest, -q, "{targets}"]
+        empty_ok: {rc: 5}
+        result: {format: junit}
+        test_exts: [.py]
+  - id: typescript
+    files:
+      include: ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs"]
+      exclude: []
+    engines:
+      tree-sitter:
+        reader: {module: codegraph._core.lang.typescript.treesitter.reader, class: TreeSitterTsReader}
+        requires: {python: [tree_sitter, tree_sitter_typescript]}
+        install: "python3 -m pip install 'tree-sitter>=0.26,<0.27' 'tree-sitter-typescript==0.23.2'"
+      typescript:
+        reader: {module: codegraph._core.lang.typescript.node.engine, class: NodeTsReader}
+        requires:
+          node: ">=14.17"
+          npm:
+            - name: typescript
+              version: 6.0.3
+              integrity: "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="
+              pin: codegraph/_core/lang/typescript/node/pin/typescript
+        install: "hs-code init run --apply --only lang-tools"
+    resolver: {module: codegraph._core.lang.typescript.resolver, class: TypeScriptResolver}
+    # vitest before jest: a package holding both (a migration) runs vitest. Both are run by
+    # the harness (`hs-code test run`), from the unit that owns the config, through
+    # node_modules/.bin -- never a package manager. Flags measured on vitest 5 / jest 30.
+    runners:
+      - id: vitest
+        executor: harness
+        bin: vitest
+        detect:
+          files: [vitest.config.ts, vitest.config.mts, vitest.config.cts, vitest.config.js,
+                  vitest.config.mjs, vitest.config.cjs, vite.config.ts, vite.config.mts,
+                  vite.config.cts, vite.config.js, vite.config.mjs, vite.config.cjs]
+          deps: [vitest]
+          config_lookup: cwd_only
+        argv: [run, "{targets}", --passWithNoTests, --reporter=json, "--outputFile={result}"]
+        target_mode: substring_ci
+        select: {list_argv: [list, --filesOnly, "--json={list}", "{targets}"], exclude_flag: --exclude}
+        empty_ok: {flag: --passWithNoTests}
+        result: {format: jest-json}
+        coverage:
+          flags: [--coverage.enabled, --coverage.reporter=lcov, --coverage.reporter=json-summary,
+                  "--coverage.reportsDirectory={coverage}"]
+          provider_key: coverage.provider
+          lcov_sf_base: runner_root
+          # a file no runner reports (types only): not counted absent from a report
+          never_reported: ["*.d.ts"]
+        write_flags: [-u, --update, --updateSnapshot]
+        config_inputs: [package.json, "vitest.config.*", "vite.config.*"]
+        outputs: [coverage]
+        test_exts: [.ts, .tsx, .mts, .cts, .js, .jsx, .mjs, .cjs]
+      - id: jest
+        executor: harness
+        bin: jest
+        detect:
+          files: [jest.config.js, jest.config.ts, jest.config.mjs, jest.config.mts,
+                  jest.config.cjs, jest.config.cts, jest.config.json]
+          deps: [jest]
+          package_json_key: jest
+          config_lookup: walk_up
+        argv: [--ci, --runTestsByPath, "{targets}", --passWithNoTests, --json, "--outputFile={result}"]
+        target_mode: path
+        select: {list_argv: [--listTests, --json, --runTestsByPath, "{targets}"]}
+        empty_ok: {flag: --passWithNoTests}
+        result: {format: jest-json}
+        coverage:
+          flags: [--coverage, --coverageReporters=lcov, --coverageReporters=json-summary,
+                  "--coverageDirectory={coverage}"]
+          provider_key: coverageProvider
+          lcov_sf_base: rootDir
+          never_reported: ["*.d.ts"]
+        write_flags: [-u, --updateSnapshot, --update-snapshot]
+        config_inputs: [package.json, "jest.config.*"]
+        outputs: [coverage]
+        test_exts: [.ts, .tsx, .mts, .cts, .js, .jsx, .mjs, .cjs]
+    # Run by the harness (`hs-code check run`) from the repo root through node_modules/.bin,
+    # only when the repo declares them (`languages.typescript.checks.<id>`). Read from the
+    # output, never the exit code: measured on tsc 6.0.3 / 7.0.2, eslint 10.13.0.
+    checks:
+      - id: tsc
+        bin: tsc
+        argv: [-b, --pretty, "false"]
+        parser: tsc_lines
+        type: typecheck
+        broken_codes: ["TS5*", "TS6*"]
+        emit: tsc
+        config_inputs: [package.json, "tsconfig*.json"]
+        reads: [.json]                 # a JSON module under resolveJsonModule
+      - id: eslint
+        bin: eslint
+        argv: [-f, json, --pass-on-unpruned-suppressions, "{units}"]
+        parser: eslint_json
+        type: lint
+        suppressions_file: eslint-suppressions.json
+        write_flags: [--fix, --fix-type, --fix-dry-run, --suppress-all, --suppress-rule,
+                      --prune-suppressions, --cache, -o, --output-file]
+        config_inputs: [package.json, "eslint.config.*", eslint-suppressions.json]
+    capabilities: [snapshot, where, importers, resolve, tests, importers_symbol, drift, structural]
+    offer: true
+    stamp: [data/node-builtins.json]
+    options: [engine, max_file_bytes, units, exclude_out_dir, aliases, tests, stories_as_tests,
+              resolver_command, resolver_timeout_s, runners, checks]

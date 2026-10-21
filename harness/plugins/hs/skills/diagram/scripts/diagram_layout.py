@@ -5,6 +5,11 @@ Three backends share one output shape (NodeBox / GroupBox / EdgeRoute / Layout):
 
   - graphviz: feeds a generated DOT description to the real `dot` binary
     (`splines=ortho` for orthogonal routing) and parses its `-Tplain` output.
+    The orthogonal router ignores edge labels ("Orthogonal edges do not currently
+    handle edge labels"), so a labelled edge goes through a LABEL NODE sized to its
+    text — dot then routes around it like any other box, which is what keeps a label
+    off every box, line and other label. `newrank=true` keeps a `layer` hint from
+    pulling a boundary's member out of its cluster.
     Chosen over `-Tjson` because the plain-text format is a small, stable,
     line-oriented contract documented in the graphviz manual and unchanged
     across the 2.43 -> 14.1 releases probed on this box and on homelab,
@@ -13,9 +18,13 @@ Three backends share one output shape (NodeBox / GroupBox / EdgeRoute / Layout):
     placement, used only when diagram_engine.select_engine's whole preference
     chain answers unavailable, or the `dot` invocation itself fails at
     runtime. Degrade honestly, never crash and never silently draw nothing.
-  - sequence-linear: participants across the top, one row per message going
-    down the page. There is no ranking problem to solve for a sequence
-    diagram, so no external engine is invoked at all.
+  - sequence-linear: participants across the top, a lifeline under each, one row
+    per message going down the page, spaced so every label fits its span. There is
+    no ranking problem to solve for a sequence diagram, so no external engine is
+    invoked at all.
+
+Every backend's output is moved onto the canvas (`_normalize`) and checked
+(`diagram_check.check_layout`); a finding is a warning on the layout.
 """
 from __future__ import annotations
 
@@ -25,9 +34,10 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from diagram_check import check_layout
 from diagram_engine import select_engine
 from diagram_scene import build_scene
-from diagram_text import text_width
+from diagram_text import text_width, truncate_to_width, wrap_to_width
 
 POINTS_PER_INCH = 72.0
 NODE_PAD_X = 24.0
@@ -35,6 +45,18 @@ NODE_MIN_W = 90.0
 NODE_H = 44.0
 GROUP_PAD = 20.0
 GROUP_LABEL_H = 18.0
+LABEL_FONT_SIZE = 10.5
+LABEL_PAD_X = 6.0
+LABEL_H = 16.0
+DETAIL_FONT_SIZE = 10.5
+DETAIL_LINE_H = 14.0
+DETAIL_MAX_W = 200.0
+CANVAS_MARGIN = 16.0
+#: dot's arrowhead length at arrowsize=1; an edge's last point is that far from its box.
+ARROW_LEN = 10.0
+#: Outside the IR id alphabet (`^[a-zA-Z0-9_-]+$`), so no component can share the name.
+LABEL_NODE = "label.%d"
+LABEL_PREFIX = LABEL_NODE.split("%")[0]
 
 _DASHED_KINDS = {"async", "fallback", "retry", "async-signal", "branch-false", "exception",
                  "timeout", "cancel"}
@@ -49,6 +71,7 @@ class NodeBox:
     w: float
     h: float
     role: str | None = None
+    details: list = field(default_factory=list)
 
 
 @dataclass
@@ -60,6 +83,7 @@ class GroupBox:
     y: float
     w: float
     h: float
+    members: list = field(default_factory=list)
 
 
 @dataclass
@@ -69,6 +93,15 @@ class EdgeRoute:
     label: str | None
     kind: str | None
     points: list
+    label_box: tuple | None = None
+
+
+@dataclass
+class Lifeline:
+    id: str
+    x: float
+    y0: float
+    y1: float
 
 
 @dataclass
@@ -81,23 +114,129 @@ class Layout:
     edges: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     engine_trace: list = field(default_factory=list)
+    lifelines: list = field(default_factory=list)
 
 
-def _node_size(label: str) -> tuple:
+def node_details(node) -> list:
+    """A C4-style box's lines under its name: `[technology]`, then the description
+    wrapped to the box. Empty for a plain box."""
+    lines = []
+    tech = getattr(node, "technology", None)
+    if tech:
+        lines.append(truncate_to_width("[%s]" % tech, DETAIL_MAX_W, DETAIL_FONT_SIZE))
+    desc = getattr(node, "description", None)
+    if desc:
+        lines.extend(wrap_to_width(desc, DETAIL_MAX_W, DETAIL_FONT_SIZE))
+    return lines
+
+
+def _node_size(label: str, details: list | None = None) -> tuple:
     w = max(NODE_MIN_W, text_width(label, 13.0, 600) + NODE_PAD_X * 2)
-    return w, NODE_H
+    if not details:
+        return w, NODE_H
+    w = max([w] + [text_width(d, DETAIL_FONT_SIZE) + NODE_PAD_X * 2 for d in details])
+    return w, NODE_H + DETAIL_LINE_H * len(details)
 
 
-def _group_box(group, node_lookup: dict) -> GroupBox | None:
+def label_size(label: str) -> tuple:
+    return text_width(label, LABEL_FONT_SIZE) + LABEL_PAD_X * 2, LABEL_H
+
+
+def _group_box(group, node_lookup: dict, extra: "tuple | list" = ()) -> GroupBox | None:
     members = [node_lookup[m] for m in group.members if m in node_lookup]
     if not members:
         return None
-    x0 = min(b.x for b in members) - GROUP_PAD
-    y0 = min(b.y for b in members) - GROUP_PAD - GROUP_LABEL_H
-    x1 = max(b.x + b.w for b in members) + GROUP_PAD
-    y1 = max(b.y + b.h for b in members) + GROUP_PAD
+    rects = [(b.x, b.y, b.x + b.w, b.y + b.h) for b in members] + list(extra)
+    x0 = min(r[0] for r in rects) - GROUP_PAD
+    y0 = min(r[1] for r in rects) - GROUP_PAD - GROUP_LABEL_H
+    x1 = max(r[2] for r in rects) + GROUP_PAD
+    y1 = max(r[3] for r in rects) + GROUP_PAD
     return GroupBox(id=group.id, label=group.label, role=group.role,
-                     x=x0, y=y0, w=x1 - x0, h=y1 - y0)
+                     x=x0, y=y0, w=x1 - x0, h=y1 - y0, members=[b.id for b in members])
+
+
+def _label_box_at(points, label: str | None) -> tuple | None:
+    """A label centred on the halfway point of `points`, measured by length."""
+    if not label or not points:
+        return None
+    segs = list(zip(points, points[1:]))
+    total = sum(abs(q[0] - p[0]) + abs(q[1] - p[1]) for p, q in segs)
+    at, cx, cy = total / 2, points[0][0], points[0][1]
+    for p, q in segs:
+        n = abs(q[0] - p[0]) + abs(q[1] - p[1])
+        if n and at <= n:
+            cx, cy = p[0] + (q[0] - p[0]) * at / n, p[1] + (q[1] - p[1]) * at / n
+            break
+        at -= n
+    w, h = label_size(label)
+    return (cx - w / 2, cy - h / 2, w, h)
+
+
+def _to_box(points: list, rect: tuple, reach: float = ARROW_LEN * 2) -> list:
+    """Carry the last segment on to `rect`'s edge: dot ends an edge where its own
+    arrowhead begins, and the SVG marker draws the head back from the path's end."""
+    if len(points) < 2:
+        return points
+    (px, py), (qx, qy) = points[-2], points[-1]
+    for i in range(len(points) - 2, -1, -1):
+        px, py = points[i]
+        if (px, py) != (qx, qy):
+            break
+    dx, dy = qx - px, qy - py
+    norm = (dx * dx + dy * dy) ** 0.5
+    if not norm:
+        return points
+    dx, dy = dx / norm, dy / norm
+    x0, y0, x1, y1 = rect
+    best = None
+    for t in ((x0 - qx) / dx if dx else None, (x1 - qx) / dx if dx else None,
+              (y0 - qy) / dy if dy else None, (y1 - qy) / dy if dy else None):
+        if t is None or t < -0.01 or t > reach:
+            continue
+        hx, hy = qx + dx * t, qy + dy * t
+        if x0 - 0.5 <= hx <= x1 + 0.5 and y0 - 0.5 <= hy <= y1 + 0.5:
+            best = t if best is None else min(best, t)
+    if not best or best < 0.01:
+        return points
+    return points + [(qx + dx * best, qy + dy * best)]
+
+
+def _normalize(layout: Layout) -> Layout:
+    """Shift everything so the drawing starts at CANVAS_MARGIN and size the canvas to
+    hold it: a frame's label strip and a participant centred near x=0 were drawn at
+    negative coordinates and cut off."""
+    xs, ys = [], []
+    for o in list(layout.nodes) + list(layout.groups):
+        xs += [o.x, o.x + o.w]
+        ys += [o.y, o.y + o.h]
+    for e in layout.edges:
+        xs += [p[0] for p in e.points]
+        ys += [p[1] for p in e.points]
+        if e.label_box:
+            bx, by, bw, bh = e.label_box
+            xs += [bx, bx + bw]
+            ys += [by, by + bh]
+    for ln in layout.lifelines:
+        xs.append(ln.x)
+        ys += [ln.y0, ln.y1]
+    if not xs:
+        return layout
+    dx, dy = CANVAS_MARGIN - min(xs), CANVAS_MARGIN - min(ys)
+    for o in list(layout.nodes) + list(layout.groups):
+        o.x += dx
+        o.y += dy
+    for e in layout.edges:
+        e.points = [(x + dx, y + dy) for x, y in e.points]
+        if e.label_box:
+            bx, by, bw, bh = e.label_box
+            e.label_box = (bx + dx, by + dy, bw, bh)
+    for ln in layout.lifelines:
+        ln.x += dx
+        ln.y0 += dy
+        ln.y1 += dy
+    layout.width = max(xs) + dx + CANVAS_MARGIN
+    layout.height = max(ys) + dy + CANVAS_MARGIN
+    return layout
 
 
 # --------------------------------------------------------------- graphviz
@@ -106,44 +245,84 @@ def _dot_escape(text: str) -> str:
     return (text or "").replace("\\", "\\\\").replace('"', '\\"')
 
 
-def build_dot(scene) -> str:
+def _fixed_label(w: float, h: float) -> str:
+    """An HTML-like label of exactly w x h points: what dot reserves for a frame's title."""
+    return ('<<TABLE BORDER="0" CELLPADDING="0" CELLSPACING="0"><TR><TD FIXEDSIZE="TRUE" '
+            'WIDTH="%d" HEIGHT="%d"> </TD></TR></TABLE>>' % (round(w), round(h)))
+
+
+def _label_nodes(scene) -> list:
+    """(edge index, label node id, group id or None) for every labelled edge; the label
+    node sits in a frame only when both ends of its edge do."""
+    group_of: dict = {}
+    for g in scene.groups:
+        for m in g.members:
+            group_of.setdefault(m, g.id)
+    out = []
+    for i, e in enumerate(scene.edges):
+        if e.label:
+            g = group_of.get(e.source)
+            out.append((i, LABEL_NODE % i, g if g and g == group_of.get(e.target) else None))
+    return out
+
+
+def build_dot(scene, splines: str = "ortho") -> str:
     """Render `scene` as a DOT source. Public so tests can assert on structure
     without shelling out to `dot`."""
     lines = [
         "digraph G {",
         "  rankdir=%s;" % scene.rankdir,
-        "  splines=ortho;",
+        "  splines=%s;" % splines,
+        "  newrank=true;",
         "  nodesep=0.45;",
-        "  ranksep=0.65;",
-        '  node [shape=box, style=filled, fontsize=11, fillcolor=white];',
+        "  ranksep=0.5;",
+        '  node [shape=box, style=filled, fontsize=11, fillcolor=white, fixedsize=true];',
+        "  edge [arrowsize=1];",
     ]
+    label_nodes = _label_nodes(scene)
     for g in scene.groups:
         lines.append('  subgraph "cluster_%s" {' % g.id)
-        lines.append('    label="%s";' % _dot_escape(g.label))
+        lines.append("    label=%s;" % _fixed_label(
+            text_width(g.label, 11.0) + 20, GROUP_LABEL_H))
+        lines.append("    labeljust=l;")
+        lines.append("    margin=%d;" % GROUP_PAD)
         lines.append("    style=dashed;")
         for m in g.members:
             lines.append('    "%s";' % m)
+        for _, lid, gid in label_nodes:
+            if gid == g.id:
+                lines.append('    "%s";' % lid)
         lines.append("  }")
     for n in scene.nodes:
-        w, h = _node_size(n.label)
-        lines.append('  "%s" [label="%s", width=%.3f, height=%.3f, fixedsize=true];'
+        w, h = _node_size(n.label, node_details(n))
+        lines.append('  "%s" [label="%s", width=%.3f, height=%.3f];'
                       % (n.id, _dot_escape(n.label), w / POINTS_PER_INCH, h / POINTS_PER_INCH))
+    rank_of = {n.id: n.rank_hint for n in scene.nodes}
     by_hint: dict = {}
     for n in scene.nodes:
         if n.rank_hint is not None:
             by_hint.setdefault(n.rank_hint, []).append(n.id)
+    for i, lid, _ in label_nodes:
+        e = scene.edges[i]
+        w, h = label_size(e.label)
+        lines.append('  "%s" [label="", shape=box, style=invis, width=%.3f, height=%.3f];'
+                      % (lid, w / POINTS_PER_INCH, h / POINTS_PER_INCH))
+        hint = rank_of.get(e.source)
+        if hint is not None and hint == rank_of.get(e.target):
+            by_hint[hint].append(lid)
     for hint in sorted(by_hint):
         ids = by_hint[hint]
         if len(ids) > 1:
             lines.append("  { rank=same; %s; }" % "; ".join('"%s"' % i for i in ids))
-    for e in scene.edges:
-        attrs = []
-        if e.label:
-            attrs.append('label="%s"' % _dot_escape(e.label))
-        if e.kind in _DASHED_KINDS:
-            attrs.append("style=dashed")
-        attr_str = " [%s]" % ", ".join(attrs) if attrs else ""
-        lines.append('  "%s" -> "%s"%s;' % (e.source, e.target, attr_str))
+    via = {i: lid for i, lid, _ in label_nodes}
+    for i, e in enumerate(scene.edges):
+        style = ", style=dashed" if e.kind in _DASHED_KINDS else ""
+        if i in via:
+            lines.append('  "%s" -> "%s" [arrowhead=none%s];' % (e.source, via[i], style))
+            lines.append('  "%s" -> "%s" [%s];' % (via[i], e.target, style.lstrip(", ")))
+        else:
+            lines.append('  "%s" -> "%s"%s;' % (e.source, e.target,
+                                               " [%s]" % style.lstrip(", ") if style else ""))
     lines.append("}")
     return "\n".join(lines)
 
@@ -202,9 +381,12 @@ def _run_dot(dot_source: str, dot_path: str = "dot") -> str:
             graphviz = None
         if graphviz is not None:
             try:
-                raw = graphviz.Source(dot_source).pipe(format="plain", encoding="utf-8")
+                raw = graphviz.Source(dot_source).pipe(format="plain", encoding="utf-8", quiet=True)
             except graphviz.backend.ExecutableNotFound as exc:
                 raise RuntimeError("dot binary not found (%s)" % exc) from exc
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError("dot exited %s: %s" % (
+                    exc.returncode, " ".join((exc.stderr or "").split())[:200])) from exc
             return raw
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "scene.dot"
@@ -216,40 +398,65 @@ def _run_dot(dot_source: str, dot_path: str = "dot") -> str:
     return proc.stdout
 
 
-def layout_with_graphviz(scene, dot_path: str = "dot") -> Layout:
-    dot_source = build_dot(scene)
+def _join(a: list, b: list) -> list:
+    """Two halves of a labelled edge meet inside the label node; an elbow keeps the
+    joint orthogonal (it is drawn under the label)."""
+    if not a or not b:
+        return a + b
+    p, q = a[-1], b[0]
+    mid = [] if p[0] == q[0] or p[1] == q[1] else [(q[0], p[1])]
+    return a + mid + b
+
+
+def _take(halves: dict, key: tuple) -> list:
+    got = halves.get(key)
+    return list(got.pop(0)) if got else []
+
+
+def layout_with_graphviz(scene, dot_path: str = "dot", splines: str = "ortho") -> Layout:
+    dot_source = build_dot(scene, splines)
     parsed = _parse_plain(_run_dot(dot_source, dot_path))
 
     src_by_id = {n.id: n for n in scene.nodes}
-    nodes = []
+    nodes, label_geo = [], {}
     for name, geo in parsed["nodes"].items():
+        x, y = geo["x"] - geo["w"] / 2, geo["y"] - geo["h"] / 2
+        if name.startswith(LABEL_PREFIX):
+            label_geo[name] = (x, y, geo["w"], geo["h"])
+            continue
         src_node = src_by_id.get(name)
         nodes.append(NodeBox(
             id=name, label=src_node.label if src_node else geo["label"],
-            x=geo["x"] - geo["w"] / 2, y=geo["y"] - geo["h"] / 2,
-            w=geo["w"], h=geo["h"], role=src_node.role if src_node else None,
+            x=x, y=y, w=geo["w"], h=geo["h"], role=src_node.role if src_node else None,
+            details=node_details(src_node) if src_node else [],
         ))
     node_lookup = {n.id: n for n in nodes}
+    rect = {n.id: (n.x, n.y, n.x + n.w, n.y + n.h) for n in nodes}
 
-    groups = [b for b in (_group_box(g, node_lookup) for g in scene.groups) if b is not None]
-
-    pending: dict = {}
-    for e in scene.edges:
-        pending.setdefault((e.source, e.target), []).append(e)
-    routes = []
+    halves: dict = {}
     for pe in parsed["edges"]:
-        candidates = pending.get((pe["tail"], pe["head"]), [])
-        src_edge = candidates.pop(0) if candidates else None
-        routes.append(EdgeRoute(
-            source=pe["tail"], target=pe["head"],
-            label=src_edge.label if src_edge else pe["label"],
-            kind=src_edge.kind if src_edge else None,
-            points=pe["points"],
-        ))
+        halves.setdefault((pe["tail"], pe["head"]), []).append(pe["points"])
+    routes = []
+    for i, e in enumerate(scene.edges):
+        lid = LABEL_NODE % i
+        if lid in label_geo:
+            points = _join(_take(halves, (e.source, lid)), _take(halves, (lid, e.target)))
+            box = label_geo[lid]
+        else:
+            points, box = _take(halves, (e.source, e.target)), None
+        if e.target in rect:
+            points = _to_box(points, rect[e.target])
+        routes.append(EdgeRoute(source=e.source, target=e.target, label=e.label, kind=e.kind,
+                                points=points, label_box=box))
 
-    width = max([n.x + n.w for n in nodes] + [g.x + g.w for g in groups] + [0.0]) + GROUP_PAD
-    height = max([n.y + n.h for n in nodes] + [g.y + g.h for g in groups] + [0.0]) + GROUP_PAD
-    return Layout(engine="graphviz", width=width, height=height, nodes=nodes, groups=groups,
+    inner: dict = {}
+    for i, lid, gid in _label_nodes(scene):
+        if gid and lid in label_geo:
+            bx, by, bw, bh = label_geo[lid]
+            inner.setdefault(gid, []).append((bx, by, bx + bw, by + bh))
+    groups = [b for b in (_group_box(g, node_lookup, inner.get(g.id, ())) for g in scene.groups)
+              if b is not None]
+    return Layout(engine="graphviz", width=0.0, height=0.0, nodes=nodes, groups=groups,
                   edges=routes)
 
 
@@ -296,12 +503,14 @@ def layout_fallback_grid(scene) -> Layout:
     nodes, node_lookup = [], {}
     for col_idx, col in enumerate(sorted(by_rank)):
         for row_idx, n in enumerate(by_rank[col]):
-            w, h = _node_size(n.label)
+            details = node_details(n)
+            w, h = _node_size(n.label, details)
             if horizontal:
                 x, y = 40 + col_idx * col_gap, 40 + row_idx * row_gap
             else:
                 x, y = 40 + row_idx * col_gap, 40 + col_idx * row_gap
-            box = NodeBox(id=n.id, label=n.label, x=x, y=y, w=w, h=h, role=n.role)
+            box = NodeBox(id=n.id, label=n.label, x=x, y=y, w=w, h=h, role=n.role,
+                          details=details)
             nodes.append(box)
             node_lookup[n.id] = box
 
@@ -325,11 +534,9 @@ def layout_fallback_grid(scene) -> Layout:
             points = [(ax, ay), (bx, by)] if abs(ax - bx) < 1 else [
                 (ax, ay), (ax, mid), (bx, mid), (bx, by)]
         routes.append(EdgeRoute(source=e.source, target=e.target, label=e.label, kind=e.kind,
-                                 points=points))
+                                 points=points, label_box=_label_box_at(points, e.label)))
 
-    width = max((n.x + n.w for n in nodes), default=0.0) + 40
-    height = max((n.y + n.h for n in nodes), default=0.0) + 40
-    return Layout(engine="fallback-grid", width=width, height=height, nodes=nodes, groups=groups,
+    return Layout(engine="fallback-grid", width=0.0, height=0.0, nodes=nodes, groups=groups,
                   edges=routes,
                   warnings=["no external layout engine was available -- used a plain grid"])
 
@@ -341,18 +548,45 @@ LIFELINE_GAP = 190.0
 SEQ_ROW_H = 50.0
 PARTICIPANT_W = 150.0
 PARTICIPANT_H = 44.0
+SELF_LOOP_W = 46.0
+LABEL_CLEARANCE = 24.0
+
+
+def _participant_xs(participants: list, widths: list, messages: list) -> list:
+    """Lifeline x per participant: at least LIFELINE_GAP apart and wide enough for both
+    boxes, then pushed apart wherever a message's label is wider than its span."""
+    xs: list = []
+    for i, w in enumerate(widths):
+        xs.append(w / 2 if i == 0 else
+                  xs[-1] + max(LIFELINE_GAP, (widths[i - 1] + w) / 2 + LABEL_CLEARANCE))
+    idx = {p["id"]: i for i, p in enumerate(participants)}
+    for m in messages:
+        a, b = idx.get(m.get("from")), idx.get(m.get("to"))
+        if a is None or b is None or not m.get("label"):
+            continue
+        need = label_size(m["label"])[0] + LABEL_CLEARANCE
+        if a == b:
+            a, b, need = a, a + 1, need + SELF_LOOP_W
+            if b >= len(xs):
+                continue
+        lo, hi = min(a, b), max(a, b)
+        short = need - (xs[hi] - xs[lo])
+        if short > 0:
+            xs[hi:] = [x + short for x in xs[hi:]]
+    return xs
 
 
 def layout_sequence(ir: dict) -> Layout:
     participants = ir.get("participants", [])
     messages = ir.get("messages", [])
+    widths = [max(PARTICIPANT_W, _node_size(p.get("label", p["id"]))[0]) for p in participants]
+    xs = _participant_xs(participants, widths, messages)
     x_by_id, nodes = {}, []
-    for idx, p in enumerate(participants):
-        cx = 60 + idx * LIFELINE_GAP
+    for p, cx, w in zip(participants, xs, widths):
         x_by_id[p["id"]] = cx
         nodes.append(NodeBox(id=p["id"], label=p.get("label", p["id"]),
-                              x=cx - PARTICIPANT_W / 2, y=LIFELINE_TOP - PARTICIPANT_H,
-                              w=PARTICIPANT_W, h=PARTICIPANT_H, role=p.get("role")))
+                              x=cx - w / 2, y=LIFELINE_TOP - PARTICIPANT_H,
+                              w=w, h=PARTICIPANT_H, role=p.get("role")))
 
     routes = []
     y = LIFELINE_TOP + SEQ_ROW_H
@@ -360,21 +594,27 @@ def layout_sequence(ir: dict) -> Layout:
         if m.get("from") not in x_by_id or m.get("to") not in x_by_id:
             y += SEQ_ROW_H
             continue
+        label, box = m.get("label"), None
+        lw, lh = label_size(label) if label else (0.0, 0.0)
         if m["from"] == m["to"]:
             cx = x_by_id[m["from"]]
-            loop = 46.0
-            points = [(cx, y), (cx + loop, y), (cx + loop, y + SEQ_ROW_H * 0.6),
+            points = [(cx, y), (cx + SELF_LOOP_W, y), (cx + SELF_LOOP_W, y + SEQ_ROW_H * 0.6),
                       (cx, y + SEQ_ROW_H * 0.6)]
+            if label:
+                box = (cx + SELF_LOOP_W + 6, y + SEQ_ROW_H * 0.3 - lh / 2, lw, lh)
         else:
-            points = [(x_by_id[m["from"]], y), (x_by_id[m["to"]], y)]
-        routes.append(EdgeRoute(source=m["from"], target=m["to"], label=m.get("label"),
-                                 kind=m.get("kind"), points=points))
+            x1, x2 = x_by_id[m["from"]], x_by_id[m["to"]]
+            points = [(x1, y), (x2, y)]
+            if label:
+                box = ((x1 + x2) / 2 - lw / 2, y - 3 - lh, lw, lh)
+        routes.append(EdgeRoute(source=m["from"], target=m["to"], label=label,
+                                 kind=m.get("kind"), points=points, label_box=box))
         y += SEQ_ROW_H
 
-    width = (60 + max(len(participants) - 1, 0) * LIFELINE_GAP) + PARTICIPANT_W / 2 + 60
-    height = y + 20
-    return Layout(engine="sequence-linear", width=width, height=height, nodes=nodes, groups=[],
-                  edges=routes)
+    bottom = y - SEQ_ROW_H / 2
+    lifelines = [Lifeline(id=n.id, x=x_by_id[n.id], y0=n.y + n.h, y1=bottom) for n in nodes]
+    return Layout(engine="sequence-linear", width=0.0, height=0.0, nodes=nodes, groups=[],
+                  edges=routes, lifelines=lifelines)
 
 
 # -------------------------------------------------------------- dispatch
@@ -384,7 +624,15 @@ def compile_layout(ir: dict, probes: dict | None = None) -> Layout:
     Picks the engine (diagram_engine.select_engine), lays the diagram out, and
     degrades to the pure-Python grid on any real invocation failure -- a
     layout engine crashing on unusual input must never take the whole compile
-    down with it."""
+    down with it. The result is moved onto its canvas and checked; every
+    collision the check names is a `layout check:` warning."""
+    layout = _place(ir, probes)
+    _normalize(layout)
+    layout.warnings.extend("layout check: %s" % f for f in check_layout(layout))
+    return layout
+
+
+def _place(ir: dict, probes: dict | None) -> Layout:
     diagram_type = ir["diagram_type"]
     if diagram_type == "sequence":
         layout = layout_sequence(ir)
@@ -399,8 +647,16 @@ def compile_layout(ir: dict, probes: dict | None = None) -> Layout:
         try:
             layout = layout_with_graphviz(scene)
         except (RuntimeError, OSError) as exc:
-            layout = layout_fallback_grid(scene)
-            layout.warnings.append("dot invocation failed (%s) -- used the grid fallback" % exc)
+            # dot's orthogonal router aborts on some graphs (2.43: maze.c chkSgraph);
+            # the same scene still lays out with straight segments.
+            try:
+                layout = layout_with_graphviz(scene, splines="polyline")
+                layout.warnings.append("dot's orthogonal router failed (%s) -- routed with "
+                                       "straight segments instead" % exc)
+            except (RuntimeError, OSError) as exc2:
+                layout = layout_fallback_grid(scene)
+                layout.warnings.append(
+                    "dot invocation failed (%s) -- used the grid fallback" % exc2)
         layout.engine_trace = choice["tried"]
         return layout
 

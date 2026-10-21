@@ -13,4 +13,5 @@ domains:
   gitlab: {module: rops.verbs.gitlab, help: "real GitLab + runner on the remote (the heavy lane)"}
   bench: {module: rops.verbs.bench, help: "repeated timing on a quiet machine, spread reported"}
   kill: {module: rops.verbs.kill, help: "kill a remote process group: a number is a PGID, anything else a pgrep -f pattern"}
+  lock: {module: rops.verbs.lock, help: "the machine's pools: who holds seats, who waits and why, who skipped the queue; cancel or resize a ticket"}
   doctor: {module: rops.verbs.doctor, help: "show resolved config + check the remote"}

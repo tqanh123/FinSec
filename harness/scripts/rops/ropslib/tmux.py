@@ -31,7 +31,7 @@ from hs_family import RefusedError
 from rops.ropslib.prog import PROG
 from rops.ropslib.exec import (RC_NOT_STARTED, RC_TIMEOUT, RC_VANISHED, Result, alive_in_pgid,
                           log_dir, log_path, pgid_path, pgid_stamp, rc_marker_grep, rc_marker_shell,
-                          read_result, shell_command, timeout_line)
+                          read_result, reaped_when_stopped, shell_command, timeout_line)
 from rops.ropslib.transport import Host, sq
 
 
@@ -92,7 +92,7 @@ def clear_line(cfg, host: Host) -> None:
     time.sleep(1)
 
 
-def wrap_tmux(cfg, command: str, out: str) -> str:
+def wrap_tmux(cfg, command: str, out: str, label: str = "") -> str:
     """Same contract as exec.wrap but through tee, so the pane sees the output too.
 
     Runs the command through `exec.shell_command` (the SAME helper `wrap` uses),
@@ -102,7 +102,7 @@ def wrap_tmux(cfg, command: str, out: str) -> str:
     runs; the pane's own shell never parses it, so no `setopt` for it here.
     """
     return ("{ ( " + pgid_stamp(out) + "; "
-            + shell_command(cfg, command)
+            + shell_command(cfg, command, label)
             + ' ) ; ' + rc_marker_shell() + ' ; } 2>&1 | tee ' + out)
 
 
@@ -126,7 +126,13 @@ def run_remote(cfg, host: Host, command: str, *, timeout_s: int,
     # ROPS_ENV values: mktemp makes it 0600 under a name nobody can pre-place, and it
     # removes itself as it starts. Write, type and Enter in ONE ssh round trip: separate
     # calls leave a window for something else to land between them.
-    body = 'rm -f -- "$0"; ' + wrap_tmux(cfg, command, out)
+    body = 'rm -f -- "$0"; ' + wrap_tmux(cfg, command, out, label)
+    with reaped_when_stopped(host, out):
+        return _start_and_watch(cfg, host, body, out, timeout_s, tail_n, started)
+
+
+def _start_and_watch(cfg, host: Host, body: str, out: str, timeout_s: int, tail_n: int,
+                     started: float) -> Result:
     r = host.run('__f=$(umask 077 && mktemp "${TMPDIR:-/tmp}/rops-XXXXXX") && '
                  f"printf '%s\\n' {sq(body)} > \"$__f\" && "
                  f'tmux send-keys -t {pane(cfg)} -l -- "sh $__f" && '

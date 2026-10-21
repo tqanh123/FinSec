@@ -580,7 +580,7 @@ def main(argv=None) -> int:
     ap.add_argument("--global", dest="global_mode", action="store_true",
                     help="GLOBAL install: one shared binary serves many projects. "
                          "Hooks point at $HARNESS_BIN_ROOT (wired into "
-                         "settings.local.json); no per-project harness/ tree is "
+                         ".claude/settings.json); no per-project harness/ tree is "
                          "copied. Mutually exclusive with --project; neither → "
                          "prompt on a TTY, refuse otherwise (no silent default).")
     ap.add_argument("--project", dest="project_mode", action="store_true",

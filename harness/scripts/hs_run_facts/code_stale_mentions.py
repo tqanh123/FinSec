@@ -50,9 +50,17 @@ def _names(text: str) -> "set[str]":
 
 
 def _merge_base(root: Path) -> str:
-    import review_recall  # noqa: PLC0415 -- the default-branch resolver the engine already uses
-    branch = review_recall._main_branch(str(root))
+    import git_default_branch  # noqa: PLC0415 -- the default-branch resolver the engine already uses
+    branch = git_default_branch.main_branch(root)
     return engine._git_text(root, "merge-base", branch, "HEAD") if branch else ""
+
+
+def other_language_files(paths) -> "list[str]":
+    """Changed files the Python name-diff below does not read: measured files of
+    another language (a non-`.py` suffix a language pack owns)."""
+    from codegraph._core.lang import capability
+    globs = capability.languages_of_files(paths)
+    return sorted(p for p, lid in globs.items() if lid and lid != capability.DEFAULT)
 
 
 def removed_names(root: Path, idx: dict, paths) -> "set[str]":
@@ -79,4 +87,7 @@ def provide(ctx: dict) -> dict:
     root = Path(ctx["root"])
     names = removed_names(root, idx, ctx.get("subjects") or ())
     value = code_mentions.mention_table(root, idx, {n: (n, False) for n in names})
-    return {"value": value, "basis": _BASIS, "warning": _WARNING}
+    skipped = other_language_files(ctx.get("subjects") or ())
+    warning = _WARNING + ("; skipped_non_python: %d changed file(s) of another language not "
+                          "read (%s)" % (len(skipped), ", ".join(skipped[:5])) if skipped else "")
+    return {"value": value, "basis": _BASIS, "warning": warning}

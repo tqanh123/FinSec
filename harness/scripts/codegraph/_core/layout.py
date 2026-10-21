@@ -281,3 +281,43 @@ def target_descriptor(port_root: Path) -> "tuple[Any, str | None]":
         return None, ("%s declares no `layout.packages_dir` -- the port verbs need it "
                       "to home a dist's tree" % codemap_path)
     return descriptor, None
+
+
+def package_code_dir(package: Path, src_subdir: "str | None" = None) -> Path:
+    """Where one `workspace` package keeps its modules: `<package>/<src_subdir>`
+    when that directory exists — the declared `layout.src_subdir`, `src` when
+    none is declared — else the package directory itself. DETECTED per
+    package, not assumed: code directly under the package directory is legal
+    and common outside uv, and one tree may mix both shapes. Every reader of a
+    workspace package's code asks here, so no two of them judge different
+    trees."""
+    sub = package / (src_subdir or "src")
+    return sub if sub.is_dir() else package
+
+
+def workspace_packages(root_dir: Path) -> list[Path]:
+    """The package directories of one `workspace` root, sorted."""
+    return sorted(x for x in root_dir.iterdir() if x.is_dir() and not x.name.startswith("."))
+
+
+def root_owns(p: Path, r: Any, roots: "Sequence[Any]", repo: Path) -> bool:
+    """True when `r` is the MOST SPECIFIC declared root (by path — longest
+    match wins) covering `p` among `roots`. Reuses `dotted_of`'s own
+    longest-prefix rule (never a second copy of that algorithm), applied to
+    the declared roots' own PATHS instead of `import_roots` — so a file
+    reachable through two overlapping roots (a namespace package's own root
+    nested inside a coarser flat root, e.g. this repo's `rops` under
+    `harness`) is scanned exactly once, by whichever root's path is the
+    deepest match, never once per overlapping root. Without this, an
+    overlapping pair produced two `SourceRef` rows for the SAME file which,
+    once `import_roots` gave both the SAME correctly-resolved module name,
+    silently collided in every dict keyed by module downstream — losing one
+    root's data, not merely double-counting it (see the module docstring's
+    own "cross-root overlap" note, which predates this rule and describes the
+    OLDER, weaker symptom)."""
+    try:
+        rel = p.relative_to(repo).as_posix()
+    except ValueError:
+        return True
+    all_paths = [x.path for x in roots]
+    return dotted_of(rel, all_paths) == dotted_of(rel, [r.path])

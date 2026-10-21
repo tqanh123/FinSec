@@ -167,4 +167,4 @@ class ForbiddenEdgeCheck:
         return out, notes
 
 
-register_kind("forbidden_edge")(require_params("from", "to")(ForbiddenEdgeCheck))
+register_kind("forbidden_edge", languages="*")(require_params("from", "to")(ForbiddenEdgeCheck))

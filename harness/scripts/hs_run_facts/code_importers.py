@@ -1,11 +1,13 @@
 """hs_run_facts.code_importers — the `code.importers` fact provider.
 
-`provide(ctx) -> {value, basis, warning, [not_in_snapshot]}`. `value` =
+`provide(ctx) -> {value, basis, warning, [import_flags], [not_in_snapshot]}`. `value` =
 `{subject_path: [importer_path, ...]}`, DIRECT (one-hop) importers only —
 `codegraph_change_reader._reverse_import_edges`'s own edge, never the
 transitive walk `code.tests_reached` uses. A subject ABSENT from the
 snapshot is never folded into `value` as an empty list (which would read as
 "measured, zero importers") — it is named in `not_in_snapshot` instead.
+`import_flags` = `{subject_path: {importer_path: [flag, ...]}}` for the importers whose
+edge crosses a package boundary (`lang.typescript.boundary`); absent when none does.
 
 BLIND SPOT, on every fill: `_reverse_import_edges` is an EXACT dotted-name
 import-graph edge. A module invoked only through subprocess, a prose
@@ -47,6 +49,7 @@ def provide(ctx: dict) -> dict:
         paths_by_module.setdefault(m["module"], []).append(m["path"])
 
     value: "dict[str, list[str]]" = {}
+    flags: "dict[str, dict[str, list[dict]]]" = {}
     not_in_snapshot = []
     for p in subjects:
         m = by_path.get(p)
@@ -57,8 +60,19 @@ def provide(ctx: dict) -> dict:
         importer_paths = sorted(
             path for mod in importer_mods for path in paths_by_module.get(mod, ()))
         value[p] = importer_paths
+        crossing: "dict[str, list[dict]]" = {}
+        for imp in codegraph_change_reader._modules(idx):
+            if imp["module"] not in importer_mods:
+                continue
+            hits = [f for f in imp.get("import_flags") or () if f["to"].split("::", 1)[0] == m["module"]]
+            if hits:
+                crossing[imp["path"]] = hits
+        if crossing:
+            flags[p] = crossing
 
     out = {"value": value, "basis": _BASIS, "warning": _WARNING}
+    if flags:
+        out["import_flags"] = flags
     if not_in_snapshot:
         out["not_in_snapshot"] = not_in_snapshot
     return out

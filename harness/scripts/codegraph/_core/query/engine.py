@@ -32,6 +32,7 @@ import codegraph_change_reader
 from .. import regex_bound
 from ambiguous_input import Ambiguous, NotFound
 from . import mentions, symbol_uses
+from ..lang.ids import PYTHON, is_path_id, lang_of
 from ..layout import deepest_root, flat_leaf_index, spellings_of
 from ..pathtail import tail_matches
 from ..units import module_unit_map, resolve_unit, select_units, unit_of_dotted
@@ -249,10 +250,10 @@ class QueryEngine:
         mod_unit = module_unit_map(self.idx)
         unresolved: set[str] = set()
 
-        def targets(imports: Iterable[str]) -> set[str]:
+        def targets(imports: Iterable[str], lang: "str | None") -> set[str]:
             out: set[str] = set()
             for x in imports:
-                u = unit_of_dotted(x, mod_unit)
+                u = unit_of_dotted(x, mod_unit, lang)
                 if u is None:
                     unresolved.add(x.split("::", 1)[0])
                 elif u != key:
@@ -261,12 +262,12 @@ class QueryEngine:
 
         def importers(field: str) -> set[str]:
             return {u for u, ms in self.idx["units"].items() if u != key
-                    for m in ms if any(unit_of_dotted(x, mod_unit) == key for x in m[field])}
+                    for m in ms if any(unit_of_dotted(x, mod_unit, m.get("lang")) == key for x in m[field])}
 
         out_m, out_f = set(), set()
         for m in mods:
-            out_m |= targets(m["imports_module_level"])
-            out_f |= targets(m["imports_function_local"])
+            out_m |= targets(m["imports_module_level"], m.get("lang"))
+            out_f |= targets(m["imports_function_local"], m.get("lang"))
         inn_m = importers("imports_module_level")
         inn_f = importers("imports_function_local")
         cyc = sorted((out_m | out_f) & (inn_m | inn_f))
@@ -354,17 +355,28 @@ class QueryEngine:
         to `/` segments: one module resolves, with a note saying so; several are
         `Ambiguous` with every candidate; none is `NotFound` -- never an empty table
         that reads as "no importers"."""
-        names = {m["module"] for _, m in self._records()}
-        if name in names or any(n.startswith(name + ".") for n in names):
+        records = [m for _, m in self._records()]
+        names = {m["module"] for m in records}
+        # by the record's own `lang`, never the string: a Python `app/ts.py` is `app.ts`
+        paths = {m["module"] for m in records if lang_of(m) != PYTHON}
+        dotted = names - paths
+        if name in names:
             return name, None
-        hits = sorted(n for n in names if n.endswith("." + name))
+        # A path id is a file, never a package: no strict prefix of one is a module
+        # (`lang.ids`), and its tail is read on whole `/` segments.
+        typed_path = is_path_id(name, {Path(p).suffix.lower() for p in paths})
+        if not typed_path and any(n.startswith(name + ".") for n in dotted):
+            return name, None
+        hits = sorted(n for n in dotted if n.endswith("." + name)) \
+            + sorted(n for n in paths if n.endswith("/" + name))
         if len(hits) > 1:
-            raise Ambiguous("module", name, hits, "pass more of the dotted name")
+            raise Ambiguous("module", name, hits, "pass more of the name")
         if not hits:
             raise NotFound(f"no module {name!r} in this snapshot, and no module whose "
-                           f"dotted name ends in .{name}", "module", name)
+                           f"dotted name ends in .{name} or whose path ends in /{name}",
+                           "module", name)
         return hits[0], (f"{name!r} is not a module name in this snapshot; read it as "
-                         f"{hits[0]!r}, the one module whose dotted name ends in it")
+                         f"{hits[0]!r}, the one module whose name ends in it")
 
     def importers(self, module: str, depth: int = 1, exact: bool = False) -> QueryResult:
         """Fan-in table: every module that imports `module`, exact dotted-name
@@ -388,6 +400,9 @@ class QueryEngine:
 
         A test-tree file no root measures (`test_modules`) is an importer like
         any other, its `unit` reading `TEST_UNIT`.
+
+        A row whose edge crosses a package boundary carries that edge's
+        `import_flags` as `flags` (`lang.typescript.boundary`); no other row has the key.
 
         WHAT IT CANNOT SEE
             * Exact dotted-name match only: an alias (`import pkg.mod as m`)
@@ -416,8 +431,11 @@ class QueryEngine:
 
         meta: dict[str, tuple[str, str]] = {}     # module -> (unit, path)
         edges: dict[str, set[str]] = {}           # importer module -> imported dotted names
+        flags_of: dict[str, list[dict]] = {}      # importer module -> its `import_flags`
         for unit, m in self._records():
             meta[m["module"]] = (unit, m["path"])
+            if m.get("import_flags"):
+                flags_of[m["module"]] = m["import_flags"]
             edges[m["module"]] = ({base_module(t) for t in m["imports_module_level"]}
                                   | {base_module(t) for t in m["imports_function_local"]})
 
@@ -445,8 +463,12 @@ class QueryEngine:
                 unit, path = meta.get(importer_mod, ("—", "—"))
                 for target in sorted(hit):
                     via = descent_path(target)
-                    rows.append({"module": importer_mod, "unit": unit, "file": path,
-                                "depth": level, "via": via, "reaches": via[-1]})
+                    row = {"module": importer_mod, "unit": unit, "file": path,
+                           "depth": level, "via": via, "reaches": via[-1]}
+                    crossing = [f for f in flags_of.get(importer_mod, ()) if base_module(f["to"]) == target]
+                    if crossing:
+                        row["flags"] = crossing
+                    rows.append(row)
                 # One descent recorded per module (the first target, sorted) —
                 # it only feeds the NEXT hop's path, never a second row here.
                 via_of[importer_mod] = descent_path(sorted(hit)[0])
@@ -478,8 +500,35 @@ class QueryEngine:
                 "distinct_importers": distinct}
         return QueryResult(0, "\n".join(L), data, notes)
 
+    def _importers_using_pack(self, module: str, symbol: str, repo: Path, descriptor: Any, own: dict,
+                              whole: "list[dict]", resolved_note: "str | None") -> QueryResult:
+        """`importers_using` for a TypeScript module: each importer read by the pack."""
+        from codegraph._core.lang.typescript import symbol_uses as ts_uses
+        if descriptor is None:
+            from codegraph._core.descriptor import load
+            descriptor = load(repo / "codemap.yaml", repo).descriptor
+        rows: list[dict] = []
+        dropped: list[str] = []
+        notes: list[str] = [resolved_note] if resolved_note else []
+        with ts_uses.importer_lines(repo, own["path"], symbol, descriptor) as lines_of:
+            for r in whole:
+                try:
+                    text: "str | None" = (repo / r["file"]).read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    text = None
+                if text is None:
+                    notes.append(f"{r['file']}: could not be read -- kept, check it by hand")
+                    rows.append({**r, "lines": None, "unresolved_dynamic": False})
+                    continue
+                lines = lines_of(r["file"], text)
+                if lines:
+                    rows.append({**r, "lines": lines, "unresolved_dynamic": False})
+                else:
+                    dropped.append(r["file"])
+        return self._using_result(module, symbol, rows, dropped, notes, whole, [])
+
     def importers_using(self, module: str, symbol: str, repo: Path,
-                        import_roots: "Iterable[str]" = ()) -> QueryResult:
+                        import_roots: "Iterable[str]" = (), descriptor: Any = None) -> QueryResult:
         """The DIRECT importers of `module` whose own text uses `symbol`
         (`symbol_uses.use_lines`), each with the lines. Depth 1 only: a caller of a
         caller is not a call site of `symbol`. Each importer is read from `repo` (the
@@ -496,18 +545,27 @@ class QueryEngine:
         A module or symbol that is not in the snapshot is NotFound (exit 1), so a typo
         never reads as "no callers"; a unique tail resolves (`resolve_module`).
         Importers of the module ITSELF only: a package's submodules each define
-        their own symbols."""
+        their own symbols. A module of another language is read by its pack
+        (`typescript.symbol_uses`, with the engine `descriptor` declares)."""
         module, resolved_note = self.resolve_module(module)
         mods = {m["module"]: m for mods_ in self.idx["units"].values() for m in mods_}
         own = mods.get(module)
         if own is None:
             raise NotFound(f"importers: no module {module!r} in this snapshot", "module", module)
+        lang = lang_of(own)
+        if lang not in (PYTHON, "typescript"):
+            from hs_family.errors import RefusedError
+            raise RefusedError(f"importers --symbol: {module} is {lang}; symbol uses read python and "
+                               f"typescript only in this build (language_unsupported) -- `graph "
+                               f"importers {module}` lists its importers")
         bound = {t.partition("::")[2] or t.rsplit(".", 1)[-1]
                  for t in own["imports_module_level"] + own["imports_function_local"]}
         if symbol not in {s["name"] for s in own["symbols"]} | bound:
             raise NotFound(f"importers: {module!r} defines or imports no top-level {symbol!r}",
                            "symbol", symbol)
         whole = self.importers(module, depth=1, exact=True).data["rows"]
+        if lang != PYTHON:
+            return self._importers_using_pack(module, symbol, repo, descriptor, own, whole, resolved_note)
         rows: list[dict] = []
         dropped: list[str] = []
         dynamic: list[str] = []
@@ -537,6 +595,11 @@ class QueryEngine:
                 rows.append({**r, "lines": untraced, "unresolved_dynamic": True})
                 continue
             rows.append({**r, "lines": lines, "unresolved_dynamic": False})
+        return self._using_result(module, symbol, rows, dropped, notes, whole, dynamic)
+
+    @staticmethod
+    def _using_result(module: str, symbol: str, rows: "list[dict]", dropped: "list[str]",
+                      notes: "list[str]", whole: "list[dict]", dynamic: "list[str]") -> QueryResult:
         if dynamic:
             notes.append(f"{len(dynamic)} importer(s) write `.{symbol}` on a receiver this "
                          f"tool cannot trace to {module!r} -- kept as unresolved_dynamic, "

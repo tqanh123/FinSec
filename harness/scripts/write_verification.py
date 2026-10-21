@@ -23,6 +23,7 @@ plan would never reach N/N — exactly the class of bug this path exists to kill
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,8 @@ if _THIS not in sys.path:
 _HOOKS = str(Path(__file__).resolve().parent.parent / "hooks")
 if _HOOKS not in sys.path:
     sys.path.append(_HOOKS)
+import artifact_check  # noqa: E402
+import harness_checks  # noqa: E402
 import verification_snapshot as vsnap  # noqa: E402
 import plan_graph  # noqa: E402
 import test_policy  # noqa: E402
@@ -41,7 +44,7 @@ from hook_runtime import resolve_actor  # noqa: E402
 _VERDICTS = {"PASS", "PASS_WITH_RISK", "BLOCKED"}
 _USAGE = (
     "usage: write_verification.py <plan_dir> "
-    "(--phase ID --verdict V [--stage S] [--check name:status ...] | --from FILE|-)")
+    "(--phase ID --verdict V [--stage S] [--check name:status[:result file] ...] | --from FILE|-)")
 
 
 def _die(msg, code=2):
@@ -56,11 +59,53 @@ def _now_iso():
 def _parse_checks(items):
     checks = []
     for it in items or []:
-        name, sep, status = it.partition(":")
+        name, sep, rest = it.partition(":")
+        status, has_source, source = rest.partition(":")
         if not name or not sep or not status:
-            _die("bad --check %r — expected name:status" % it)
-        checks.append({"name": name, "status": status})
+            _die("bad --check %r — expected name:status[:result file]" % it)
+        if has_source and not source:
+            _die("bad --check %r — the result file after the second ':' is empty" % it)
+        check = {"name": name, "status": status}
+        if source:
+            check[_SOURCE] = source
+        checks.append(check)
     return checks
+
+
+_SOURCE = "_result_source"  # a `--check` result file before `_attach_results` places it
+
+
+def _attach_results(rec, plan_dir):
+    """Give each check named with a result file (`--check name:status:<file>`) its
+    `file`, a copy at artifacts/results/<phase>/<name>-<sha256[:12]>.<ext> (the gate
+    reads a result under artifacts/ only), with its `sha256` and `source`. Every source
+    is read before anything is written, and a copy is named by its content, so no
+    write -- a refused one, one a first-wins snapshot does not take, a runner writing
+    its file again -- changes the bytes an earlier record names."""
+    import hashlib
+    art = (plan_dir / "artifacts").resolve()
+    phase = vsnap._safe_phase(rec.get("phase")) or "_"
+    staged = []
+    for c in rec.get("checks") or []:
+        source = c.pop(_SOURCE, None) if isinstance(c, dict) else None
+        if not source:
+            continue
+        src = Path(source).expanduser().resolve()
+        try:
+            with open(src, encoding="utf-8", newline="") as fh:
+                body = fh.read()
+        except (OSError, UnicodeDecodeError) as e:
+            _die("--check %s: result file %s does not read as text: %s" % (c.get("name"), src, e))
+        sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        stem = re.sub(r"[^A-Za-z0-9_-]", "_", str(c.get("name")).replace("/", "__"))
+        suffix = src.suffix if re.fullmatch(r"\.[A-Za-z0-9]{1,10}", src.suffix) else ""
+        rel = "results/%s/%s-%s%s" % (phase, stem, sha[:12], suffix)
+        c.update(file=rel, sha256=sha, source=str(src))
+        staged.append((art / rel, body))
+    import artifact_io
+    for dest, body in staged:  # named by content: a rewrite puts back the same bytes
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        artifact_io.atomic_write_text(dest, body, newline="")
 
 
 def _json_or_die(raw):
@@ -96,6 +141,13 @@ def _build_record(args, plan_name):
             _die("--from carries the record; --stage/--verdict/--check would rewrite it — "
                  "put them in the file")
         rec = _read_from(args.from_src)
+        for c in (rec.get("checks") if isinstance(rec, dict) else None) or []:
+            owned = sorted(k for k in (_SOURCE, "source", "sha256") if isinstance(c, dict) and k in c)
+            if owned or (isinstance(c, dict) and str(c.get("file") or "").startswith("results/")):
+                _die("%s: check %r carries %s — the writer's own: results/ holds only what "
+                     "it copied, with its source and sha256; attach a result with "
+                     "--check name:status:<file>"
+                     % (args.from_src, c.get("name"), ", ".join(owned) or "a file under results/"))
         if args.phase:
             # A cross-check, never an override: the file says which phase it verified.
             named = rec.get("phase") if isinstance(rec, dict) else None
@@ -217,11 +269,52 @@ def _validate_check_names(rec, plan_dir):
            "test_types %s. Tên sai = DoD gate sẽ KHÔNG thấy kết quả này → ship "
            "rớt dù test xanh. Giữ tên thật của công cụ dưới một loại chuẩn: "
            "<type>/<name>%s. Verify lại "
-           "với tên đúng sẽ thay bản ghi này (bản cũ chuyển sang phase-superseded)."
+           "với tên đúng và giữ mọi result file của bản này sẽ thay bản ghi này (bản cũ "
+           "chuyển sang phase-superseded)."
            % (sorted(unknown), listing, _examples(valid)))
     if mode == "hard":
         _die(msg, code=1)
     sys.stderr.write("[advisory] %s\n" % msg)  # soft: warn loudly, still write
+
+
+#: how a tool writes a result in each format the DoD gate reads (test-policy test_types)
+_FORMAT_HINT = {
+    "junit": " (JUnit XML: mypy --junit-xml, pytest --junitxml, vitest/jest qua hs-code test run)",
+    "sarif": " (SARIF: ruff --output-format sarif, eslint qua hs-code check run)",
+    "cobertura": " (Cobertura XML: coverage xml)",
+}
+
+
+def _name_status_only_checks(rec, plan_dir):
+    """Advise on each check whose result file the DoD gate would not pass (missing,
+    outside artifacts/, unparseable, failing), and on each PASS check whose type reads a
+    result file and which carries none: the gate reads the file, not the status.
+    Fail-open: a policy that does not load leaves this to the name check."""
+    try:
+        policy = test_policy.load_test_policy(
+            root=plan_graph.root_for_plan_dir(plan_dir), trace=False)
+    except test_policy.TestPolicyError:
+        return
+    types = policy.get("test_types") or {}
+    for name, fmt, why in artifact_check.unread_results(rec, plan_dir, types):
+        sys.stderr.write("[advisory] write_verification: check %r — DoD gate KHÔNG tính kết quả "
+                         "này ở ship: nó đọc tệp theo format %s%s, và đọc ra: %s. Đường dẫn "
+                         "`file` tính từ thư mục artifacts/ của plan.\n"
+                         % (name, fmt, _FORMAT_HINT.get(fmt or "", ""), why))
+    bare = artifact_check.status_only_checks(rec, types)
+    if bare:
+        phase = vsnap._safe_phase(rec.get("phase")) or "<phase>"
+        sys.stderr.write(
+            "[advisory] write_verification: check PASS %s không kèm result file — DoD "
+            "gate đọc kết quả từ tệp theo format của loại, không đọc trạng thái, nên "
+            "KHÔNG thấy chúng; loại bắt buộc chỉ có trạng thái sẽ rớt ở ship. Gắn tệp: "
+            "--check %s:PASS:<file> (tệp chạy ở máy xa thì kéo về trước: hs-rops fetch "
+            "<đường dẫn xa> <tệp tạm> --lane <lane>); writer chép nó vào artifacts/results/. "
+            "Bản ghi PASS đầu tiên của phase thành %s; lượt verify sau chỉ thay được nó khi "
+            "gắn result file PASS cho mọi loại nó đã có và thêm ít nhất một loại — thêm loại "
+            "chỉ có trạng thái thì không thay (lượt đó tự báo bản ghi của nó nằm ở đâu).\n"
+            % (", ".join("%r (%s)" % (n, f or "không có format") for n, f in bare), bare[0][0],
+               "verification-%s.json" % phase))
 
 
 def _canonical_target(plan_dir):
@@ -267,23 +360,39 @@ def _self_verify(plan_dir, rec):
     written, _problem = vsnap.artifact_check._load_artifact(plan_dir, "verification")
     if got == written:
         return
+    why = ""
+    if isinstance(got, dict) and isinstance(written, dict):
+        try:
+            why = vsnap.kept_reason(plan_dir, written, got)
+        except Exception:  # noqa: BLE001 — an advisory never fails the write
+            why = ""
     sys.stderr.write(
         "[advisory] write_verification: %s keeps an earlier record of phase "
-        "%s (verdict %s, ts %s) — THIS write did NOT take there (first-wins). This "
-        "write (verdict %s) is the phase's latest record: phase-latest-%s.json.\n"
-        % (snap.name, phase, got.get("verdict"), got.get("ts"), rec.get("verdict"), phase))
+        "%s (verdict %s, ts %s) — THIS write did NOT take there (first-wins%s). Plan "
+        "completion and the hard-stage snapshot sweep read %s; the DoD test-policy "
+        "check reads verification.json, this write, until the next write; this "
+        "write (verdict %s) is also the phase's latest record, phase-latest-%s.json.\n"
+        % (snap.name, phase, got.get("verdict"), got.get("ts"),
+           ": " + why if why else "", snap.name, rec.get("verdict"), phase))
 
 
-def _fill_blast_radius(rec: dict, root) -> None:
+def _fill_blast_radius(rec: dict, root, commits=None) -> None:
     """`rec["blastRadius"]` from `hs_run_facts.engine.resolve()`
-    (`code.importers` + `code.tests_reached`, DEFAULT subjects -- the same
-    diff-vs-merge-base + dirty-file scope cook/review already read through
-    `_default_subjects`) — the ONE writer this field has (schema's own
-    description: "never hand-authored"). Never leaves the key half-filled:
-    every branch below sets it to something, even a hard failure of this
-    function's own machinery, because `artifact_check.py`'s gate treats a
+    (`code.importers` + `code.tests_reached`) — the ONE writer this field has
+    (schema's own description: "never hand-authored"). Never leaves the key
+    half-filled: every branch below sets it to something, even a hard failure of
+    this function's own machinery, because `artifact_check.py`'s gate treats a
     MISSING key (never an `unavailable`/`stale` one) as the defect on a
-    code-change verification."""
+    code-change verification.
+
+    The subjects are the files `commits` touched (the phase's own, as its verify
+    names or computes them, recorded beside the answer), else the default
+    subjects: the diff against the default branch's merge-base plus the dirty
+    files — empty once a phase's lane has merged. The answer is filled only when
+    the graph measured at least one subject: `code.importers` keys every measured
+    subject, zero importers included, so an empty value means nothing in scope was
+    measured, and is recorded as unavailable with why — never as `{}`, which read as
+    "nothing depends on this"."""
     try:
         import hs_run
         import hs_run_facts.engine as facts_engine
@@ -291,10 +400,24 @@ def _fill_blast_radius(rec: dict, root) -> None:
         rec["blastRadius"] = {"unavailable": True,
                               "reason": "facts engine unavailable: %s: %s" % (type(e).__name__, e)}
         return
+    commits = list(commits or [])
     try:
+        if facts_engine.project_name(Path(root)) is None:
+            subjects = None  # not adopted: resolve() says so without a scope to pay for
+        elif commits:
+            outside = facts_engine.commits_outside_history(Path(root), commits)
+            if outside:
+                rec["blastRadius"] = {
+                    "unavailable": True, "commits": commits,
+                    "reason": "commit(s) not in HEAD's history: %s"
+                              % ", ".join(c[:9] for c in outside)}
+                return
+            subjects = facts_engine.subjects_of_commits(Path(root), commits)
+        else:
+            subjects = facts_engine.default_subjects(Path(root))
         policy = hs_run.fact_providers_policy()
         outcome = facts_engine.resolve(
-            root=root, declared=["code.importers", "code.tests_reached"], subjects=None,
+            root=root, declared=["code.importers", "code.tests_reached"], subjects=subjects,
             providers=policy["providers"], sources=policy["sources"],
             domain="write_verification", state="blast_radius")
     except Exception as e:  # noqa: BLE001 — never block a verification write on this
@@ -303,6 +426,11 @@ def _fill_blast_radius(rec: dict, root) -> None:
                                         % (type(e).__name__, e)}
         return
 
+    if "facts" not in outcome:
+        # The engine's own failure (a broken store, a crashed provider), in its words.
+        rec["blastRadius"] = {"unavailable": True,
+                              "reason": outcome.get("next_action") or "code facts unavailable"}
+        return
     facts = outcome.get("facts") or {}
     importers = facts.get("code.importers") or {}
     tests = facts.get("code.tests_reached") or {}
@@ -324,15 +452,39 @@ def _fill_blast_radius(rec: dict, root) -> None:
                      or "code facts unavailable",
         }
         return
+    basis = ("the phase's %d commit(s)" % len(commits) if commits else "default subjects")
+    if not importers.get("value"):
+        rec["blastRadius"] = {"unavailable": True, "reason": _unmeasured_scope(
+            subjects, importers.get("not_in_snapshot") or [], basis)}
+        if commits:
+            rec["blastRadius"]["commits"] = commits
+        return
     rec["blastRadius"] = {
         "reverseDeps": importers.get("value") or {},
         "testsTouched": tests.get("value") or [],
-        "basis": "code.importers + code.tests_reached (hs_run_facts.engine), default subjects",
+        "basis": "code.importers + code.tests_reached (hs_run_facts.engine), %s" % basis,
         "snapshot": importers.get("snapshot") or tests.get("snapshot"),
     }
+    if commits:
+        rec["blastRadius"]["commits"] = commits
 
 
-def _maybe_fill_blast_radius(rec: dict, plan_dir: Path) -> None:
+def _unmeasured_scope(subjects, not_in_snapshot: list, basis: str) -> str:
+    """Why a blast radius measured no subject at all."""
+    if subjects is None:
+        return ("no subject scope: there is no default branch to diff against and no "
+                "phase commits were named")
+    if not subjects:
+        return ("no file in scope: %s touch no file on disk" % basis if basis != "default subjects"
+                else "no file in scope: nothing differs from the default branch's merge-base "
+                     "and the tree is clean")
+    shown = ", ".join(sorted(not_in_snapshot)[:5]) + (
+        " … +%d more" % (len(not_in_snapshot) - 5) if len(not_in_snapshot) > 5 else "")
+    return ("none of the %d file(s) in scope (%s) is a module the code graph measures: %s"
+            % (len(subjects), basis, shown))
+
+
+def _maybe_fill_blast_radius(rec: dict, plan_dir: Path, commits=None) -> None:
     """Only for a CODE change — `change_class_derivation.derive_from_repo`'s
     OWN `src_changed` signal, the exact predicate `artifact_check.py`'s
     gate re-derives too (never trust a self-declared `change_class`: see
@@ -347,7 +499,7 @@ def _maybe_fill_blast_radius(rec: dict, plan_dir: Path) -> None:
         return
     if "src_changed" not in derivation.signals:
         return
-    _fill_blast_radius(rec, root)
+    _fill_blast_radius(rec, root, commits)
 
 
 def _trace(rec):
@@ -368,18 +520,35 @@ def main(argv=None):
     ap.add_argument("--stage")
     ap.add_argument("--verdict")
     ap.add_argument("--check", action="append", default=[])
+    ap.add_argument("--commits", default="",
+                    help="the phase's own commits, comma-joined: the blast radius is "
+                         "scoped to the files they touched")
     args = ap.parse_args(argv)
+    commits = [c for c in args.commits.split(",") if c]
+    bad = [c for c in commits if not re.fullmatch(r"[0-9a-f]{7,64}", c)]
+    if bad:
+        ap.error("--commits takes commit hashes, comma-joined: %s" % ", ".join(bad))
 
     plan_dir = Path(args.plan_dir).resolve()
     rec = _build_record(args, plan_dir.name)
     _check_phase_is_node(plan_dir, rec["phase"])
+    try:
+        clash = harness_checks.fold_into(rec, plan_dir)
+    except harness_checks.LedgerError as e:
+        _die("write_verification: %s" % e)
+    if clash:
+        _die("write_verification: %s ran under the harness for phase %s (%s) -- its result is "
+             "folded in from there; drop the --check of the same name"
+             % (", ".join(clash), rec["phase"], harness_checks.ledger_path(plan_dir, rec["phase"])))
     bad_status = _invalid_statuses(rec)
     if bad_status:
         # Hard, unlike the check-NAME ramp above: a name typo degrades a gate
         # reading, an off-enum status is a record no reader can interpret at all.
         _die("write_verification: %s" % "\n  ".join(bad_status), code=1)
     _validate_check_names(rec, plan_dir)  # off|soft|hard ramp — hard exits before any write
-    _maybe_fill_blast_radius(rec, plan_dir)
+    _attach_results(rec, plan_dir)
+    _name_status_only_checks(rec, plan_dir)
+    _maybe_fill_blast_radius(rec, plan_dir, commits)
 
     target, sibling = _canonical_target(plan_dir)
     _atomic_write(target, rec)

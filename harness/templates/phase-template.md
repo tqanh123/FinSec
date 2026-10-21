@@ -1,7 +1,6 @@
 ---
 phase: {{NUM}}
 title: "{{PHASE_TITLE}}"
-status: pending
 plan: {{PLAN_ID}}
 created: {{CREATED}}
 ---

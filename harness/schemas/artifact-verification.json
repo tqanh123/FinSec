@@ -145,7 +145,7 @@
     },
     "blastRadius": {
       "type": "object",
-      "description": "Optional/additive: reverse-deps + tests touched by a code change, filled by write_verification.py itself from hs_run_facts.engine (code.importers + code.tests_reached, default subjects) -- never hand-authored. Absent on a verification predating this field, or on a non-code change (docs/config-only) the writer never attempted to fill. On a code change, artifact_check.py's gate blocks a blastRadius that is present but empty or half-filled, or a marker with no reason; an absent key passes with a trace (every verification written before the field has none), and so does a key carrying unavailable/stale -- the codebase not having adopted code-graph snapshots, or the snapshot being stale, is not this change's fault.",
+      "description": "Optional/additive: reverse-deps + tests touched by a code change, filled by write_verification.py itself from hs_run_facts.engine (code.importers + code.tests_reached) over the files the phase's own commits touched (cook verify hands them over), else the default subjects -- never hand-authored. Filled only when the code graph measured at least one file in scope. Absent on a verification predating this field, or on a non-code change (docs/config-only) the writer never attempted to fill. On a code change, artifact_check.py's gate blocks a blastRadius that is present but empty or half-filled, or a marker with no reason; an absent key passes with a trace (every verification written before the field has none), and so does a key carrying unavailable/stale -- the codebase not having adopted code-graph snapshots, or the snapshot being stale, is not this change's fault.",
       "properties": {
         "reverseDeps": {
           "type": "object",
@@ -164,9 +164,14 @@
           "type": "string",
           "description": "the code-graph snapshot id the facts were read from"
         },
+        "commits": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "the phase's commits whose touched files were the subject scope, when the verify named or computed them"
+        },
         "unavailable": {
           "type": "boolean",
-          "description": "true when the facts engine could not answer at all (no codemap.yaml adopted, or the engine crashed) -- see reason"
+          "description": "true when the facts engine could not answer at all (no codemap.yaml adopted, the engine crashed, a commit outside HEAD's history) or the code graph measured no file in scope -- see reason"
         },
         "stale": {
           "type": "boolean",

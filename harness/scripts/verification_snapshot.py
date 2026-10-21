@@ -5,9 +5,12 @@ A plan's canonical verification.{json,yaml} is OVERWRITTEN every phase (it is th
 current-phase verdict the gate reads O(1)). That makes it useless for "are all N
 phases done?" — only the last phase's verdict survives. So completion is DERIVED,
 not asserted: when a verification carrying verdict PASS + a phase id is written,
-copy it to verification-<phase>.json. First-wins for a snapshot that counts its
-phase done; one that does not yields to a write that does, and the record it
-replaces is appended to phase-superseded-<phase>.jsonl.
+copy it to verification-<phase>.json. First-wins: a snapshot that counts its phase
+done yields only to a write that shows the DoD gate strictly more — every name a known
+type, a passing result for every type the snapshot has one for, and one more type or a
+name the snapshot carried that the gate cannot see (`_holds_more`). One that does not
+count yields to a write that does. The record replaced is appended to
+phase-superseded-<phase>.jsonl.
 
 This module is the SINGLE home of that logic so the two write paths share it
 byte-for-byte: the PostToolUse hook (phase_progress_writer.py) for verifications
@@ -131,8 +134,8 @@ def record_latest(plan_dir: Path) -> None:
 
 def snapshot(plan_dir: Path) -> None:
     """Copy the plan's canonical verification to verification-<phase>.json when it
-    is a PASS carrying a safe phase id and no snapshot exists yet — or the one
-    that exists does not count and this one does (`_supersede`)."""
+    is a PASS carrying a safe phase id and no snapshot exists yet — or `_supersede`
+    lets it replace the one that exists."""
     rec, problem = artifact_check._load_artifact(plan_dir, "verification")
     if rec is None or not isinstance(rec, dict):
         return  # unreadable / not an object -> degrade, no snapshot
@@ -146,7 +149,7 @@ def snapshot(plan_dir: Path) -> None:
         return  # missing/unsafe phase -> degrade (under-count is safe)
     target = plan_dir / "artifacts" / ("verification-%s.json" % phase)
     if target.exists() and not _supersede(plan_dir, phase, target, rec):
-        return  # first-wins: a snapshot that counts is never overwritten
+        return  # first-wins: a counting snapshot stays unless this one holds more
     # Re-serialize the parsed record as JSON so a verification.yaml source still
     # lands as the .json form derive globs, with identical content. Durable write:
     # fsync'd tmp before replace so a crash never leaves empty gate evidence.
@@ -155,10 +158,9 @@ def snapshot(plan_dir: Path) -> None:
 
 
 def _supersede(plan_dir: Path, phase: str, target: Path, rec: dict) -> bool:
-    """True when `rec` may replace the existing snapshot: the existing one does
-    not count its phase done (`derive_plan_completion.verification_shortfall`),
-    or names checks outside test-policy's `test_types`, and `rec` counts with every
-    name known. The replaced record is appended to
+    """True when `rec` counts and may replace the existing snapshot: the existing
+    one does not count its phase done (`derive_plan_completion.verification_shortfall`),
+    or `_holds_more(rec, old)`. The replaced record is appended to
     `phase-superseded-<phase>.jsonl` first; if that append fails, nothing is
     replaced — evidence is moved aside, never dropped."""
     import derive_plan_completion as dpc
@@ -173,14 +175,10 @@ def _supersede(plan_dir: Path, phase: str, target: Path, rec: dict) -> bool:
     except ValueError:
         old = old_text
     if isinstance(old, dict) and dpc.verification_shortfall(old) is None:
-        # A counting snapshot is immovable — unless its check names are ones the DoD
-        # gate cannot see and `rec` names every check right: a soft name check wrote
-        # it, and first-wins would otherwise keep the wrong names for good.
-        import plan_graph
-        import test_policy
-        root = plan_graph.root_for_plan_dir(plan_dir)
-        if (not test_policy.unknown_check_names(old, root=root)
-                or test_policy.unknown_check_names(rec, root=root)):
+        try:
+            if not _holds_more(plan_dir, rec, old):
+                return False
+        except Exception:  # noqa: BLE001 — telemetry-grade: degrade to first-wins
             return False
     try:
         from datetime import datetime, timezone
@@ -200,6 +198,57 @@ def _supersede(plan_dir: Path, phase: str, target: Path, rec: dict) -> bool:
     except Exception:  # noqa: BLE001 — telemetry-grade: degrade to first-wins
         return False
     return True
+
+
+def _holds_more(plan_dir: Path, rec: dict, old: dict) -> bool:
+    """True when `rec` shows the DoD gate strictly more than the counting snapshot
+    `old`: every name in `rec` is a known type, the types `rec` holds a passing result
+    for (`artifact_check.evidence_types`) include every one `old` holds, and `rec` adds
+    one or `old` carries a name the gate cannot see. Otherwise first-wins: no
+    replacement drops a type the snapshot held a passing result for."""
+    return _short_of(plan_dir, rec, old) is None
+
+
+def _short_of(plan_dir: Path, rec: dict, old: dict):
+    """None when `rec` holds more than `old` (`_holds_more`), else why it does not."""
+    import plan_graph
+    import test_policy
+    try:
+        policy = test_policy.load_test_policy(
+            root=plan_graph.root_for_plan_dir(plan_dir), trace=False)
+    except test_policy.TestPolicyError as e:
+        return "the project's test policy does not load (%s)" % e
+    types = policy.get("test_types") or {}
+
+    def unseen(r):  # names the gate cannot see, whatever check_name_validation says
+        return [c.get("name") for c in r.get("checks") or []
+                if not (isinstance(c, dict) and test_policy.check_type(c.get("name")) in types)]
+
+    hidden = unseen(rec)
+    if hidden:
+        return ("it names %s, which the gate cannot see — a name is <type>/<name> with "
+                "<type> one of %s" % (", ".join(map(repr, hidden)), ", ".join(sorted(types))))
+    have = artifact_check.evidence_types(old, plan_dir, types)
+    got = artifact_check.evidence_types(rec, plan_dir, types)
+    if not got >= have:
+        return ("it holds no passing result file for %s, which the kept record does"
+                % ", ".join(sorted(have - got)))
+    if got > have or unseen(old):
+        return None
+    return ("it adds no type with a passing result file (it holds %s) and the kept "
+            "record names nothing the gate cannot see" % (", ".join(sorted(got)) or "none"))
+
+
+def kept_reason(plan_dir: Path, rec: dict, old: dict) -> str:
+    """Why a counting snapshot `old` was kept over `rec`, in the words of the rule
+    that kept it (`_supersede`'s order); "" when none names one."""
+    import derive_plan_completion as dpc
+    short = dpc.verification_shortfall(rec)
+    if short is not None:
+        return "it does not count its phase done itself (%s)" % short
+    if dpc.verification_shortfall(old) is not None:
+        return ""  # a kept record that does not count yields to one that does
+    return _short_of(plan_dir, rec, old) or ""
 
 
 def drive_lifecycle(plan_dir: Path) -> None:

@@ -43,8 +43,17 @@ def venvs_in(values) -> list[str]:
 
 
 
+def tree_name(repo: pathlib.Path) -> str:
+    """This tree's name on the far side: the repo dir's, and for a linked worktree its
+    main checkout's too (`<main>--<worktree>`) -- two repos' worktrees named alike must
+    not share one dir that both sync into."""
+    from rops.ropslib.worktree import main_checkout
+    main = main_checkout(repo)
+    return f"{main.name}--{repo.name}" if main else repo.name
+
+
 def remote_dir(repo: pathlib.Path) -> str:
-    return f"{REMOTE_ROOT}/{repo.name}"
+    return f"{REMOTE_ROOT}/{tree_name(repo)}"
 
 
 def excludes(repo: pathlib.Path) -> str:

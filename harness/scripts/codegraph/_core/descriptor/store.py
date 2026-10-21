@@ -40,7 +40,7 @@ from hs_family.versioning import int_version_problem
 
 from . import obligations as _obligations
 from .model import (COPY_KINDS, CopiesSpec, DescriptorError, ProjectDescriptor, Root,
-                    KERNEL_SCHEMA_VERSION, gitignore_spec, ScanSpec, as_driver_spec,
+                    DESCRIPTOR_SCHEMA_VERSION, gitignore_spec, ScanSpec, as_driver_spec,
                     as_entrypoints_spec, check_roots, duplicate_keys)
 
 #: v2 top-level keys. An unknown key is an ERROR, not freedom: `thresholds`
@@ -49,7 +49,7 @@ V2_KEYS: frozenset[str] = frozenset({
     "schema_version", "project", "layout", "scan", "drivers", "thresholds",
     "rules", "groups", "domains", "snapshot", "owners", "entrypoints",
     "namespace_root", "import_roots", "scaffold", "docs", "preset", "adapters",
-    "copies", "test_select", "obligations",
+    "copies", "test_select", "obligations", "languages", "coverage",
 })
 
 #: `layout:` sub-keys (F9). Unchecked before this door: a `layout:` typo
@@ -208,7 +208,7 @@ def load(path: Path, repo: Path | None = None) -> LoadedDescriptor:
             raise DescriptorError(
                 f"{path}: uses `extends:` but declares no `schema_version` of its own —\n"
                 f"  a preset may carry one for a generator's convenience, but loading must\n"
-                f"  never inherit it: declare `schema_version: {KERNEL_SCHEMA_VERSION}` here.")
+                f"  never inherit it: declare `schema_version: {DESCRIPTOR_SCHEMA_VERSION}` here.")
         from ..presets import resolve_doc  # local: model->presets is one-way
         doc = resolve_doc(doc)
 
@@ -219,10 +219,10 @@ def load(path: Path, repo: Path | None = None) -> LoadedDescriptor:
 
 def _load_v2(doc: dict[str, Any], path: Path, repo: Path | None) -> LoadedDescriptor:
     version = doc["schema_version"]
-    if int_version_problem(version, frozenset({KERNEL_SCHEMA_VERSION})) is not None:
+    if int_version_problem(version, frozenset({DESCRIPTOR_SCHEMA_VERSION})) is not None:
         raise DescriptorError(
             f"{path}: schema_version {version!r} — this kernel reads "
-            f"{KERNEL_SCHEMA_VERSION} only; no legacy-codec fallback ships in this build")
+            f"{DESCRIPTOR_SCHEMA_VERSION} only; no legacy-codec fallback ships in this build")
     unknown = sorted(set(doc) - V2_KEYS)
     if unknown:
         raise DescriptorError(
@@ -403,8 +403,16 @@ def _load_v2(doc: dict[str, Any], path: Path, repo: Path | None) -> LoadedDescri
         except AdapterError as e:
             raise DescriptorError(str(e)) from None
 
+    languages = _languages(doc.get("languages", _ABSENT), path)
+
+    import coverage_floors
+    try:
+        coverage_floors.declared_floors(doc.get("coverage"), groups)
+    except coverage_floors.CoverageSpecError as e:
+        raise DescriptorError(f"{path}: {e}") from None
+
     descriptor = ProjectDescriptor(
-        schema_version=KERNEL_SCHEMA_VERSION, project=project,
+        schema_version=DESCRIPTOR_SCHEMA_VERSION, project=project,
         roots=tuple(roots), auto_discover=auto, scan=scan, drivers=drivers,
         thresholds=dict(thresholds), rules=tuple(rules), groups=tuple(groups),
         domains=dict(domains), namespace_root=namespace_root,
@@ -414,6 +422,7 @@ def _load_v2(doc: dict[str, Any], path: Path, repo: Path | None) -> LoadedDescri
         entrypoints=entrypoints, preset=tuple(preset_raw),
         path=path, owners=owners_doc, source_ledgers=source_ledgers, adapters=adapters,
         copies=copies, test_select=test_select, obligations=obligations,
+        languages=languages, coverage=dict(doc.get("coverage") or {}),
     )
     if repo is not None and not descriptor.auto_discover:
         check_repo(descriptor, repo)
@@ -432,9 +441,9 @@ def _load_legacy(doc: dict[str, Any], path: Path, repo: Path | None) -> LoadedDe
             f"claims it (registered: {names}).\n"
             f"  No implicit default: loading an unclaimed legacy document would guess its\n"
             f"  schema. Register the owning domain's codec, or migrate to schema_version: "
-            f"{KERNEL_SCHEMA_VERSION}.")
+            f"{DESCRIPTOR_SCHEMA_VERSION}.")
     descriptor = claimer.to_descriptor(doc, path)
-    if descriptor.schema_version >= KERNEL_SCHEMA_VERSION:
+    if descriptor.schema_version >= DESCRIPTOR_SCHEMA_VERSION:
         raise DescriptorError(
             f"{path}: legacy codec {claimer.name!r} returned schema_version "
             f"{descriptor.schema_version} — legacy codecs must map DOWN, not forward")
@@ -498,6 +507,98 @@ def _check_dist_docs(templates: Any, path: Path) -> None:
                 isinstance(k, str) and k and isinstance(v, str) for k, v in ph.items()):
             raise DescriptorError(f"{where}: `placeholders` maps literal template text to a "
                                   "value string")
+
+
+_ABSENT = object()
+
+
+def _checks(lid: str, block: Any, path: Path) -> None:
+    """`languages.<lid>.checks`: every key (`static_checks`), and each grace's DEC in the
+    repo's decision register."""
+    import policy_floor
+    import static_checks
+    try:
+        specs = static_checks.merge(lid, block, path.parent)
+    except static_checks.CheckSpecError as e:
+        raise DescriptorError(f"{path}: {e}") from None
+    graced = [s for s in specs if s.grace]
+    known = policy_floor.dec_ids(path.parent) if graced else set()
+    for s in graced:
+        if s.grace["dec"] not in known:
+            raise DescriptorError(f"{path}: `languages.{lid}.checks.{s.id}.grace.dec` {s.grace['dec']} is "
+                                  f"not in the decision register (docs/decisions.yaml)")
+
+
+def _languages(raw: Any, path: Path) -> "dict[str, dict[str, Any]]":
+    """`languages:` -> {pack id: options}. Absent: Python alone. Every id must be a
+    row of the bin's language book and every option one its row declares; a pack
+    declaring `units` has its rules parsed here, so a bad rule stops the load."""
+    if raw is _ABSENT:
+        return {"python": {}}
+    if not isinstance(raw, dict):
+        raise DescriptorError(f"{path}: `languages:` must be a mapping of language id -> "
+                              f"options (e.g. `python: {{}}`)")
+    if not raw:
+        raise DescriptorError(f"{path}: `languages:` names no language — nothing would be "
+                              f"measured; omit it for Python alone")
+    from ..lang import registry as lang_registry
+    from ..lang.base import LanguageError
+    from ..lang.unit_policy import parse_rules
+    try:
+        packs = {p.id: p for p in lang_registry.packs()}
+    except LanguageError as e:
+        raise DescriptorError(str(e)) from None
+    out: "dict[str, dict[str, Any]]" = {}
+    for lid, opts in raw.items():
+        if lid not in packs:
+            raise DescriptorError(f"{path}: `languages:` unknown language {lid!r}; known: "
+                                  f"{', '.join(sorted(packs))}")
+        opts = {} if opts is None else opts
+        if not isinstance(opts, dict):
+            raise DescriptorError(f"{path}: `languages.{lid}` must be a mapping of options "
+                                  f"(or empty)")
+        valid = packs[lid].options
+        unknown = sorted(set(opts) - set(valid))
+        if unknown:
+            raise DescriptorError(f"{path}: `languages.{lid}` unknown option(s) "
+                                  f"{', '.join(unknown)}; valid: {', '.join(valid) or '(none)'}")
+        if "units" in opts:
+            try:
+                parse_rules(opts["units"], f"{path}: languages.{lid}.units")
+            except LanguageError as e:
+                raise DescriptorError(str(e)) from None
+        engines = [e.name for e in packs[lid].engines]
+        if engines and "engine" not in opts:
+            raise DescriptorError(
+                f"{path}: `languages.{lid}` needs `engine:` — one of {', '.join(engines)}. "
+                f"The engines hash differently, so one is never chosen for you")
+        if "engine" in opts and opts["engine"] not in engines:
+            raise DescriptorError(f"{path}: `languages.{lid}` engine {opts['engine']!r} is not "
+                                  f"in the language book; available: {', '.join(engines) or '(none)'}")
+        cap = opts.get("max_file_bytes")
+        if "max_file_bytes" in opts and (not isinstance(cap, int) or isinstance(cap, bool) or cap < 1):
+            raise DescriptorError(f"{path}: `languages.{lid}.max_file_bytes` must be a whole "
+                                  f"number of bytes, 1 or more")
+        cmd = opts.get("resolver_command")
+        if "resolver_command" in opts and (not isinstance(cmd, list) or not cmd
+                                           or not all(isinstance(c, str) and c for c in cmd)):
+            raise DescriptorError(f"{path}: `languages.{lid}.resolver_command` must be a non-empty "
+                                  f"list of argv strings")
+        if "runners" in opts:
+            import test_runners
+            try:
+                test_runners.merge(lid, opts["runners"])
+            except test_runners.RunnerError as e:
+                raise DescriptorError(f"{path}: {e}") from None
+        if "checks" in opts:
+            _checks(str(lid), opts["checks"], path)
+        secs = opts.get("resolver_timeout_s")
+        if "resolver_timeout_s" in opts and (not isinstance(secs, (int, float)) or isinstance(secs, bool)
+                                             or secs <= 0):
+            raise DescriptorError(f"{path}: `languages.{lid}.resolver_timeout_s` must be a number of "
+                                  f"seconds above 0")
+        out[str(lid)] = dict(opts)
+    return out
 
 
 def _source_ledgers(docs_doc: Any, path: Path) -> tuple[dict[str, Any], ...]:

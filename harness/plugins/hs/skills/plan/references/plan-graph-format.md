@@ -244,3 +244,7 @@ python3 "${HARNESS_BIN_ROOT:-.}"/harness/scripts/plan_graph.py <plan_dir> --fact
 
 A human decides whether to split, at the plan's existing approval step — this
 tool has no opinion of its own.
+
+## After a split
+
+The parent, its children, the edges between them and a waived edge: `plan-split.md`, beside this file.

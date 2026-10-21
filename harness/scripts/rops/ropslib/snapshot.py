@@ -14,6 +14,11 @@ Its own venv: the lane's sync command (`lane.sync_plan`) runs inside the worktre
 uv repo gets a fresh `.venv` there. What a `kill -9` of THIS process leaves behind is
 the one thing `finally` cannot reach: the dir is printed up front (`at-<sha>-<pid>-<t>`
 next to the bare repo) so it can be removed by hand.
+
+The worktree's sync is not the command: it takes the lane's own locks only (never a
+`--lock` the call names) and waits on them as long as a lock wait may. A run that timed
+out is killed by the process group it recorded, not only by its cwd — one still waiting
+on a lock has not entered the worktree yet.
 """
 from __future__ import annotations
 
@@ -25,7 +30,7 @@ import sys
 import time
 
 from hs_family import UsageError
-from rops.ropslib.exec import report, run_remote
+from rops.ropslib.exec import alive_in_pgid, kill_tree, pgid_path, report, run_remote
 from rops.ropslib.transport import sq
 
 REF_PREFIX = "refs/rops-at/"
@@ -79,6 +84,12 @@ def run_at(cfg, host, rev: str, command: str, *, timeout_s: int, tail: int | Non
 
     # SIGTERM (a supervisor's timeout) must reach `finally` too, not end the process.
     prev = signal.signal(signal.SIGTERM, _raise_interrupt) if _main_thread() else None
+    logs: list = []
+
+    def step(c, cmd, **k) -> int:
+        res = run_remote(c, host, cmd, **k)
+        logs.append(getattr(res, "log", ""))
+        return report(res)
     try:
         p = subprocess.run(["git", "-C", str(cfg.repo), "push", "-q", "--force", "--no-verify",
                             push_url(host, bare), f"{sha}:{ref}"], text=True, capture_output=True)
@@ -99,18 +110,29 @@ def run_at(cfg, host, rev: str, command: str, *, timeout_s: int, tail: int | Non
             print(why)
         else:
             path = cfg.get("ROPS_PATH_PREPEND", "$HOME/.local/bin")
-            rc = report(run_remote(at_cfg, host, f"export PATH={path}:$PATH && {cmd}",
-                                   timeout_s=900, tail=3, label=f"{label}-at-sync"))
+            rc = step(lane_verb._rebuild_cfg(at_cfg), f"export PATH={path}:$PATH && {cmd}",
+                      timeout_s=lane_verb._step_timeout(cfg), tail=3, label=f"{label}-at-sync")
             if rc:
                 return rc
-        return report(run_remote(at_cfg, host, command, timeout_s=timeout_s, tail=tail,
-                                 label=label))
+        return step(at_cfg, command, timeout_s=timeout_s, tail=tail, label=label)
     finally:
         if prev is not None:
             signal.signal(signal.SIGTERM, prev)
+        _kill_runs(host, logs)
         done = host.run(f"bash -c {sq(cleanup_script(bare, wt, ref))}", timeout=120)
         print(f"at: {wt} removed" if done.returncode == 0
               else f"!! at: could not remove {host.name}:{wt} — remove it by hand")
+
+
+def _kill_runs(host, logs: list) -> None:
+    """Kill the process group each run of this call recorded, when anyone is left in it."""
+    for log in filter(None, logs):
+        pg = host.out(f"cat {pgid_path(log)} 2>/dev/null")
+        if alive_in_pgid(host, pg) > 0:
+            rc, said = kill_tree(host, pg)
+            if rc:
+                print(f"!! at: pgid {pg} still running ({said.strip()}) — stop it by hand: "
+                      f"hs-rops kill {pg}", file=sys.stderr)
 
 
 def shared_env_note(cfg) -> None:

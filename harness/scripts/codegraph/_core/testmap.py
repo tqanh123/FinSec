@@ -105,6 +105,8 @@ class TestFile:
     funcs: "list[TestFunc]" = field(default_factory=list)
     import_touch: "tuple[str, ...]" = ()          # module-level/function-local imports
     outside_patch_touch: "tuple[str, ...]" = ()   # patch strings outside every func/class
+    #: the pack that named it ("" for Python): its test functions are read only for Python
+    lang: str = ""
 
     def touch(self) -> "frozenset[str]":
         out: set = set(self.import_touch) | set(self.outside_patch_touch)
@@ -119,6 +121,14 @@ class TestMap:
 
     def all_funcs(self) -> "list[TestFunc]":
         return [f for tf in self.files for f in tf.funcs]
+
+    def function_level_unavailable(self, unit: "str | None" = None) -> "list[dict[str, str]]":
+        """The test files whose functions this build does not read (another language's),
+        touching `unit` when given: listed, so a function-level count never reads 0
+        for them in silence."""
+        return [{"path": tf.path, "reason": "%s test functions are not read in this build" % tf.lang}
+                for tf in sorted(self.files, key=lambda t: t.path)
+                if tf.lang and (unit is None or unit in tf.touch())]
 
 
 # Membership lookups live in `units` (the `graph unit` edges read them too);
@@ -159,6 +169,10 @@ def _build_test_file(m: dict, mod_unit: "dict[str, str]", root: Path,
     path = m["path"]
     if not layout.is_test_file(path):
         return None
+    if m.get("lang"):
+        touch = {mod_unit[t.split("::", 1)[0]] for t in list(m.get("imports_module_level", []))
+                 + list(m.get("imports_function_local", [])) if t.split("::", 1)[0] in mod_unit}
+        return TestFile(path=path, import_touch=tuple(sorted(touch)), lang=m["lang"])
     text = _read_text(root / path)
 
     line_patches: "dict[int, set[str]]" = {}
@@ -211,7 +225,7 @@ def build_test_map(idx: dict, root: Path) -> TestMap:
     from codegraph._core.snapshot_bridge import bridge_records
 
     mod_unit = _module_unit_map(idx)
-    layout = build_test_layout(root)
+    layout = build_test_layout(root).with_roles(idx)
     files: "list[TestFile]" = []
     for _unit, mods in idx.get("units", {}).items():
         for m in mods:

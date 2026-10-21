@@ -300,7 +300,7 @@ def resolve_current(base: Path, root: Path, descriptor: Any) -> "tuple[Path, str
         raise SnapshotMissing(missing_message(base))
     scope = dirty_scope(root, descriptor)
     dirty = working_tree_dirty(root, scope)
-    key = reuse_key(root, descriptor, dirty=dirty)
+    key = reuse_key(root, descriptor, dirty=dirty, scope=scope)
     if key is not None:
         for d in snaps:
             try:

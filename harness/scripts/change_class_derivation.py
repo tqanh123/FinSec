@@ -18,8 +18,9 @@ Hard rules:
     extracts) WINS but is recorded as a `change_class_override` trace (actor+ts)
     so the bypass is git-visible.
 
-Path ownership context comes from detect_techstack (read-only); the test-file
-heuristics below cover the common conventions across the detected stacks.
+A changed file is a test when the repo's code-map snapshot records it as one (the
+role its language pack gave it -- a story is not a test); the naming heuristics
+below cover every file no fresh snapshot holds.
 """
 
 import os
@@ -41,7 +42,7 @@ _KNOWN_CLASSES = ("feature", "bugfix", "refactor", "dep_bump_major", "release")
 # *Test/*Tests, Failsafe *IT/*ITCase — by filename, even outside a /test/ dir).
 _TEST_PATH_RE = re.compile(
     r"(?:^|/)(?:tests?|__tests__)/|(?:^|/)test_[^/]+\.py$|_test\.(?:py|go)$"
-    r"|\.(?:test|spec)\.[jt]sx?$|(?:Test|Tests|IT|ITCase)\.java$")
+    r"|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:Test|Tests|IT|ITCase)\.java$")
 # Manifests whose version-range edits signal a dependency bump.
 _MANIFEST_NAMES = ("package.json", "pyproject.toml", "go.mod", "Cargo.toml",
                    "requirements.txt", "Pipfile", "setup.py", "setup.cfg")
@@ -51,18 +52,56 @@ _NONCODE_RE = re.compile(r"\.(?:md|rst|txt|cfg|ini|toml|ya?ml|json|lock)$"
                          r"|(?:^|/)docs?/", re.IGNORECASE)
 
 
-def _is_test_path(p: str) -> bool:
+#: `derive(role=...)` not given: read the snapshot's roles itself
+_UNREAD = object()
+
+
+def _is_test_path(p: str, role=None) -> bool:
+    """`role`: `_snapshot_roles(root)` -- its answer wins where it gives one."""
+    decided = role(p) if role is not None else None
+    if decided is not None:
+        return decided == "test"
     return bool(_TEST_PATH_RE.search(p))
+
+
+def test_path_predicate(root):
+    """`path -> bool`: is it a test in the repo at `root` -- its snapshot's roles first,
+    the naming heuristics for what no snapshot holds. Every caller asking "is this a test
+    path" goes through here, so two of them cannot answer differently."""
+    role = _snapshot_roles(root)
+    return lambda p: _is_test_path(p, role)
+
+
+def _snapshot_roles(root):
+    """`rel -> "test" | "story" | None`: the `role` the repo's fresh code-map snapshot
+    recorded for `rel`; None where it records none (a pack that names no roles -- the
+    Python pack's ordinary modules -- or a path it does not hold).
+    Read through `plan_graph.resolve_snapshot_units` -- the snapshot door that imports
+    no `codegraph`. No fresh snapshot of HEAD: no role reader, and the naming
+    heuristics decide; a derivation hiccup never blocks."""
+    if root is None:
+        return None
+    try:
+        import plan_graph
+        units, _warning = plan_graph.resolve_snapshot_units(root)
+    except Exception:  # noqa: BLE001 -- see the docstring
+        return None
+    if not units:
+        return None
+
+    def role(rel):
+        return (units.get(rel) or {}).get("role") or None
+    return role
 
 
 def _is_manifest(p: str) -> bool:
     return Path(p).name in _MANIFEST_NAMES
 
 
-def _has_src_change(diff_paths) -> bool:
+def _has_src_change(diff_paths, role=None) -> bool:
     """True when a non-test, non-manifest, non-doc source file changed."""
     for p in diff_paths or []:
-        if _is_test_path(p) or _is_manifest(p):
+        if _is_test_path(p, role) or _is_manifest(p):
             continue
         if _NONCODE_RE.search(p):
             continue
@@ -99,7 +138,7 @@ def derive(diff_paths, manifest_changed=False, tests_added=False,
            tests_have_assertions=None, regression_tests=False,
            manifest_version_changed=False, version_bump=False,
            tag_exists=False, net_code_change=True,
-           commit_message=None, trailer_class=None, root=None):
+           commit_message=None, trailer_class=None, root=None, role=_UNREAD):
     """Derive (cls, signals, ambiguous) from change facts.
 
     diff_paths: changed file paths. manifest_changed: a manifest file changed.
@@ -118,7 +157,7 @@ def derive(diff_paths, manifest_changed=False, tests_added=False,
         return Derivation(ov_cls, ["override", ov_src], False)
 
     signals = []
-    src_changed = _has_src_change(diff_paths)
+    src_changed = _has_src_change(diff_paths, _snapshot_roles(root) if role is _UNREAD else role)
     if src_changed:
         signals.append("src_changed")
     if manifest_changed:
@@ -246,11 +285,13 @@ def derive_from_repo(root, **overrides):
     changed = [p for _s, p in rows]
     added = [p for s, p in rows if s.startswith("A")]
     manifest_changed = any(_is_manifest(p) for p in changed)
-    tests_added = any(_is_test_path(p) for p in added)
-    regression = any(_is_test_path(p) and "regress" in p.lower() for p in added)
-    has_assert = _added_tests_assert(root, [p for p in added if _is_test_path(p)])
+    role = _snapshot_roles(root)
+    tests = [p for p in added if _is_test_path(p, role)]
+    tests_added = bool(tests)
+    regression = any("regress" in p.lower() for p in tests)
+    has_assert = _added_tests_assert(root, tests)
     kw = dict(manifest_changed=manifest_changed, tests_added=tests_added,
               tests_have_assertions=has_assert, regression_tests=regression,
-              root=root)
+              root=root, role=role)
     kw.update(overrides)
     return derive(changed, **kw)

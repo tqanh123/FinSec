@@ -45,7 +45,8 @@ def ensure_skeleton(data_root, *, dry_run=False):
     if harness_paths.data_root_unresolved(root):
         raise ValueError(
             "refusing to bootstrap the fail-closed unresolved data root — no "
-            "project resolved (set CLAUDE_PROJECT_DIR or HARNESS_DATA_ROOT)")
+            "project resolved (%s)" % (harness_paths.data_root_and_reason()[1]
+                                       or "the caller handed over the marker itself"))
     created = []
     for rel in ("",) + _SKELETON_DIRS:
         target = root / rel if rel else root

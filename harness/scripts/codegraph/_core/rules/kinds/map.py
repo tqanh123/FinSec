@@ -296,4 +296,4 @@ class MapCheck:
                                    "nulls": nulls})
 
 
-register_kind("map")(require_params("roots")(MapCheck))
+register_kind("map", languages=("python",))(require_params("roots")(MapCheck))

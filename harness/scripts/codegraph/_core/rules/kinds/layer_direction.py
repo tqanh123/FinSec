@@ -6,7 +6,10 @@ rule PARAM (`tiers: {group: rank}`), not an import of porting physics.
 THREE EDGE KINDS, COUNTED SEPARATELY — never merged
     module | lazy | symbol. A reverse edge living only at lazy level imports
     fine and dies at runtime, on exactly the CI branch that never runs. One
-    merged number hides exactly that story.
+    merged number hides exactly that story. A fourth, `type_only`, joins them
+    for a record of a language pack (an `import type` is coupling) and stays
+    out for Python's `if TYPE_CHECKING:` -- `include_type_only: true|false`
+    decides for every record instead.
 
 UNDECIDED IS NOT OK
     An edge with an unranked end (group absent from `tiers`) is UNDECIDED:
@@ -44,6 +47,9 @@ class LayerDirectionCheck:
         if not isinstance(tiers, dict) or not tiers:
             raise RulesError(f"rule {rule_id!r}: `tiers` must be a non-empty mapping")
         self.tiers: dict[str, int] = {str(k): int(v) for k, v in tiers.items()}
+        self.type_only = params.get("include_type_only")
+        if self.type_only is not None and not isinstance(self.type_only, bool):
+            raise RulesError(f"rule {rule_id!r}: `include_type_only` must be true or false")
         self.baseline: dict[str, int] | None = None
         if params.get("baseline") is not None:
             self.baseline = {str(k): int(v) for k, v in params["baseline"].items()}
@@ -72,7 +78,7 @@ class LayerDirectionCheck:
                     {"kind": e.kind, "src": e.src, "dst": e.dst,
                      "src_tier": s, "dst_tier": d}))
 
-        ctx.graph.walk(judge)
+        ctx.graph.walk(judge, include_type_only=self.type_only)
 
         notes = [
             f"edges: {dict(sorted(counts.items())) or 'none'}",
@@ -106,5 +112,5 @@ class LayerDirectionCheck:
                                    "same_file_split": dict(same_file_split)})
 
 
-register_kind("layer_direction")(
+register_kind("layer_direction", languages="*")(
     require_params("tiers")(LayerDirectionCheck))

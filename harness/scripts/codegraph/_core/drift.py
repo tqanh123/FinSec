@@ -44,7 +44,28 @@ from pathlib import Path
 
 from .adapter import adapter_for
 from .descriptor.model import ProjectDescriptor, Root
-from .snapshot.pipeline import measured_paths
+from .lang import registry as lang_registry
+from .lang.base import BROKEN_PROBLEMS
+from .lang.ids import PYTHON, lang_of
+from .snapshot.pipeline import _adapter_set, _parse, measured_paths
+
+
+def engine_mismatch(idx: dict, descriptor: "ProjectDescriptor | None") -> "dict[str, dict[str, str]]":
+    """{language: {snapshot, declared}} where the snapshot's body hashes were taken by
+    another engine than the one `descriptor` declares now (a hash's `<engine>:` prefix):
+    every hash differs, by measurement rather than by edit."""
+    out: "dict[str, dict[str, str]]" = {}
+    if descriptor is None:
+        return out
+    for m in [m for mods in idx["units"].values() for m in mods]:
+        lang = lang_of(m)
+        declared = lang_registry.options_of(descriptor, lang).get("engine")
+        if lang == PYTHON or lang in out or not declared:
+            continue
+        sha = next((s["sha"] for s in m.get("symbols", ()) if ":" in s.get("sha", "")), None)
+        if sha is not None and sha.split(":", 1)[0] != declared:
+            out[lang] = {"snapshot": sha.split(":", 1)[0], "declared": declared}
+    return out
 
 
 def _flat_symbol_shas(symbols) -> dict[str, str]:
@@ -77,11 +98,23 @@ def drift_report(repo: Path, idx: dict,
     missing / new files + clean count.
 
     `changed` rows are (path, reason) where reason is "symbols" (the measured
-    graph moved) or "unparseable" (a file that no longer parses is drift, not
-    a silent skip). `cosmetic` rows are paths whose bytes moved but whose
-    symbol set and body-shas did not.
+    graph moved), "unparseable" (a file that no longer parses is drift, not
+    a silent skip) or "partial" (a file of another language whose reader read
+    around a syntax error: its symbols are not all there, so none reads as
+    deleted) or "unreadable" (a record of a language `codemap.yaml` no longer
+    enables: no reader of this tree reads it). A reader refusing (an engine
+    missing what it needs) is `SnapshotRefused`, one breaking its contract
+    `SnapshotError` -- never a crash. `cosmetic` rows are paths whose bytes moved but whose
+    symbol set and body-shas did not. A snapshot whose body hashes another
+    engine took (`engine_mismatch`) is compared to nothing: it says so and
+    names both engines.
     """
     repo = repo.resolve()
+    mismatch = engine_mismatch(idx, descriptor)
+    if mismatch:
+        return {"changed": [], "cosmetic": [], "missing": [], "new": [], "clean": 0, "root_missing": [],
+                "engine_mismatch": mismatch, "snapshot": idx.get("snapshot"), "commit": idx.get("commit")}
+    readers = None
     snap_paths: set[str] = set(idx.get("test_modules_unparsed") or ())
     changed: list[tuple[str, str]] = []
     cosmetic: list[str] = []
@@ -101,6 +134,21 @@ def drift_report(repo: Path, idx: dict,
             clean += 1
             continue
         # bytes moved — does the MEASURED GRAPH move with them?
+        if lang_of(m) != PYTHON:
+            # a path id has no container; a syntax error is a problem row, not a raise
+            readers = readers or _adapter_set(repo, descriptor or ProjectDescriptor(schema_version=2, project=""))
+            adapter = readers.adapter_for(target)
+            if adapter is None:
+                changed.append((m["path"], "unreadable"))
+                continue
+            parsed = _parse(adapter, target, target.read_text(encoding="utf-8"), (), m["module"])
+            same = _flat_symbol_shas(parsed.symbols) == _flat_symbol_shas(m["symbols"])
+            if same:
+                cosmetic.append(m["path"])
+            else:
+                broken = any(pr.get("kind") in BROKEN_PROBLEMS for pr in parsed.problems)
+                changed.append((m["path"], "partial" if broken else "symbols"))
+            continue
         container = tuple(m["module"].split(".")[:-1])
         try:
             parsed = adapter_for(target).parse(

@@ -227,6 +227,22 @@ def _pack_frag_dirs(opts: "ShellOptions") -> tuple:
     return frag_dirs
 
 
+def _current_snapshot(repo: Path) -> "Path | None":
+    """The snapshot of `repo`'s project matching its current tree (`store.
+    resolve_current`), or None when there is none to read."""
+    try:
+        from codegraph._core.descriptor import load as load_descriptor
+        from codegraph._core.snapshot.store import resolve_current
+        from hs_run_facts.engine import store_base
+        base = store_base(repo)
+        if base is None or not base.is_dir():
+            return None
+        snap, _note = resolve_current(base, repo, load_descriptor(repo / _CODEMAP_NAME, repo).descriptor)
+    except Exception:  # noqa: BLE001 -- a count for a warning, never a reason to fail the verb
+        return None
+    return snap
+
+
 # --------------------------------------------------------------------- dispatch
 
 class HsCodeCli(_family_cli.PackMixin, _family_cli.CliBase):
@@ -251,6 +267,15 @@ class HsCodeCli(_family_cli.PackMixin, _family_cli.CliBase):
                                    "BATCH/runs.jsonl (BATCH/STEP[/DIST])"),
     )
 
+
+    def crash_message(self, exc: BaseException) -> str:
+        from codegraph._core.git import GitError
+        if isinstance(exc, GitError):
+            # git refusing to answer (a corrupt index, a broken checkout) is the tree's
+            # state, not a defect of the verb that asked
+            return "git could not answer: %s" % exc
+        return super().crash_message(exc)
+
     def registry_env(self):
         return _REGISTRY_ENV
 
@@ -270,6 +295,24 @@ class HsCodeCli(_family_cli.PackMixin, _family_cli.CliBase):
 
     def wants_help(self, cmd, args) -> bool:
         return hs_verb_help.wants_help(args)
+
+    def command_parser(self, row, cmd):
+        """Before the verb runs: a row reading only some languages refuses an argument
+        naming another enabled language's file (`lang.capability`)."""
+        parser = super().command_parser(row, cmd)
+        args = list(self._call.get("args") or ())
+        if row.languages and not self.wants_help(cmd, args):
+            from codegraph._core.lang import capability
+            _clean, flags = self.strip_shell_flags(self._call.get("argv") or [])
+            repo = self.project_root(flags)
+            why = capability.refusal_for(row.path, row.languages, args, repo,
+                                         apply=bool(flags.get("apply")))
+            if why:
+                raise hs_family.RefusedError(why)
+            left = capability.not_considered(row.languages, repo, lambda: _current_snapshot(repo))
+            if left:
+                self._call["languages_not_considered"] = left
+        return parser
 
     def bind(self, ns, ctx) -> None:
         ns.opts = _options(ctx.flags, text=bool(self._call.get("text")))
@@ -392,6 +435,11 @@ class HsCodeCli(_family_cli.PackMixin, _family_cli.CliBase):
         measured = self._measured_keys()
         if measured:
             outcome = attrs.evolve(outcome, extra={**outcome.extra, **measured})
+        left = self._call.get("languages_not_considered")
+        if left:
+            said = ", ".join("%s=%s" % (k, "?" if v is None else v) for k, v in sorted(left.items()))
+            outcome = attrs.evolve(outcome, warnings=(*outcome.warnings,
+                                                      "languages_not_considered: %s" % said))
         env = super().finish(row, ctx, outcome, output)
         data = env.get("data")
         if isinstance(data, dict) and "handoff" in data:

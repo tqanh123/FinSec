@@ -178,17 +178,8 @@ def _has_upstream(root) -> bool:
 
 
 def _main_branch(root):
-    """The repo's integration branch by convention: origin/HEAD target, then a local
-    main/master. None when the repo has no such branch (brand-new feature branch)."""
-    head = _git(root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
-    if head.returncode == 0:
-        name = head.stdout.strip().rsplit("/", 1)[-1]
-        if name:
-            return name
-    for b in ("main", "master"):
-        if _git(root, "rev-parse", "--verify", "-q", b).returncode == 0:
-            return b
-    return None
+    import git_default_branch  # noqa: PLC0415 -- the one resolver, shared with the snapshot readers
+    return git_default_branch.main_branch(root)
 
 
 def _is_dirty(root) -> bool:

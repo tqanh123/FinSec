@@ -380,3 +380,12 @@ diff-cover>=8.0,<11  # OPTIONAL
 # tooling error — it never degrades to a silent PASS, which is what OPTIONAL would
 # otherwise risk.
 mypy>=2.0,<3  # OPTIONAL
+#
+# tree-sitter + its TypeScript grammar are the `tree-sitter` engine of the `typescript`
+# language pack (harness/data/hs-code-languages.yaml): `hs-code graph snapshot` of a repo
+# declaring `languages.typescript: {engine: tree-sitter}` reads .ts/.tsx/.js with them,
+# in-process, no Node. OPTIONAL: a Python-only project never imports either. The grammar
+# is pinned exactly -- every TS symbol hash names it, so a grammar bump is an engine change.
+# Absent: that snapshot refuses (exit 3) with this install line; nothing else changes.
+tree-sitter>=0.26,<0.27  # OPTIONAL
+tree-sitter-typescript==0.23.2  # OPTIONAL

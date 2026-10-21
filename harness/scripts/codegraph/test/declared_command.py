@@ -51,27 +51,11 @@ def declared_test_command(repo: Path) -> "tuple[str, ...]":
             "domains.test.command: not declared in codemap.yaml -- add "
             f"domains.test.command: [<argv...>, \"{_PLACEHOLDER}\"] naming this "
             f"repo's own test runner")
-    if not isinstance(command, list) or not all(isinstance(a, str) for a in command):
-        raise DeclaredCommandError(
-            f"domains.test.command: must be a list of strings, got {command!r}")
-    exact = [a for a in command if a == _PLACEHOLDER]
-    embedded = [a for a in command if a != _PLACEHOLDER and _PLACEHOLDER in a]
-    if not exact:
-        if embedded:
-            raise DeclaredCommandError(
-                f"domains.test.command: \"{_PLACEHOLDER}\" must be its OWN argv "
-                f"item, not embedded inside {embedded[0]!r}")
-        raise DeclaredCommandError(
-            f"domains.test.command: missing the \"{_PLACEHOLDER}\" placeholder item")
-    if len(exact) > 1:
-        raise DeclaredCommandError(
-            f"domains.test.command: \"{_PLACEHOLDER}\" must appear exactly once, "
-            f"found {len(exact)}")
-    if embedded:
-        raise DeclaredCommandError(
-            f"domains.test.command: \"{_PLACEHOLDER}\" must be its OWN argv item, "
-            f"not also embedded inside {embedded[0]!r}")
-    return tuple(command)
+    import test_runners
+    try:
+        return test_runners.check_argv(command, "domains.test.command")
+    except test_runners.RunnerError as e:
+        raise DeclaredCommandError(str(e)) from None
 
 
 def expand_targets(template: "tuple[str, ...]", targets: "Sequence[str]") -> "list[str]":

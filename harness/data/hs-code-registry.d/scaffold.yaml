@@ -13,8 +13,8 @@
 
 domains:
   scaffold:
-    new-module: {module: codegraph.scaffold.new_module, entry: NEW_MODULE, help: "plan (or write with --apply) a new module from a declared scaffold template, else read off its parent package"}
-    new-dist: {module: codegraph.scaffold.new_dist, entry: NEW_DIST, help: "plan (or write with --apply) a new dist from a declared scaffold template, else read off a same-tier dist"}
+    new-module: {module: codegraph.scaffold.new_module, entry: NEW_MODULE, help: "plan (or write with --apply) a new module from a declared scaffold template, else read off its parent package", languages: [python]}
+    new-dist: {module: codegraph.scaffold.new_dist, entry: NEW_DIST, help: "plan (or write with --apply) a new dist from a declared scaffold template, else read off a same-tier dist (--set KEY=VALUE picks its group)", languages: [python]}
     slice-docs: {module: codegraph.scaffold.slice_docs, entry: SLICE_DOCS, help: "render one dist's (or the repo root's) AGENTS.md from a batch declaration, validated"}
     agents-doc: {module: codegraph.scaffold.agents_doc, entry: AGENTS_DOC, help: "generate a unit's AGENTS.md from a snapshot, splicing into the hand-kept region"}
     codeowners: {module: codegraph.scaffold.codeowners, entry: CODEOWNERS_VERB, help: "generate CODEOWNERS from the descriptor's declared root owners, or check it is fresh"}

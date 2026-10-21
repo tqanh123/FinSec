@@ -46,7 +46,9 @@ from codegraph._core.incremental import (IncrementalError, changed_files,  # noq
                                          run_incremental, touched_from_snapshots,
                                          touched_modules)
 from codegraph._core.presets import available_presets, dump_yaml, resolve_doc  # noqa: E402
+from codegraph._core.lang import registry as lang_registry  # noqa: E402
 from codegraph._core.rules import RuleContext, RulesEngine, RulesError  # noqa: E402
+from codegraph._core.snapshot.pipeline import SnapshotError, SnapshotRefused  # noqa: E402
 from codegraph._core.snapshot.store import SnapshotMissing, load_dir, resolve_snapshot  # noqa: E402
 from codegraph._core.verdict import Verdict  # noqa: E402
 from hs_family.cli import Command  # noqa: E402
@@ -233,7 +235,18 @@ def _drift(args: argparse.Namespace) -> int:
     except SnapshotMissing as e:
         return Verdict.broken(str(e)).exit
 
-    report = drift_report(root, idx, descriptor)
+    try:
+        report = drift_report(root, idx, descriptor)
+    except SnapshotRefused as e:
+        return Verdict.refused("drift: %s" % e).exit
+    except SnapshotError as e:
+        return Verdict.broken("drift: %s" % e).exit
+    if report.get("engine_mismatch"):
+        return Verdict.broken("drift: snapshot %s was measured with another engine (engine_mismatch: %s) -- "
+                              "a new engine is a new measurement, not drift: run `hs-code --apply graph "
+                              "snapshot`" % (idx.get("snapshot"), ", ".join(
+                                  "%s %s, codemap.yaml declares %s" % (lang, v["snapshot"], v["declared"])
+                                  for lang, v in sorted(report["engine_mismatch"].items())))).exit
     is_drifted = drifted(report)
     as_json = getattr(opts, "json", False)
     if not as_json:
@@ -287,11 +300,18 @@ def _incremental(args: argparse.Namespace) -> int:
             touched = touched_from_snapshots(a, b)
         elif base_rev:
             base_drift.warn_if_base_drifted(root, base_rev)
-            touched = touched_modules(changed_files(root, base_rev))
+            module_at = None
+            if (root / "codemap.yaml").is_file():
+                from codegraph._core.snapshot.pipeline import import_context
+                try:
+                    module_at = import_context(root, _load_descriptor(root).descriptor).module_at
+                except SnapshotRefused as e:
+                    return Verdict.refused(f"incremental: {e}").exit
+            touched = touched_modules(changed_files(root, base_rev), module_at)
         else:
             return Verdict.broken(
                 "incremental: give --base <commit> or --old-snap/--new-snap").exit
-    except (IncrementalError, SnapshotMissing) as e:
+    except (IncrementalError, SnapshotMissing, DescriptorError, SnapshotError) as e:
         return Verdict.broken(f"incremental: {e}").exit
 
     as_json = getattr(opts, "json", False)
@@ -407,9 +427,22 @@ def _init(args: argparse.Namespace) -> int:
     if adoption.state == "unsupported":
         return Verdict.refused(f"init: {adoption.reason} — a descriptor here would own "
                                f"nothing", adoption=adoption.as_dict()).exit
+    languages, unrunnable = _language_block(root, adoption.packs)
+    python = lang_registry.DEFAULT_ID in adoption.packs
+    if not python and not languages:
+        return Verdict.refused(
+            "init: no engine this machine runs reads this repo's %s files — nothing written; "
+            "install one, then run init again:\n  %s"
+            % (", ".join(adoption.packs), "\n  ".join(unrunnable)),
+            adoption=adoption.as_dict(), unrunnable=unrunnable).exit
+    if unrunnable:
+        print("init: left out of `languages:` (no engine runs here):\n  %s"
+              % "\n  ".join(unrunnable), file=sys.stderr)
 
     presets = available_presets()
-    suggestion, rule = _suggest_layout(root)
+    suggestion, rule = _suggest_layout(root) if python else (None, "no-python-files")
+    if layout is None and not python:
+        layout = ""   # a repo with no Python file: one root over the repo, units from its packages
     if layout is None:
         layout = suggestion
     if layout is None:
@@ -417,7 +450,7 @@ def _init(args: argparse.Namespace) -> int:
             f"init: no --layout given and auto-discover found no usable "
             f"suggestion (rule `{rule}`) — choose one of: "
             f"{', '.join(presets)}").exit
-    if layout not in presets:
+    if layout and layout not in presets:
         return Verdict.broken(
             f"init: unknown preset {layout!r}; choose one of: "
             f"{', '.join(presets)}").exit
@@ -429,10 +462,16 @@ def _init(args: argparse.Namespace) -> int:
     # Merge through the SAME door a hand-written `extends:` uses, then write
     # the result SELF-CONTAINED: the generated file keeps no indirection a
     # later human edit has to chase.
-    doc = resolve_doc({"schema_version": 2, "project": project, "extends": layout})
-    roots = _measured_import_roots(root, doc)
-    if roots:
-        doc["import_roots"] = roots
+    if layout:
+        doc = resolve_doc({"schema_version": 2, "project": project, "extends": layout})
+        roots = _measured_import_roots(root, doc)
+        if roots:
+            doc["import_roots"] = roots
+    else:
+        doc = {"schema_version": 2, "project": project,
+               "layout": {"roots": [{"id": project, "path": ".", "kind": "flat"}]}}
+    if languages:
+        doc["languages"] = languages
     out = root / "codemap.yaml"
     apply = bool(getattr(opts, "apply", False))
     if apply:
@@ -449,6 +488,31 @@ def _init(args: argparse.Namespace) -> int:
         print(f"[dry-run: nothing written — --apply writes {out}]")
         print(dump_yaml(doc), end="")
     return 0
+
+
+def _language_block(root: Path, packs) -> "tuple[dict, list[str]]":
+    """`languages:` for a fresh codemap, and what was left out of it: every pack the
+    repo holds beside the default one, with the first engine this machine runs
+    (`registry.runnable_engine`); with any of them, the default pack named too, since a
+    `languages:` block replaces the default rather than adding to it."""
+    block: "dict[str, dict]" = {}
+    lines: "list[str]" = []
+    by_id = {p.id: p for p in lang_registry.packs()}
+    for pid in packs:
+        pack = by_id.get(pid)
+        if pack is None or pid == lang_registry.DEFAULT_ID:
+            continue
+        options: "dict[str, str]" = {}
+        if pack.engines:
+            eng, why = lang_registry.runnable_engine(pack, root)
+            if eng is None:
+                lines += ["%s: %s" % (pid, w) for w in why]
+                continue
+            options["engine"] = eng.name
+        block[pid] = options
+    if block and lang_registry.DEFAULT_ID in packs:
+        block = {lang_registry.DEFAULT_ID: {}, **block}
+    return block, lines
 
 
 def _measured_import_roots(root: Path, doc: dict) -> "list[str]":
@@ -518,6 +582,31 @@ def _blindspot_section(module: Any) -> "list[str] | None":
     return out
 
 
+def _engine_rows(missing: "list[str]", repo: "Path | None" = None) -> "list[dict[str, Any]]":
+    """One row per engine a language pack offers (`languages.<id>.engine`): its
+    reader's contract, or `not_installed` with the install line when what it needs
+    (wheels, Node.js, pinned npm packages) is absent here -- an optional engine is not
+    a contract violation."""
+    import importlib
+
+    from codegraph._core.lang import registry as lang_registry
+
+    rows: "list[dict[str, Any]]" = []
+    for pack in lang_registry.packs():
+        for eng in pack.engines:
+            row: "dict[str, Any]" = {"ext": " ".join(pack.suffixes()), "adapter": eng.reader_ref[1],
+                                     "engine": f"{pack.id}/{eng.name}"}
+            if lang_registry.missing_requirements(eng, repo):
+                rows.append({**row, "section": None, "status": "not_installed",
+                             "install": eng.install})
+                continue
+            section = _blindspot_section(importlib.import_module(eng.reader_ref[0]))
+            if section is None:
+                missing.append(f"{row['engine']} -> {row['adapter']}")
+            rows.append({**row, "section": section, "status": "ok" if section else "MISSING"})
+    return rows
+
+
 def _adapter_blindspots_args(ap: argparse.ArgumentParser) -> None:
     pass
 
@@ -546,6 +635,7 @@ def _adapter_blindspots(args: argparse.Namespace) -> int:
         else:
             rows.append({"ext": ext, "adapter": cls.__name__,
                          "section": section, "status": "ok"})
+    rows += _engine_rows(missing, Path(args.ctx.root))
     code = 1 if missing else 0
     data = {"shared_contract": shared, "adapters": rows, "missing": missing}
     if getattr(opts, "json", False):
@@ -559,6 +649,8 @@ def _adapter_blindspots(args: argparse.Namespace) -> int:
             if r["status"] == "MISSING":
                 print("  !! no WHAT IT CANNOT SEE section — the blind-spot"
                       " contract is law; refusing to vouch for this adapter")
+            elif r["status"] == "not_installed":
+                print(f"  engine {r['engine']} not installed here: {r['install']}")
             else:
                 for ln in r["section"]:
                     print(f"  {ln}")

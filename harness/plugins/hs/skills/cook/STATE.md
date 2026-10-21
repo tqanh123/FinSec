@@ -12,17 +12,23 @@ The CLI hands these rule and reference paths over at the moment the step begins 
 
 | state | what it means | routes |
 |---|---|---|
+| `preflight_blocked` | Preflight refused: the plan skipped an artifact the DAG declares, or the human chose to split it and its work is cooked in the child plans. This is a plan defect, not a cook defect — fix it in hs:plan, or cook a child. | `verification-mechanism` |
+| `reopened` | The completed plan is back to in_progress. Its review-decision moved aside (review-decision-retired-*), so a fresh recorded review is owed and no measured waiver stands in; each phase named with --phase owes a verify before close. The reason is in the phase-commits log. | `verification-mechanism` |
 | `verification_recorded` | The verification artifact reached disk. The phase is recorded as verified; the named command is the next step, not a suggestion. | `no-orphan-code` |
 | `phases_incomplete` | `cook close` refused to finalize: phases are still unbuilt. The warning names which; finish them rather than closing over them. | `tdd-discipline` |
-| `review_missing` | `cook close` refused to finalize: the review obligation is not cleared — either no review-decision verdict is recorded, or one exists but `hs-run cook record code-reviewer --out <file>` was never actually run for it — and the run's real diff did not earn a waiver (it crossed a size threshold or the risk tier is above tiny, or it could not be sized at all). Spawn the reviewer, then run record; close writes nothing until then. | `workflow-handoffs` |
-| `blocked_grid_phase_gate` | The grid phase gate blocks: required per-phase grids are missing. | `references/grid-mode.md` |
+| `reopen_verify_owed` | `cook close` refused to finalize a reopened plan: a phase the reopen named has not been verified again. Verify it; close writes nothing until then. | `verification-mechanism` |
 | `suite_debt_unpaid` | `cook close` refused to finalize: this plan deferred its full suite and the debt is still unpaid — run it once and record verify. | `verification-mechanism`, `references/deferred-suite.md` |
+| `review_missing` | `cook close` refused to finalize: the review obligation is not cleared — either no review-decision verdict is recorded, or one exists but `hs-run cook record code-reviewer --out <file>` was never actually run for it — and the run's real diff did not earn a waiver (it crossed a size threshold or the risk tier is above tiny, or it could not be sized at all). Also refused when the review recorded last has no verdict of its own on disk, or never saw commits the run verified after it. Spawn the reviewer, then run record; close writes nothing until then. | `workflow-handoffs` |
+| `blocked_grid_phase_gate` | The grid phase gate blocks: required per-phase grids are missing. | `references/grid-mode.md` |
+| `declared_check_broken` | A declared check could not be measured -- its newest run is BROKEN or BLOCKED, or the declaration itself cannot be read. The same command again says the same: fix what the reason names (a missing binary, the config), then run the check. | `verification-mechanism` |
+| `needs_declared_check` | The phase's build is recorded, and a check the repo declares is owed and not proven by the harness's own newest run (none, failed, its result file changed, or its inputs changed since). Run the named command for each, then ask again; an agent's own result file does not satisfy it. | `verification-mechanism` |
 | `superseded` | `cook record <role> --phase P --supersede` retired that role's earlier records for the phase; `cook next` now asks for the work again. The retired lines stay in the log. | `workflow-handoffs` |
 | `recorded` | A delegated result was recorded. The two-beat protocol is complete for that role; the next state names what follows. | `workflow-handoffs`, `anti-tautology-detection` |
-| `needs_review` | The build is done and the run's measured diff earned the independent review: over a size threshold, or a risk tier above tiny, or the work could not be sized (the waiver is earned by measurement, never by measurement failing). Spawn the reviewer; reviewing your own diff at this gate is the thing it exists to prevent. | `workflow-handoffs`, `references/self-check-confidence.md`, `references/workflow-steps.md` |
+| `needs_reopen_verify` | The plan was reopened and a phase it named has not been verified again. Re-run its checks against the tree as it stands and record the verdict with `cook verify` (`--sha keep` names the commits it already recorded); the old snapshot is what went stale, so do not cite it. | `verification-mechanism` |
+| `needs_suite_run` | Every phase passed and this plan deferred its full suite: run it once and record it, before the review. Run after the review, the fixes it forces would go unreviewed, and every later commit would ask for the review again. | `verification-mechanism`, `references/deferred-suite.md` |
+| `needs_review` | The build is done and the run's measured diff earned the independent review: over a size threshold, or a risk tier above tiny, or the work could not be sized (the waiver is earned by measurement, never by measurement failing). Spawn the reviewer; reviewing your own diff at this gate is the thing it exists to prevent. A review counts only for the work it saw: one that never read a change verified since (judged by content), one recorded over verified work no branch holds any more, or one whose own verdict was never written, is owed again, and the sentence names the move. | `workflow-handoffs`, `references/self-check-confidence.md`, `references/workflow-steps.md` |
 | `needs_phase_grid_gate` | A phase grid has thin cells. Resolve them, then emit — a thin cell is a case nobody thought through, not a formatting problem. | `references/grid-mode.md` |
 | `needs_close` | Review passed. Finalize: docs, git, and close_plan — a plan left open reads as still running to every later gate. | `no-orphan-code`, `references/workflow-steps.md` |
-| `preflight_blocked` | Preflight refused: the plan skipped an artifact the DAG declares. This is a plan defect, not a cook defect — fix it in hs:plan. | `verification-mechanism` |
 | `needs_open` | The plan is approved and startable but not opened. `cook open` flips the frontmatter to in_progress, which is what makes the run resumable. | `references/context-isolation.md` |
 | `state_conflict` | The plan frontmatter and the artifacts on disk disagree. One of them is stale — find which before touching either, because writing to the wrong side makes the disagreement permanent. | `verification-mechanism` |
 | `phase_failed` | The phase failed outright. Read the verdict before deciding whether the fault is the code, the test, or the phase's own declared contract. | `tdd-discipline` |
@@ -43,13 +49,15 @@ Not a gap: each is fully served by the `next_action` line the envelope already c
 | `plan_unresolved` | A mutating cook verb could not resolve which plan to act on, so nothing was written. Name one with `--plan`, or fix what makes the tree ambiguous. |
 | `blocked` | A gate blocks. Read the warnings — they name which gate and why, and the fix is at that gate, not here. |
 | `ok` | The command succeeded and there is nothing further this verb owns. |
+| `reopen_not_completed` | `--reason`/`--phase` reopen a completed plan only; this one is not completed, so there is nothing to reopen. `cook next` says what it owes. |
+| `reopen_needs_reason` | `cook open` on a completed plan refused: reopening needs `--reason`, the reason its evidence went stale, and `--phase` for each phase that must be verified again. Nothing was written. |
 | `approval_refused` | `cook open` refused to flip the frontmatter: the approval does not cover the plan as it stands. Re-approve first; open writes nothing until then. |
 | `open_failed` | Opening the plan failed. The frontmatter write did not land; read the warnings before retrying, because a partial write is the dangerous case. |
 | `already_open` | The plan is already open. Nothing to do; continue with the phase loop. |
 | `opened` | The plan just opened. The per-phase loop starts at the first unstarted node. |
 | `verify_failed` | Recording the verification failed. The verdict did not reach disk, so the phase still counts as unverified no matter what the run just did. |
 | `close_failed` | Closing the plan failed. The frontmatter still says in_progress, so the plan is not finished regardless of the work being done. |
-| `already_closed` | The plan is already closed. Re-opening is a decision, not a retry. |
+| `already_closed` | The plan is already closed. Re-opening is a decision, not a retry: `cook open --reason` takes it, with the reason its evidence went stale. |
 | `closed` | The plan closed. This run is finished. |
 | `unknown_phase` | The named phase is not a node in the plan graph. Check the node id against plan-graph.yaml rather than inventing one. |
 | `error` | The verb could not act on the tree as it stands. Read warnings first; they name what the run found, not what it wanted. |
@@ -57,11 +65,12 @@ Not a gap: each is fully served by the `next_action` line the envelope already c
 | `completed` | Every phase is complete and the plan is closed. Nothing remains. |
 | `no_plan` | No plan exists. cook has nothing to execute; the work starts in hs:plan. |
 | `not_approved` | The plan exists but no human approved it. Cooking an unapproved plan executes a document nobody signed. |
+| `phase_waiting` | The named phase needs a sibling plan's phase (a `{from: <plan>/<phase>}` edge in plan-graph.yaml) that has not passed. Cook that phase in its own plan first, or, when a ruling says the edge is already met, write it as `waived: {decision, reason}` on the edge and re-approve the plan. |
 | `phase_paused` | The phase named with --phase is paused, or waits on a paused phase: the envelope carries held_by, and for a paused phase its paused_reason and reopen_when. Lifting the pause is a human's call — clear `paused:` in plan-graph.yaml once its reason no longer holds; reopen_when is never run. |
 | `phase_passed` | The phase named with --phase already passed: its own snapshot counts it done, whatever the plan's shared verification.json says now. Pick a ready phase instead. |
 | `not_startable` | The plan is approved but its first phase cannot start; a precondition the graph declares is unmet. |
 | `no_plan_graph` | The plan has no plan-graph.yaml sidecar, which is a mandatory artifact. Back to hs:plan; the phase DAG is what cook walks. |
-| `phases_blocked` | Nothing runnable is left, yet the plan is not done: every remaining phase needs a paused one. Lift the pause, or drop the edge from a phase that does not need it. |
+| `phases_blocked` | Nothing runnable is left, yet the plan is not done: every remaining phase needs a paused one, or a sibling plan's phase not passed yet. Lift the pause or drop the edge a phase does not need; a wait clears when the other plan's phase passes, or when a ruling says the edge is met (`waived:` on the edge). |
 | `no_phase_resolved` | No phase could be resolved from the arguments and the plan state. |
 | `ambiguous_approved` | Two or more plans read as approved. cook will not guess which one the run means. |
 | `codemap_offer` | This step reads code facts and the repo has no code map yet. Ask the user once; either answer ends the offer for this session, then run the step again and take its real answer (it is kept in `deferred`). |

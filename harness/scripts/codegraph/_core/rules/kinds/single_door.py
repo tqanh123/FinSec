@@ -97,5 +97,5 @@ class SingleDoorCheck:
         return RuleResult(self.rule_id, "error", tuple(violations), notes)
 
 
-register_kind("single_door")(
+register_kind("single_door", languages=("python",))(
     require_params("bypass_patterns")(SingleDoorCheck))

@@ -341,6 +341,22 @@ step_routing:
         # The `--parallel` dual-recommendation phrasing, needed at the moment the
         # command is written rather than after it has been run.
         refs:  [references/cook-handoff-flags.md]
+      split:
+        summary: >-
+          Terminal for this plan. The human chose to split it: it holds no phase and is
+          never cooked; each child plan naming it as `parent_plan` is reviewed, approved
+          and cooked on its own.
+        refs:  [references/plan-split.md]
+      split_pending:
+        summary: >-
+          The human chose to split this plan, and the split is not finished: no child
+          plan names it as `parent_plan` yet, or it still holds phase files a child
+          should own. It is never cooked itself.
+        ask_user_exempt: >-
+          the human already answered keep/split at the approval step; what is left is
+          writing the child plans and moving phase files, which next_action names — a
+          generic block would ask a question nobody owes
+        refs:  [references/plan-split.md]
       # The handoff, and the reason a pointer can belong to a state rather than a skill:
       # what cook must honour is what plan needs to say here, once.
       handed_off_to_cook:

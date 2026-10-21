@@ -236,4 +236,4 @@ class CodeShapeCheck:
                           metrics={"files": files, "cases": counts, "files_excluded": dropped})
 
 
-register_kind("code_shape")(require_params("roots")(CodeShapeCheck))
+register_kind("code_shape", languages=("python",))(require_params("roots")(CodeShapeCheck))

@@ -12,14 +12,13 @@ from __future__ import annotations
 
 from xml.sax.saxutils import escape as _xml_escape
 
+from diagram_layout import DETAIL_FONT_SIZE, DETAIL_LINE_H, LABEL_FONT_SIZE, NODE_H, label_size
 from diagram_palette import color_for, resolve_palette
 from diagram_text import truncate_to_width
 
 _DASHED_KINDS = {"async", "fallback", "retry", "async-signal", "branch-false", "exception",
                  "timeout", "cancel", "return"}
-_MARGIN = 16.0
 NODE_FONT_SIZE = 12.5
-LABEL_FONT_SIZE = 10.5
 GROUP_LABEL_FONT_SIZE = 11.0
 
 
@@ -38,18 +37,24 @@ def _path_d(points) -> str:
 def _node_markup(node) -> str:
     color = color_for(node.role)
     label = truncate_to_width(node.label, node.w - 16, NODE_FONT_SIZE, 600)
-    cx, cy = node.x + node.w / 2, node.y + node.h / 2
+    details = list(getattr(node, "details", None) or ())
+    cx = node.x + node.w / 2
+    cy = node.y + (NODE_H / 2 if details else node.h / 2)
+    lines = "".join(
+        '<text x="%.1f" y="%.1f" class="hsd-node-detail" text-anchor="middle" '
+        'dominant-baseline="middle">%s</text>'
+        % (cx, node.y + NODE_H - 6 + DETAIL_LINE_H * i, _esc(d)) for i, d in enumerate(details))
     return (
         '<g class="hsd-node" data-id="%s" data-label="%s">'
         '<title>%s</title>'
         '<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="8" '
         'class="hsd-node-box" style="fill:%s22;stroke:%s" />'
         '<text x="%.1f" y="%.1f" class="hsd-node-text" text-anchor="middle" '
-        'dominant-baseline="middle">%s</text>'
+        'dominant-baseline="middle">%s</text>%s'
         '</g>'
     ) % (_esc(node.id), _esc(node.label.lower()), _esc(node.label),
          node.x, node.y, node.w, node.h, color, color,
-         cx, cy, _esc(label))
+         cx, cy, _esc(label), lines)
 
 
 def _group_markup(group) -> str:
@@ -66,20 +71,30 @@ def _edge_markup(edge) -> str:
     dashed = 'stroke-dasharray="6,4"' if edge.kind in _DASHED_KINDS else ""
     d = _path_d(edge.points)
     label_markup = ""
-    if edge.label and edge.points:
+    box = getattr(edge, "label_box", None)
+    if edge.label and edge.points and box is None:
         mid = edge.points[len(edge.points) // 2]
-        w = max(24.0, len(edge.label) * 6.2)
+        w, h = label_size(edge.label)
+        box = (mid[0] - w / 2, mid[1] - h / 2, w, h)
+    if edge.label and box is not None:
+        bx, by, bw, bh = box
         label_markup = (
             '<g class="hsd-edge-label">'
-            '<rect x="%.1f" y="%.1f" width="%.1f" height="16" rx="3" class="hsd-edge-label-bg" />'
-            '<text x="%.1f" y="%.1f" text-anchor="middle" class="hsd-edge-label-text">%s</text>'
+            '<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="3" class="hsd-edge-label-bg" />'
+            '<text x="%.1f" y="%.1f" text-anchor="middle" dominant-baseline="middle" '
+            'class="hsd-edge-label-text">%s</text>'
             '</g>'
-        ) % (mid[0] - w / 2, mid[1] - 18, w, mid[0], mid[1] - 6, _esc(edge.label))
+        ) % (bx, by, bw, bh, bx + bw / 2, by + bh / 2, _esc(edge.label))
     return (
         '<g class="hsd-edge" data-source="%s" data-target="%s">'
         '<path d="%s" class="hsd-edge-path" %s />'
         '%s</g>'
     ) % (_esc(edge.source), _esc(edge.target), d, dashed, label_markup)
+
+
+def _lifeline_markup(line) -> str:
+    return ('<line class="hsd-lifeline" data-id="%s" x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
+            'stroke-dasharray="4,4" />' % (_esc(line.id), line.x, line.y0, line.x, line.y1))
 
 
 def _style_block_for_theme(elem_id: str, theme: str, palette) -> str:
@@ -91,7 +106,9 @@ def _style_block_for_theme(elem_id: str, theme: str, palette) -> str:
     return (
         "%(p)s .hsd-bg { fill: %(bg)s; }\n"
         "%(p)s text { font-family: %(font)s; fill: %(text)s; }\n"
-        "%(p)s .hsd-node-text { font-size: %(node_fs)spx; }\n"
+        "%(p)s .hsd-node-text { font-size: %(node_fs)spx; font-weight: 600; }\n"
+        "%(p)s .hsd-node-detail { font-size: %(detail_fs)spx; }\n"
+        "%(p)s .hsd-lifeline { stroke: %(group_stroke)s; stroke-width: 1.2px; }\n"
         "%(p)s .hsd-node-box { stroke-width: 1.6px; }\n"
         "%(p)s .hsd-group-box { fill: %(group_fill)s; stroke: %(group_stroke)s; }\n"
         "%(p)s .hsd-group-text { font-size: %(group_fs)spx; fill: %(edge)s; }\n"
@@ -104,7 +121,7 @@ def _style_block_for_theme(elem_id: str, theme: str, palette) -> str:
         "text": palette.text, "edge": palette.edge, "surface": palette.surface,
         "group_fill": palette.group_fill, "group_stroke": palette.group_stroke,
         "node_fs": NODE_FONT_SIZE, "group_fs": GROUP_LABEL_FONT_SIZE,
-        "label_fs": LABEL_FONT_SIZE,
+        "label_fs": LABEL_FONT_SIZE, "detail_fs": DETAIL_FONT_SIZE,
     }
 
 
@@ -125,8 +142,8 @@ def render_svg_markup(ir: dict, layout, preset: str = "classic", theme: str = "l
     if theme not in ("light", "dark"):
         raise ValueError("unknown theme %r" % (theme,))
     light, dark = resolve_palette(preset, "light"), resolve_palette(preset, "dark")
-    width = max(layout.width, 40.0) + _MARGIN
-    height = max(layout.height, 40.0) + _MARGIN
+    width = max(layout.width, 40.0)
+    height = max(layout.height, 40.0)
     title = ir.get("meta", {}).get("title") or ir.get("diagram_type", "diagram")
 
     style = (
@@ -142,17 +159,21 @@ def render_svg_markup(ir: dict, layout, preset: str = "classic", theme: str = "l
         "<title>%s</title>" % _esc(title),
         style,
         '<defs>'
-        '<marker id="hsd-arrow-light" viewBox="0 0 10 10" refX="9" refY="5" '
-        'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        '<marker id="hsd-arrow-light" viewBox="0 0 10 10" refX="10" refY="5" '
+        'markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" '
+        'orient="auto-start-reverse">'
         '<path d="M0,0 L10,5 L0,10 z" style="fill:%s" /></marker>'
-        '<marker id="hsd-arrow-dark" viewBox="0 0 10 10" refX="9" refY="5" '
-        'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        '<marker id="hsd-arrow-dark" viewBox="0 0 10 10" refX="10" refY="5" '
+        'markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" '
+        'orient="auto-start-reverse">'
         '<path d="M0,0 L10,5 L0,10 z" style="fill:%s" /></marker>'
         '</defs>' % (light.edge, dark.edge),
         '<rect class="hsd-bg" x="0" y="0" width="%.1f" height="%.1f" />' % (width, height),
     ]
     for g in layout.groups:
         parts.append(_group_markup(g))
+    for ln in getattr(layout, "lifelines", ()):
+        parts.append(_lifeline_markup(ln))
     for e in layout.edges:
         parts.append(_edge_markup(e))
     for n in layout.nodes:

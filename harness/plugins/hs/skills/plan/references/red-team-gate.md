@@ -33,7 +33,7 @@ Task(subagent_type="hs:red-teamer",
 1. **Evidence Filter (two-way)**: every finding MUST point to specific evidence (file:line in plan/phase/existing code, or a reproducing command). No evidence -> reject, do not include in the report. The same standard applies to **the planner's own decisions**: an open decision finalized by analogy with no file:line is a finding (the planner owes evidence) — it is not an exempt choice.
 2. **Keep the report scannable**: dedupe, rank by severity, and group the long tail so a reader can act on it.
 3. Each finding: severity (C/H/M/L) + failure scenario in 1 sentence + suggested fix in 1 sentence. No essays.
-4. A plan command that needs the project's environment is run on a lane — `hs-rops run --lane <lane> -- '<cmd>'` — never installed into a read-only worktree; without a lane the finding stays `suspected` with the command named.
+4. A plan command that needs the project's environment is run on a lane — `hs-rops run --lane <lane> --cores 1 -- '<cmd>'` — never installed into a read-only worktree; without a lane the finding stays `suspected` with the command named.
 5. Report saved to `plans/<plan>/reports/from-code-reviewer-to-planner-red-team-<round>-plan-review-report.md` — ONE report per round, its personas named inside. `<round>` is `r<N>`, N one past the red-team reports already there; `hs-run plan prompt red-teamer` fills it in. A single-persona pass may still use the persona's name.
 6. The report carries ONE line `verdict: PASS` or `verdict: REVISE` on its own line, key and value in English whatever the prose language.
    `hs-run plan next` and `plan_approval.py` read it: a REVISE holds the plan at `needs_redteam_disposition` (and refuses APPROVED) until the disposition table below has no empty cell.
@@ -43,6 +43,11 @@ Task(subagent_type="hs:red-teamer",
 ## Disposition (required, done inside plan.md)
 
 Under a heading that starts `## Red-team disposition` (the gate finds each table by it). One table per round is fine: `## Red-team disposition — r2 (security)` covers only the ids of the report its suffix names (persona, stem or file name); a table naming no report covers every report. A near-miss heading (another level, `Redteam`, `dispositions`) is quoted back with its line, never read.
+
+Another review disposed of in plan.md gets its own `## <lens> disposition` table (`## Critique disposition (r2)`): its cites are checked and rewritten like the red-team ones below, but its rows never answer a red-team REVISE.
+`hs-run plan next` names, with its line, every heading (ATX or setext) that mentions a disposition, has a table in its scope, and is not read.
+Front matter, code blocks and HTML blocks (as CommonMark reads them) are skipped when cites are checked or rewritten, and a disposition table inside one is named.
+The gate never trusts that skipping alone: it also reads the plan line by line, as it did before; an empty cell either reading finds holds the plan, a finding is answered only by a row both find, and a red-team heading only inside a block holds it with its line named.
 
 Cite where an Accept landed as `` `phases/<file>.md:N` `` or `` `plan.md:N` `` for this plan, `` `plans/<plan>/<file>.md:N` `` for another plan's file, or `` `:N` `` for the file named before it in the cell (a `:N` with none before it is counted and warned on),
 each followed by a «quote» of that line: `hs-run plan next` checks every plan-local cite (file there, line in range) and a quoted one by content — `moved` names where the text is now.

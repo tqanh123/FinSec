@@ -20,11 +20,13 @@ WHAT IT CANNOT SEE
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
+import threading
 import time
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Iterator, Optional, Sequence, Union
 
 _POLL_S = 0.05
 
@@ -94,3 +96,26 @@ def run(args: "Union[str, Sequence[str]]", *, timeout: Optional[float],
     if check and retcode:
         raise subprocess.CalledProcessError(retcode, proc.args, output=stdout, stderr=stderr)
     return subprocess.CompletedProcess(proc.args, retcode, stdout, stderr)
+
+
+@contextlib.contextmanager
+def raise_on_termination() -> "Iterator[None]":
+    """SIGTERM/SIGHUP end the process without running a single `finally` — the
+    default action is an immediate exit. For as long as something must be undone on
+    the way out (a throwaway worktree, a tree to put back), turn them into `SystemExit`
+    so the cleanup runs, then put the previous handlers back. Only the main thread can
+    own a signal handler; a call from any other thread gets no such cover and says
+    nothing."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _exit(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    saved = {s: signal.signal(s, _exit) for s in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        yield
+    finally:
+        for s, h in saved.items():
+            signal.signal(s, h)

@@ -146,4 +146,4 @@ class PackagingCheck:
         return RuleResult(self.rule_id, "error", tuple(v), tuple(notes))
 
 
-register_kind("packaging")(require_params("tiers")(PackagingCheck))
+register_kind("packaging", languages=("python",))(require_params("tiers")(PackagingCheck))

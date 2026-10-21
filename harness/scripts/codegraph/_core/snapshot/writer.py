@@ -88,10 +88,12 @@ def write_current(root: Path, base: Path, descriptor: Any, *, apply: bool,
     caller's own `except SnapshotError` keeps working unchanged.
     """
     tool_stamp = codegraph_snapshot_reader.compute_tool_stamp()
-    scope = dirty_scope(root, descriptor)
+    from ..lang import registry as lang_registry
+    cfg = lang_registry.config_inputs(root, descriptor)
+    scope = dirty_scope(root, descriptor, cfg)
     dirty = working_tree_dirty(root, scope)
     tree_hash = None if dirty else head_tree_hash(root)
-    key = reuse_key(root, descriptor, dirty=dirty)
+    key = reuse_key(root, descriptor, dirty=dirty, scope=scope)
     desc_path = getattr(descriptor, "path", None)
     descriptor_sha = (codegraph_snapshot_reader.descriptor_file_sha(Path(desc_path).parent,
                                                                     Path(desc_path).name)
@@ -121,7 +123,7 @@ def write_current(root: Path, base: Path, descriptor: Any, *, apply: bool,
     if apply:
         res = take_snapshot(root, base, descriptor, mode=mode, force=True,
                             tool_stamp=tool_stamp, tree_hash=tree_hash, content_key=key,
-                            descriptor_sha=descriptor_sha)
+                            descriptor_sha=descriptor_sha, config_inputs=cfg)
         elapsed = time.monotonic() - t0
         exists = False
         prune_snapshots(base, resolve_keep(descriptor), protect={res.out_dir})
@@ -131,7 +133,7 @@ def write_current(root: Path, base: Path, descriptor: Any, *, apply: bool,
         with tempfile.TemporaryDirectory(prefix="hs-code-graph-snap-") as scratch:
             res = take_snapshot(root, Path(scratch), descriptor, mode=mode, force=True,
                                 tool_stamp=tool_stamp, tree_hash=tree_hash, content_key=key,
-                            descriptor_sha=descriptor_sha)
+                            descriptor_sha=descriptor_sha, config_inputs=cfg)
         elapsed = time.monotonic() - t0
         would = base / res.snapshot
         res = replace(res, out_dir=would)

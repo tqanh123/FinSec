@@ -62,8 +62,11 @@ def _parse_junit(path: Path):
 
 
 def run_tests(root: Path, rows) -> List[RowResult]:
-    """One pytest over every row's `file:`; a row passes when its file's tests do."""
+    """One pytest over every row's `file:`; a row passes when its file's tests do.
+    A repo whose python runner is not pytest is refused, never handed a pytest run."""
     root = Path(root)
+    import test_runners
+    test_runners.require(root, "python", "pytest", tool="the test gate (check gates)")
     by_file = {}
     out = []
     for r in rows:

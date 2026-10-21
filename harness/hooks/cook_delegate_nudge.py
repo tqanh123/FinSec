@@ -131,17 +131,9 @@ def _prompt_flags(plan_dir: Path, node: str) -> tuple:
     posture here can agree with the posture the caller actually asked for
    . Fail-open: no log, no record, any error → no flags."""
     try:
-        import json
-        path = plan_dir / "artifacts" / "phase-commits.jsonl"
+        import phase_commits_log
         flags = None
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
+        for rec in phase_commits_log.read_records(plan_dir):
             if rec.get("kind") == "posture_flags" and rec.get("phase") == node:
                 flags = [str(f) for f in (rec.get("flags") or []) if str(f)]
         return tuple(flags or [])

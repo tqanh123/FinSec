@@ -34,11 +34,22 @@ always answerable from the run itself.
 ## Degrade order, every diagram type
 
 1. Try the preference chain in order; the first `available` probe wins.
-2. If nothing in the chain answers `available`, or the winning engine's actual invocation fails
+2. graphviz routes orthogonally first. Its orthogonal router ignores edge labels, so a
+   labelled edge passes through a label node sized to the text and dot routes around it like
+   any box; `newrank=true` keeps a `layer` hint from pulling a member out of its boundary.
+   That router aborts on some graphs (2.43: `maze.c` `chkSgraph`, on a lifecycle with a retry
+   loop), so a failed orthogonal run is retried with straight segments (`splines=polyline`)
+   and says so in a warning.
+3. If nothing in the chain answers `available`, or the winning engine's actual invocation fails
    at runtime (e.g. `dot` crashes on unusual input), fall back to a pure-Python longest-path
    grid layout (`diagram_layout.layout_fallback_grid`) — plainer, but every node still has a
    position, no two nodes overlap, and every edge still connects.
-3. `sequence` never enters this chain at all; its layout is always the same deterministic
-   linear placement.
+4. `sequence` never enters this chain at all; its layout is always the same deterministic
+   linear placement: a lifeline under each participant, spaced so each label fits its span.
+
+Every layout is then moved onto its canvas and checked by `scripts/diagram_check.py`: box on
+box, a box drawn inside a boundary it is not a member of, a label on a box, line or other
+label, an edge through a box, an arrow short of its box, anything off the canvas. Each finding
+is a `layout check:` warning on stderr — the diagram is still drawn.
 
 Nothing here silently draws a blank diagram or crashes the whole compile on a missing engine.

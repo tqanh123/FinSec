@@ -43,9 +43,15 @@ def _rows_of(loaded, depth: int, kind: str) -> Iterable[CommandRow]:
             if not isinstance(spec, dict) or not spec.get("module"):
                 raise UsageError("%s: %s declares no `module:`"
                                  % (loaded.origins.get(key, "registry"), " ".join(path)))
+            langs = spec.get("languages")
+            if langs is not None and (not isinstance(langs, list) or not langs
+                                      or not all(isinstance(x, str) and x for x in langs)):
+                raise UsageError("%s: %s `languages:` is a list of language ids, got %r"
+                                 % (loaded.origins.get(key, "registry"), " ".join(path), langs))
             yield CommandRow(path=path, help=str(spec.get("help") or ""),
                              origin=Origin(kind, str(loaded.origins.get(key, loaded.sources[0]))),
-                             load=_entry_loader(str(spec["module"]), spec.get("entry")))
+                             load=_entry_loader(str(spec["module"]), spec.get("entry")),
+                             languages=tuple(langs) if langs else None)
     for path, target in sorted(loaded.moved.items()):
         yield CommandRow(path=tuple(path), help="moved to `%s`" % target,
                          origin=Origin(kind, ", ".join(loaded.sources)),

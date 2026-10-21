@@ -33,6 +33,8 @@ testable without running CI / git / gh.
 """
 import argparse
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -58,7 +60,23 @@ NEEDS_CONFIRM = 10
 
 _DEFAULTS = {
     "harness": {"branch": "main"},
+    # Where preflight runs the CI: `remote` -- every job scripts/ci_local.sh dispatches
+    # runs on the host `.rops.env` names, one `hs-rops <alias> --lane <lane> -- <job>`
+    # each, and only the light diff-vs-main steps run here; `local` -- the whole of
+    # scripts/ci_local.sh runs here. A host not configured or not answering stops the
+    # cut rather than falling back.
+    "ci": {"where": "remote", "lane": "release", "alias": "releaseci", "timeout_s": 3600},
 }
+_CI_WHERE = ("remote", "local")
+_DISPATCH_RE = re.compile(r"^\s*bash scripts/ci\.sh ([a-z0-9-]+)\s*$")
+
+
+def dispatched_jobs(root):
+    """The scripts/ci.sh jobs scripts/ci_local.sh dispatches, in its order: the one
+    list the remote cells run, read where a local run reads it."""
+    p = Path(root) / "scripts" / "ci_local.sh"
+    return [m.group(1) for m in map(_DISPATCH_RE.match, p.read_text(encoding="utf-8").splitlines())
+            if m]
 
 
 def _merge(base, over):
@@ -101,10 +119,13 @@ def load_config(path=None, overrides=None):
     # raw AttributeError, even during a read-only dry-run. Reject it here with an
     # actionable message instead (the top-level shape guard above misses the nested
     # case). The consumer indexes this key as a mapping.
-    for key in ("harness",):
+    for key in ("harness", "ci"):
         if not isinstance(cfg.get(key), dict):
             raise SystemExit("release config key %r must be a mapping, got %s"
                              % (key, type(cfg.get(key)).__name__))
+    if cfg["ci"].get("where") not in _CI_WHERE:
+        raise SystemExit("release config ci.where must be one of %s, got %r"
+                         % ("|".join(_CI_WHERE), cfg["ci"].get("where")))
     # `courier` is OPT-IN (no default in _DEFAULTS) — absent/null is fine (consumers
     # read `_courier_cfg() = self.config.get("courier") or {}`), but a present, truthy,
     # wrong-typed value must be rejected here, not crash later at `.get(...)`.
@@ -130,6 +151,8 @@ class Orchestrator:
         self._run = runner or _default_runner
         self._print = printer
         self.config = config or load_config()
+        # a hand-built config without a `ci` block reads the defaults, never a KeyError
+        self.config["ci"] = {**_DEFAULTS["ci"], **(self.config.get("ci") or {})}
         # Personal-first: releases are owner-only — the posture is always solo
         # (the owner fires their own outward work; no team print-only path).
         self.posture = "solo"
@@ -226,6 +249,12 @@ class Orchestrator:
                 "the last marker) — run the decision-reconciler agent, then "
                 "`decision_reconcile.py --mark`, before cutting."
                 % (drift.get("new_decs", 0), drift.get("flips", 0)))
+        # A clean tree before any CI: the CI must run on the commit about to be cut (a
+        # lane is brought to the tree; uncommitted work would be measured, not cut).
+        status = self._run(["git", "status", "--porcelain"], cwd=str(self.root),
+                           capture_output=True)
+        if (status.stdout or "").strip():
+            raise SystemExit("preflight failed (dirty tree) — commit/stash first.")
         checks = [
             # Structural docs gate (cheap, before heavy CI): refuse a cut while
             # docs/ fails frontmatter/graph validation. Release VERIFIES structure
@@ -234,27 +263,88 @@ class Orchestrator:
             ([sys.executable,
               "harness/plugins/hs/skills/docs-standardize/scripts/docs_gate.py",
               "--fresh"], "docs structure"),
-            # A tầng-1 harness release is gated on the harness suite, not the separate
-            # tầng-2 package — scope the whole-repo CI to harness for the cut.
-            (["bash", "-c", "HARNESS_RELEASE_SCOPE=harness exec bash scripts/ci_local.sh"],
-             "local CI (harness scope)"),
+        ]
+        self._checks(checks)
+        self._ci()
+        checks = [
             ([sys.executable, "harness/scripts/check_skill_structure.py",
               "harness/plugins/hs/skills", "--strict"], "skill structure"),
             ([sys.executable, "harness/plugins/hs/skills/release/scripts/validate_skill_crossrefs.py",
               "harness/plugins"], "skill cross-refs"),
         ]
+        self._checks(checks)
+        auth = self._run(["gh", "auth", "status"], cwd=str(self.root), capture_output=True)
+        if auth.returncode != 0:
+            raise SystemExit("preflight failed (gh not authenticated) — run gh auth login.")
+
+    def _checks(self, checks):
         for cmd, label in checks:
             res = self._run(cmd, cwd=str(self.root), capture_output=True)
             if res.returncode != 0:
                 raise SystemExit("preflight failed (%s) — aborting before cut:\n%s"
                                  % (label, (res.stdout or res.stderr or "")[-2000:]))
-        status = self._run(["git", "status", "--porcelain"], cwd=str(self.root),
-                           capture_output=True)
-        if (status.stdout or "").strip():
-            raise SystemExit("preflight failed (dirty tree) — commit/stash first.")
-        auth = self._run(["gh", "auth", "status"], cwd=str(self.root), capture_output=True)
-        if auth.returncode != 0:
-            raise SystemExit("preflight failed (gh not authenticated) — run gh auth login.")
+
+    def _ci_target(self):
+        """(host, None) when `.rops.env` names a host and the cell alias, and the host
+        answers over ssh; else (host or None, why not)."""
+        ci = self.config["ci"]
+        key = "ROPS_CMD_" + str(ci["alias"]).upper()
+        try:
+            from rops.ropslib import config as rops_config
+            cfg = rops_config.load(self.root, detect=False)
+        except Exception as exc:  # a broken .rops.env is a reason, not a traceback
+            return None, "the hs-rops config does not load (%s)" % exc
+        host = (cfg.get("ROPS_HOST") or "").strip()
+        if not host:
+            return None, "ROPS_HOST is not set in .rops.env"
+        if not (cfg.get(key) or "").strip():
+            return host, ("%s is not set in .rops.env — the command each job is appended "
+                          "to, e.g. %s='export PATH=$PWD/.venv-ci/bin:$PATH && bash "
+                          "scripts/ci.sh'" % (key, key))
+        try:
+            probe = self._run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                               *shlex.split(cfg.get("ROPS_SSH_OPTS") or ""), host, "true"],
+                              cwd=str(self.root), capture_output=True)
+        except OSError as exc:
+            return host, "ssh cannot run here (%s)" % exc
+        if probe.returncode != 0:
+            return host, "%s does not answer over ssh (rc %d)" % (host, probe.returncode)
+        return host, None
+
+    def ci_plan(self):
+        """One line: where preflight's CI will run, or why the cut would stop."""
+        ci = self.config["ci"]
+        if ci["where"] == "local":
+            return "here: scripts/ci_local.sh (ci.where: local)"
+        host, why = self._ci_target()
+        if why:
+            return "STOP — %s; fix it, or run the whole CI here: --ci local" % why
+        return ("on %s, lane %s: %d job(s) one hs-rops cell each, then ci_local.sh "
+                "--local-only here" % (host, ci["lane"], len(dispatched_jobs(self.root))))
+
+    def _ci(self):
+        ci = self.config["ci"]
+        if ci["where"] == "local":
+            self._print("  CI: here (ci.where: local)")
+            self._checks([(["bash", "scripts/ci_local.sh"], "local CI")])
+            return
+        host, why = self._ci_target()
+        if why:
+            raise SystemExit("preflight stopped (CI runs on the homelab, ci.where: remote): "
+                             "%s — fix it, or run the whole CI here: --ci local" % why)
+        for job in dispatched_jobs(self.root):
+            res = self._run([sys.executable, "harness/scripts/hs_rops.py", str(ci["alias"]),
+                             "--lane", str(ci["lane"]), "--timeout", str(int(ci["timeout_s"])),
+                             "--", job], cwd=str(self.root), capture_output=True)
+            self._print("  CI cell %s on %s (lane %s): rc %d" % (job, host, ci["lane"],
+                                                                res.returncode))
+            if res.returncode != 0:
+                raise SystemExit("preflight failed (CI cell %s on %s, lane %s, rc %d) — "
+                                 "aborting before cut:\n%s"
+                                 % (job, host, ci["lane"], res.returncode,
+                                    ((res.stdout or "") + (res.stderr or ""))[-2000:]))
+        self._checks([(["bash", "scripts/ci_local.sh", "--local-only"],
+                       "local-only CI steps")])
 
     def step1_cut(self):
         self._print("step 1/3 — cut release v%s (local)" % self.version)
@@ -390,6 +480,7 @@ class Orchestrator:
         self._print("release v%s — dry-run checklist (re-run with --apply to write):"
                     % self.version)
         self._print("  posture: %s" % self.posture)
+        self._print("  CI (preflight): %s" % self.ci_plan())
         self._print("  step 1/3  cut        — %s" %
                     ("DONE (local)" if self.cut_done_local() else "pending"))
         self._print("  step 2/3  push tag   — %s" %
@@ -451,12 +542,16 @@ def main(argv=None):
     ap.add_argument("--yes", action="store_true",
                     help="auto/non-interactive: confirm outward-facing steps")
     ap.add_argument("--root", default=str(REPO), help="repo root")
+    ap.add_argument("--ci", choices=_CI_WHERE,
+                    help="where preflight runs the CI, over release.yaml ci.where: remote "
+                         "(the .rops.env host, one hs-rops cell per job) or local")
     args = ap.parse_args(argv)
 
     if (args.apply or args.yes) and not args.version:
         ap.error("--apply/--yes require --version (refusing to guess semver)")
 
-    orch = Orchestrator(args.root, args.version, apply=args.apply, yes=args.yes)
+    config = load_config(overrides={"ci": {"where": args.ci}} if args.ci else None)
+    orch = Orchestrator(args.root, args.version, apply=args.apply, yes=args.yes, config=config)
     return orch.run()
 
 

@@ -54,6 +54,7 @@ loop or hardcodes a runner literal:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import attrs as _attrs  # REQUIRED — see harness/requirements.txt
 
@@ -77,7 +78,8 @@ UNMATCHED_TARGET_WARNING = (
     "no test command (never guessed into another stack's runner): %s")
 
 
-def stack_commands(root: Path, tests: list) -> "tuple[list, list]":
+def stack_commands(root: Path, tests: list, *, plan: Any = None,
+                   phase: "str | None" = None) -> "tuple[list, list]":
     """`tests` (the import-graph reached set) turned into REAL, runnable
     commands through `detect_techstack.detect` + `detect_techstack.
     scoped_test_commands` -- never a hardcoded runner literal, and never a
@@ -90,7 +92,7 @@ def stack_commands(root: Path, tests: list) -> "tuple[list, list]":
     import detect_techstack
     stack = detect_techstack.detect(root)
     stacks = stack.get("stacks") or []
-    return detect_techstack.scoped_test_commands(stacks, tests)
+    return detect_techstack.scoped_test_commands(stacks, tests, root, plan=plan, phase=phase)
 
 
 
@@ -234,5 +236,5 @@ def scoped_or_full_command(root: Path, *, domain: str, state: str) -> dict:
     if not scoped:
         import detect_techstack
         stacks = detect_techstack.detect(root).get("stacks") or []
-        command = stacks[0].get("test_cmd") if stacks else None
+        command = detect_techstack.full_test_command(stacks[0], root) if stacks else None
     return ScopedCommand(command=command, scoped=scoped, warnings=warnings).as_dict()

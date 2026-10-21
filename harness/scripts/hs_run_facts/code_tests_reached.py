@@ -44,6 +44,10 @@ before its channels run; this package stays codegraph-free, so such a test
 is reached here only when the snapshot itself carries it -- the gap `basis`
 and `warning` name.
 
+STORIES: a record a language pack named `role: story` (`*.stories.tsx`) is never a
+test: one the walk reaches, or a subject that is one, is listed under `stories`
+beside `value` (absent when there is none).
+
 A subject ABSENT from the snapshot (a file too new to have been measured)
 is never folded into `value` as a silent 0 — it is named in
 `not_in_snapshot` instead, so a caller can tell "measured, nothing reaches
@@ -154,7 +158,7 @@ def provide(ctx: dict) -> dict:
     idx = ctx["snapshot"]
     root = ctx["root"]
     subjects = sorted(set(ctx.get("subjects") or ()))
-    layout = _layout_for(root)
+    layout = _layout_for(root).with_roles(idx)
 
     by_path = codegraph_change_reader._module_by_path(idx)
     self_selected = {p for p in subjects if layout.is_test_file(p)}
@@ -166,6 +170,9 @@ def provide(ctx: dict) -> dict:
         m["path"]: depths[m["module"]] for m in codegraph_change_reader._modules(idx)
         if m["module"] in depths and layout.is_test_file(m["path"])
     }
+    stories = sorted({m["path"] for m in codegraph_change_reader._modules(idx)
+                      if m["module"] in depths and layout.is_story_file(m["path"])}
+                     | {p for p in subjects if layout.is_story_file(p)})
 
     # depth 0 = the subject IS a test (self-select); depth N = an importer
     # N hops away. A self-selected path always wins its own depth-0 slot
@@ -193,6 +200,8 @@ def provide(ctx: dict) -> dict:
     ordered_value = [p for p, _d in sorted(depth_by_path.items(), key=lambda kv: (kv[1], kv[0]))]
 
     out = {"value": ordered_value, "basis": _BASIS, "warning": _warning(root, subjects)}
+    if stories:
+        out["stories"] = stories
     if not_in_snapshot:
         out["not_in_snapshot"] = not_in_snapshot
     return out

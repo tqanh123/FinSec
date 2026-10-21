@@ -9,8 +9,9 @@ domains:
     gates: {module: codegraph.check.gates, entry: GATES, help: "run every enabled gate-registry row and bucket each pass/fail/broken/runtime/judged/off"}
     scc: {module: codegraph.check.scc, entry: SCC, help: "find import cycles between workspace packages or within one, and rank the rung ladder"}
     smoke: {module: codegraph.check.smoke, entry: SMOKE, help: "import every module under namespace_root in a child interpreter and flag import errors"}
-    f821: {module: codegraph.check.f821, entry: F821_VERB, help: "check ruff's F821 undefined-name findings against a two-way committed baseline per scope"}
-    pkgsync: {module: codegraph.check.pkgsync, entry: PKGSYNC, help: "check each workspace package declares exactly the imports and dependencies it uses"}
+    run: {module: codegraph.check.run, entry: RUN, help: "run a repo's declared static checks (tsc -b, eslint) and judge their findings against a baseline under the policy floor", languages: [typescript]}
+    f821: {module: codegraph.check.f821, entry: F821_VERB, help: "check ruff's F821 undefined-name findings against a two-way committed baseline per scope", languages: [python]}
+    pkgsync: {module: codegraph.check.pkgsync, entry: PKGSYNC, help: "check each workspace package declares exactly the imports and dependencies it uses", languages: [python]}
     plan-baseline: {module: codegraph.check.plan_baseline, entry: PLAN_BASELINE, help: "compute baseline module/unit counts, import edges, ambiguous imports and rung ladder"}
     owners: {module: codegraph.check.owners, entry: OWNERS, help: "assign each command-line module to its declared owner channel from reference evidence"}
     route-parity: {module: codegraph.check.route_parity, entry: ROUTE_PARITY, help: "diff the target app's routes against an upstream app's, two-way, against a baseline"}

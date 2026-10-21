@@ -63,7 +63,7 @@ groups:
     include: ["harness/scripts/*.py", "harness/scripts/**/*.py", "harness/plugins/hs/skills/goal/scripts/*.py", "harness/plugins/hs/skills/cook/scripts/*.py", "harness/plugins/hs/skills/bakeoff/scripts/*.py", "scripts/*.py", "harness/plugins/hs/skills/compound/scripts/*.py", "harness/plugins/hs/skills/setup/scripts/*.py", "harness/hooks/*.py", "harness/plugins/hs/skills/scenario/scripts/*.py", "harness/plugins/hs/skills/partner/scripts/*.py", "harness/plugins/hs/skills/code-review/scripts/*.py", "release/*.py", "harness/plugins/hs/skills/release/scripts/*.py"]
     exclude: ["release/tests/*", "harness/scripts/rops/**", "harness/scripts/codegraph/**",
               "harness/scripts/port_*.py", "harness/scripts/codegraph_port_*.py",
-              "harness/scripts/hs_run_port.py"]
+              "harness/scripts/hs_run_port.py", "harness/scripts/coverage_floors.py", "harness/scripts/declared_checks.py", "harness/scripts/dirty_tree_guard.py", "harness/scripts/git_default_branch.py", "harness/scripts/harness_checks.py", "harness/scripts/policy_floor.py", "harness/scripts/static_checks.py", "harness/scripts/test_result_writers.py", "harness/scripts/test_runners.py"]
     floor: 81
     why: >-
       Động cơ dùng chung của các skill; một hồi quy ở đây lan ra mọi nơi gọi nó.
@@ -72,7 +72,17 @@ groups:
       chúng — không loại thì mã port bị đếm ĐÔI vào cả hai nhóm và một lần tụt
       phủ chỉ ở mã port có thể đỏ sàn của nhóm dùng chung. Các module port
       PHẲNG (`port_*.py`, `codegraph_port_*.py`, `hs_run_port.py`) cũng loại
-      vì nhóm `port-port` đo chúng.
+      vì nhóm `port-port` đo chúng. Chín module của check do harness chạy cũng
+      loại vì nhóm `harness-checks` đo chúng.
+  harness-checks:
+    include: ["harness/scripts/coverage_floors.py", "harness/scripts/declared_checks.py", "harness/scripts/dirty_tree_guard.py", "harness/scripts/git_default_branch.py", "harness/scripts/harness_checks.py", "harness/scripts/policy_floor.py", "harness/scripts/static_checks.py", "harness/scripts/test_result_writers.py", "harness/scripts/test_runners.py"]
+    floor: 92
+    why: >-
+      Check do harness tự chạy (runner, tsc/eslint, độ phủ theo nhóm) và sổ
+      của chúng: cổng DoD và cook đọc các module này để đòi check theo tên, nên
+      một hồi quy ở đây làm một check bị đòi trông như đã chứng minh. 92 là
+      số đo thật (92,47%, 1154/1248 câu lệnh, đủ 9/9 tệp trên đĩa, lượt phủ
+      toàn bộ `ci.sh coverage-floors` của cây ae666f128) làm tròn xuống.
   plugins:
     include: ["harness/plugins/**/*.py"]
     exclude: ["harness/plugins/hs/skills/_docslib/tests/*",
@@ -140,7 +150,9 @@ groups:
               "harness/scripts/codegraph/change/*.py", "harness/scripts/codegraph/change/**/*.py",
               "harness/scripts/codegraph/test/*.py", "harness/scripts/codegraph/test/**/*.py",
               "harness/scripts/codegraph/graph/*.py", "harness/scripts/codegraph/graph/**/*.py",
-              "harness/scripts/codegraph/init/*.py", "harness/scripts/codegraph/init/**/*.py"]
+              "harness/scripts/codegraph/init/*.py", "harness/scripts/codegraph/init/**/*.py",
+              "harness/scripts/codegraph/_core/lang/typescript/*.py",
+              "harness/scripts/codegraph/_core/lang/typescript/**/*.py"]
     floor: 93
     why: >-
       Lõi thư viện đồ thị mã (`codegraph/__init__.py` + `codegraph/_core/`).
@@ -155,6 +167,19 @@ groups:
       4276/4588 câu lệnh, đủ 56/56 tệp trên đĩa, lượt phủ toàn bộ của cây
       4527e2ece) làm tròn xuống; gói `_core/adapter/` (sổ adapter + reader lệnh
       của dự án) nằm trong nhóm này, 92% (342/373).
+  port-lang-typescript:
+    include: ["harness/scripts/codegraph/_core/lang/typescript/*.py",
+              "harness/scripts/codegraph/_core/lang/typescript/**/*.py"]
+    floor: 92
+    why: >-
+      Gói TypeScript/JavaScript của bản đồ code (`codegraph/_core/lang/typescript/`:
+      workspace, tsconfig, resolve_static, aliases, boundary, tests, symbol_uses,
+      reader tree-sitter, engine compiler ghim). Tiền tố `port-` là quy ước nhóm cho
+      MỌI gói con dưới codegraph/ (`test_the_port_groups_claim_every_file_of_the_ported_graph_library_once`);
+      `port-graph` loại gói này cùng lượt. 92 là số đo thật (92,68%, 2419/2610 câu
+      lệnh, đủ 18/18 tệp trên đĩa, lượt phủ toàn bộ `ci.sh coverage-floors` của cây
+      ca70a75cf, số đọc bằng các hàm của `coverage_gate`) làm tròn xuống. Cùng lượt
+      `port-graph` (đã loại gói này) đo 93,28% (5912/6338, 72/72 tệp): sàn 93 giữ.
   port-scaffold:
     include: ["harness/scripts/codegraph/scaffold/*.py", "harness/scripts/codegraph/scaffold/**/*.py"]
     floor: 82

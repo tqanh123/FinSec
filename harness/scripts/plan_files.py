@@ -37,35 +37,42 @@ def _plan_files(plan_dir: Path):
 # Where a plan keeps material its phases tell the executor to follow. Everything
 # under these dirs is approved content, linked or not; a plan names its own with
 # plan.md frontmatter `reference_dirs:` (pinned — dropping a dir after approval
-# is drift).
+# is drift). An entry may name a SIBLING plan's dir as `../<plan>/<dir>`: a plan
+# split into children keeps what they all follow in the parent, and hashing it here
+# re-opens the child when it changes. Only that spelling reaches outside: a link
+# from the plan's own dirs into a sibling is still an escape.
 DEFAULT_REFERENCE_DIRS = ("refs",)
 
 
 def _reference_dir_entries(plan_dir) -> tuple:
-    """(declared entries, problems). Absent key → the default; a key present but
-    unreadable is a problem, never a silent fallback to the default."""
+    """([(entry, owning plan dir)], problems). Absent key → the default; a key present
+    but unreadable is a problem, never a silent fallback to the default."""
     pm = Path(plan_dir) / "plan.md"
     try:
         m = _FRONTMATTER_RE.match(pm.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
-        return list(DEFAULT_REFERENCE_DIRS), []
+        return [(d, Path(plan_dir).resolve()) for d in DEFAULT_REFERENCE_DIRS], []
     parsed = frontmatter_parser.parse_text(m.group(0), "<frontmatter>") if m else {}
     fm = parsed.get("frontmatter") if parsed.get("ok") else None
+    base = Path(plan_dir).resolve()
     if not isinstance(fm, dict) or "reference_dirs" not in fm:
-        return list(DEFAULT_REFERENCE_DIRS), []
+        return [(d, base) for d in DEFAULT_REFERENCE_DIRS], []
     raw = fm["reference_dirs"]
     raw = [raw] if isinstance(raw, str) else raw
     if not isinstance(raw, list) or not all(isinstance(x, str) and x.strip() for x in raw):
         return [], ["plan.md `reference_dirs:` must be a list of plan-dir-relative "
                     "directory names, got %r" % (fm["reference_dirs"],)]
-    base = Path(plan_dir).resolve()
     entries, problems = [], []
     for x in raw:
         d = (base / x.strip()).resolve()
         try:
             rel = d.relative_to(base)
         except ValueError:
-            problems.append("reference dir %r leaves the plan dir" % x)
+            sib = _sibling_entry(x, d, base)
+            if isinstance(sib, str):
+                problems.append(sib)
+            else:
+                entries.append(sib)
             continue
         if not rel.parts or Path(x.strip()).is_absolute():
             problems.append("reference dir %r must name a subdirectory of the plan "
@@ -74,8 +81,31 @@ def _reference_dir_entries(plan_dir) -> tuple:
             problems.append("reference dir %r is under artifacts/, which holds "
                             "machine-written state that moves after approval" % x)
         else:
-            entries.append(rel.as_posix())
+            entries.append((rel.as_posix(), base))
     return entries, problems
+
+
+def _sibling_entry(x: str, d: Path, base: Path):
+    """(`../<plan>/<dir>`, that plan's dir) for an entry naming a sibling plan's dir,
+    else the sentence saying why it cannot."""
+    if Path(x.strip()).is_absolute():
+        return "reference dir %r must name a subdirectory of the plan dir" % x
+    try:
+        rel = d.relative_to(base.parent)
+    except ValueError:
+        return "reference dir %r leaves the plans dir" % x
+    if not rel.parts:
+        return "reference dir %r must name a subdirectory of a sibling plan" % x
+    owner = base.parent / rel.parts[0]
+    if not (owner / "plan.md").is_file():
+        return ("reference dir %r names no plan under %s — outside its own dir a plan "
+                "may name only a sibling plan's dir, as ../<plan>/<dir>" % (x, base.parent))
+    if len(rel.parts) < 2:
+        return "reference dir %r must name a subdirectory of that plan" % x
+    if rel.parts[1] == "artifacts":
+        return ("reference dir %r is under artifacts/, which holds machine-written state "
+                "that moves after approval" % x)
+    return "../" + rel.as_posix(), owner
 
 
 def _walk_reference_dirs(plan_dir) -> tuple:
@@ -84,9 +114,8 @@ def _walk_reference_dirs(plan_dir) -> tuple:
     what resolves outside the plan dir: such a file is still hashed (by what it
     points at), a dir is not descended."""
     plan_dir = Path(plan_dir)
-    base = plan_dir.resolve()
     files, escapes, seen = set(), [], set()
-    for rel in _reference_dir_entries(plan_dir)[0]:
+    for rel, base in _reference_dir_entries(plan_dir)[0]:
         for dirpath, dirnames, filenames in os.walk(plan_dir / rel, followlinks=True):
             here = Path(dirpath)
             real = here.resolve()

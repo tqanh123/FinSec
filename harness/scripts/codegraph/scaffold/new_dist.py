@@ -53,9 +53,27 @@ def _new_dist_args(ap: argparse.ArgumentParser) -> None:
                     help="the dist's import path ({module} in a kind: dist-doc template); "
                          "when no kind: dist template is declared, default: spelled from "
                          "the name the way the exemplar's is")
+    ap.add_argument("--set", dest="assign", action="append", default=[], metavar="KEY=VALUE",
+                    help="a [tool.<namespace_root>] value for the new dist (repeatable; VALUE is "
+                         "TOML: true, 3, or a bare string) -- picks the group a template is read "
+                         "off when no kind: dist template is declared")
     ap.add_argument("--target", default=None, metavar="DIR",
                     help="where --apply writes (default: the repo root; refuses to overwrite); "
                          "without --apply nothing is written, whatever --target says")
+
+
+def _assignments(raw: "list[str]") -> dict:
+    import tomllib
+    out = {}
+    for item in raw:
+        key, sep, val = item.partition("=")
+        if not sep or not key.strip():
+            raise ScaffoldError(f"--set {item!r}: expected KEY=VALUE")
+        try:
+            out[key.strip()] = tomllib.loads(f"v = {val}")["v"]
+        except tomllib.TOMLDecodeError:
+            out[key.strip()] = val
+    return out
 
 
 def _new_dist(args: argparse.Namespace) -> int:
@@ -66,6 +84,8 @@ def _new_dist(args: argparse.Namespace) -> int:
         descriptor = load_descriptor(repo)
         warnings: "list[str]" = []
         exemplar = None
+        carried = None
+        assign = _assignments(args.assign)
         module = args.module
         prose: "list[str]" = []
         docs = dist_doc_templates(descriptor)
@@ -77,8 +97,9 @@ def _new_dist(args: argparse.Namespace) -> int:
                               tier=args.tier, question=args.question)
         else:
             plan = infer_dist_plan(repo, descriptor, args.name, tier=args.tier,
-                                   question=args.question, module=args.module)
+                                   question=args.question, module=args.module, assign=assign)
             files, warnings, exemplar = plan["files"], plan["warnings"], plan["exemplar"]
+            carried = plan["carried"]
             module, prose = plan["module"], plan["prose"]
             if args.template:
                 warnings.insert(0, "--template %r ignored: codemap.yaml declares no "
@@ -106,7 +127,7 @@ def _new_dist(args: argparse.Namespace) -> int:
             **apply_plan(repo, planned, target=args.target,
                          apply=bool(getattr(opts, "apply", False))),
             "files": file_rows(planned),
-            "inferred_from": exemplar, "warnings": warnings}
+            "inferred_from": exemplar, "carried": carried, "warnings": warnings}
     if bool(getattr(opts, "json", False)):
         print(json.dumps(data, sort_keys=True, ensure_ascii=False))
     else:

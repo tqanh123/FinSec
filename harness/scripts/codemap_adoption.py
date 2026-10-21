@@ -41,10 +41,12 @@ DECLINE_TTL = timedelta(hours=8)
 REMEDY = "create it with /hs:codemap, or `hs-code init run --apply` from the repo root"
 
 _SESSION_ENV_KEYS = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")
-_ADAPTER_BOOK = Path(__file__).resolve().parents[1] / "data" / "hs-code-adapters.yaml"
+_LANGUAGE_BOOK = Path(__file__).resolve().parents[1] / "data" / "hs-code-languages.yaml"
 # Dirs that hold someone else's code (or none), never the repo's language.
 _SKIP_DIRS = frozenset({"node_modules", "venv", "__pycache__", "site-packages",
                         "build", "dist", "target", "vendor"})
+# The walk stops after this many files: 60k .py files with a warm page cache walk in
+# ~0.07 s; a cold cache (first run after boot, a network FS) was not measured.
 _WALK_CAP = 50000
 
 
@@ -55,20 +57,27 @@ class Adoption:
     languages: tuple = ()
     supported: tuple = ()
     session: str = ""
+    #: the language packs whose files the repo holds, in the book's order
+    packs: tuple = ()
 
     def as_dict(self) -> dict:
         return {"state": self.state, "reason": self.reason,
                 "languages": list(self.languages), "supported": list(self.supported),
-                "session": self.session}
+                "session": self.session, "packs": list(self.packs)}
 
 
 def supported_extensions() -> dict:
-    """suffix -> adapter id, read from the bin adapter book (the one source)."""
-    book = yaml_io.safe_load(_ADAPTER_BOOK.read_text(encoding="utf-8")) or {}
+    """suffix -> language id, for each language the bin's language book offers a map
+    for (`offer: true`); the suffix is the one each `files.include` glob ends in."""
+    book = yaml_io.safe_load(_LANGUAGE_BOOK.read_text(encoding="utf-8")) or {}
     out = {}
-    for row in book.get("adapters") or []:
-        for ext in row.get("extensions") or []:
-            out[str(ext)] = str(row.get("id"))
+    for row in book.get("languages") or []:
+        if not isinstance(row, dict) or row.get("offer") is not True:
+            continue
+        for glob in (row.get("files") or {}).get("include") or []:
+            ext = Path(str(glob)).suffix.lower()
+            if ext:
+                out[ext] = str(row.get("id"))
     return out
 
 
@@ -84,12 +93,15 @@ def _session(env: Mapping) -> str:
     return ""
 
 
-def _suffixes(root: Path, wanted: frozenset) -> set:
-    """Suffixes seen under `root`, stopping at the first one in `wanted`.
+def _suffixes(root: Path, wanted: dict) -> set:
+    """Suffixes seen under `root`, stopping once every pack in `wanted` (suffix ->
+    pack id) has a file.
 
     A walk, never a subprocess: hs-run asks this on every `next` of a repo with no
-    code map, and a steady-state poll must not pay a process spawn. Only a repo
-    with nothing readable walks to the end (capped)."""
+    code map, and a steady-state poll must not pay a process spawn. A repo without
+    a file of every pack walks to the end (capped)."""
+    packs = set(wanted.values())
+    hit: set = set()
     out, seen = set(), 0
     for _dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS]
@@ -98,7 +110,9 @@ def _suffixes(root: Path, wanted: frozenset) -> set:
                 ext = "." + name.rsplit(".", 1)[-1].lower()
                 out.add(ext)
                 if ext in wanted:
-                    return out
+                    hit.add(wanted[ext])
+                    if hit == packs:
+                        return out
         seen += len(filenames)
         if seen >= _WALK_CAP:
             break
@@ -146,21 +160,23 @@ def status(root, env: Optional[Mapping] = None, now: Optional[datetime] = None) 
     if (root / "codemap.yaml").is_file():
         return Adoption("adopted", "codemap.yaml at %s" % root, session=session)
     book = supported_extensions()
-    found = _suffixes(root, frozenset(book))
+    found = _suffixes(root, book)
     langs = tuple(sorted(found))
     supported = tuple(sorted(book))
-    if not found & set(book):
+    order = list(dict.fromkeys(book.values()))
+    packs = tuple(sorted({book[x] for x in found if x in book}, key=order.index))
+    if not packs:
         return Adoption("unsupported",
                         "no file with a suffix the code map can read (%s)" % ", ".join(supported),
                         langs, supported, session)
     attended = env.get("CLAUDE_CODE_SESSION_ATTENDED")
     if attended is not None and attended.strip() != "1":
         return Adoption("unattended", "CLAUDE_CODE_SESSION_ATTENDED=%s: nobody to ask" % attended,
-                        langs, supported, session)
+                        langs, supported, session, packs)
     if _declined(root, session, _now(now)):
         return Adoption("declined", "declined for session %s" % (session or "(no id, 8h)"),
-                        langs, supported, session)
-    return Adoption("offer", "no codemap.yaml at %s" % root, langs, supported, session)
+                        langs, supported, session, packs)
+    return Adoption("offer", "no codemap.yaml at %s" % root, langs, supported, session, packs)
 
 
 def record(root, decision: str, env: Optional[Mapping] = None,

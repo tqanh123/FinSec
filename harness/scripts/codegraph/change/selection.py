@@ -149,10 +149,15 @@ class Selection:
     channels: "dict[str, list[str]]" = field(default_factory=dict)
     blind_spot: "list[str]" = field(default_factory=list)
     notes: "list[str]" = field(default_factory=list)
+    #: stories the import channel reaches: shown, never run as tests
+    stories: "list[str]" = field(default_factory=list)
 
     def to_dict(self) -> "dict[str, Any]":
-        return {"selected": self.selected, "channels": self.channels,
-                "blind_spot": self.blind_spot, "notes": self.notes}
+        out = {"selected": self.selected, "channels": self.channels,
+               "blind_spot": self.blind_spot, "notes": self.notes}
+        if self.stories:
+            out["stories"] = self.stories
+        return out
 
 
 def receipt(sel: "Selection", *, source_ref: "str | None" = None,
@@ -236,6 +241,7 @@ def select_tests(idx: "dict | None", changed_paths: "Iterable[str]", *, root: Pa
 
     layout = build_test_layout(root)
     idx = _augmented_idx(idx, root, layout)
+    layout = layout.with_roles(idx)
     changed = sorted(set(changed_paths))
     all_tests = (sorted({m["path"] for m in _modules(idx) if layout.is_test_file(m["path"])})
                 if idx is not None else sorted(p for p in changed if layout.is_test_file(p)))
@@ -246,6 +252,7 @@ def select_tests(idx: "dict | None", changed_paths: "Iterable[str]", *, root: Pa
 
     per: "dict[str, set[str]]" = {}
     notes: "list[str]" = []
+    stories: "list[str]" = []
 
     if "self" in enabled:
         per["self"] = {p for p in changed if layout.is_test_file(p)}
@@ -261,6 +268,9 @@ def select_tests(idx: "dict | None", changed_paths: "Iterable[str]", *, root: Pa
             reached = import_channel(idx, changed_modules)
             per["import"] = {m["path"] for m in _modules(idx)
                              if m["module"] in reached and layout.is_test_file(m["path"])}
+            stories = sorted({m["path"] for m in _modules(idx)
+                              if m["module"] in reached and layout.is_story_file(m["path"])}
+                             | {p for p in changed if layout.is_story_file(p)})
         if "string" in enabled:
             sel, stats = string_channel(idx, changed, root, layout)
             per["string"] = sel
@@ -285,4 +295,4 @@ def select_tests(idx: "dict | None", changed_paths: "Iterable[str]", *, root: Pa
     selected = sorted(set().union(*per.values())) if per else []
     blind = sorted(set(all_tests) - set(selected))
     return Selection(selected=selected, channels={k: sorted(v) for k, v in per.items()},
-                     blind_spot=blind, notes=notes)
+                     blind_spot=blind, notes=notes, stories=stories)
