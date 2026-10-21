@@ -8,6 +8,11 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-21 — Phase 0b foundations (plan 261021-1314-phase0b-foundations), owner choices:
+  - CI: a GitHub Actions workflow (`.github/workflows/ci.yml`) runs pytest on Python 3.11 and 3.13; the repository is public.
+  - `requires-python` is `>=3.11` (Python 3.10 reached end of life on 2026-10-01).
+  - The Alpaca MCP server runs without the `trading` and `watchlists` toolsets (`watchlists` has write operations).
+  - `codemap.yaml` (the hs-code map) is committed.
 - 2026-10-21 — All remaining roadmap §9 decisions answered; the roadmap is ADOPTED as the working plan:
   - §9.1: personal research; outputs are owner-only (demos use replayed data and derived signals).
   - §9.2: US pipeline first; VN capture-only poller from week 1; VN is the main research market from Phase 3.
@@ -37,6 +42,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); it has no zero-division guards and is not valid for banks, insurers or brokers;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
+- **Tests (OBSERVED 2026-10-21).** pytest collects 8 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`.
 - **Stub or placeholder:**
   - connectors are static dict parsers;
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
@@ -49,7 +55,6 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - The VN price band is computed but never validated, and an unknown exchange silently gets 7% (`domain/models.py:44`).
   - On a cold start the router always picks the first arm (`router/linucb_bandit.py:40`).
   - The SSI endpoint constant `wss://stream.ssi.com.vn` is wrong (see Verified Facts).
-  - pytest collects 0 tests.
 
 ## Package Layout (`src/finsec_alpharadar/`)
 - `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`).
@@ -106,13 +111,14 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - The band for those stocks is ASSUMED.
   - FTSE secondary-emerging status is effective 2026-09-21. VERIFIED https://www.lseg.com/en/media-centre/press-releases/ftse-russell/2025/ftse-russell-country-classification-september-2025
 - **vnstock licence.** The Community licence allows personal, study or research use only, with no redistribution. VERIFIED https://github.com/thinh-vu/vnstock. Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
-- **`.gitignore` (OBSERVED 2026-10-20).** The unanchored `data/` and `models/` patterns ignore any directory with those names. `harness/**/data/` is re-included explicitly.
+- **`.gitignore` (OBSERVED 2026-10-20).** The unanchored `data/` and `models/` patterns ignore any directory with those names. `harness/**/data/` is re-included explicitly. With `core.autocrlf=true` the checked-out `.gitignore` is CRLF, and git reads its blank lines as an empty pattern that matches every path ending in `/`; query a file inside a directory, or read the `-v` pattern (OBSERVED 2026-10-21, Git for Windows 2.55.0).
 - **Harness install state (OBSERVED 2026-10-21).**
   - Strict verify reads the omitted-skills record in the gitignored `harness/state/`. A fresh clone or worktree therefore reports files as "missing" until you run the installer there: the default-off skills stashed in `disabled-skills/` (477 files in v7.3.0) plus `harness/state/.gitkeep`. The main checkout was installed on 2026-10-21 and passes.
   - The pre-push transport gate lives in the shared `.git/hooks/pre-push`, which an install in the main checkout wrote on 2026-10-21. It runs for every worktree. It blocks a delete or non-fast-forward of a protected branch, and a detected secret. A missing stage receipt only warns. An install from a worktree skips this hook because there `.git` is a file.
   - Claude Code hooks are OFF in this project. Desktop sessions in `.claude/worktrees/*` run hooks with `CLAUDE_PROJECT_DIR` set to the main checkout.
     - `protected_ref_guard` then reads the main checkout's branch (`main`) and refuses every `git commit` made from a worktree.
     - The main checkout's `.claude/settings.json` is therefore parked as `harness/state/claude-settings.json.harness-off`. Move it back to turn the hooks on again, once the guard reads the worktree's branch.
+- **Python 3.10** reached end of life on 2026-10-01. VERIFIED https://devguide.python.org/versions/
 
 ## Engineering Rules (binding)
 - **No order execution anywhere.**
@@ -144,8 +150,14 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **End-to-end smoke check.**
   - bash: `PYTHONPATH=src python3 tests/test_end_to_end.py`
   - PowerShell: `$env:PYTHONPATH='src'; python tests/test_end_to_end.py`
-  - pytest collects 0 tests until Phase 0 adds a test wrapper.
-- **FastAPI server:** `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --reload --port 8000`. fastapi is not installed on the dev machine yet.
+- **Dev environment (2026-10-21).**
+  - bash: `python -m venv .venv`, then `.venv/Scripts/python -m pip install -e ".[dev]"`.
+  - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
+- **Tests (2026-10-21).**
+  - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-21: `source .venv/Scripts/activate && pytest -q` → 8 passed.
+- **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
+- **FastAPI server:** `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --reload --port 8000`. fastapi installs into `.venv` with the dev setup (2026-10-21).
 - **Harness integrity:** `python3.13 harness/scripts/verify_install.py --root . --strict`. Local gate: `/hs:test`.
   - Standards docs: `python3.13 harness/scripts/scaffold_standards.py --type system-architecture --check docs/system-architecture.md`, and the same with `--type code-standards` for `docs/code-standards.md`.
   - Upgrade (Git Bash, POSIX paths): `sh install.sh /c/.../harness-vX.Y.Z.tar.gz .`. Then convert `harness/release.json` back to LF, because strict verify compares it with HEAD. Never edit `harness/manifest.json`: `kit_digest` pins its CRLF bytes.

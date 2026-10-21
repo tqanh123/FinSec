@@ -1,16 +1,16 @@
 # System Architecture
 
-> Read before every `/hs:plan` and `/hs:cook`. Status, verified facts and the decision log live in [AGENTS.md](../AGENTS.md). The adopted roadmap and the owner decisions (§9, all answered by 2026-10-21) live in [docs/project-roadmap.md](project-roadmap.md). Checked against the code on 2026-10-20; decision status updated 2026-10-21.
+> Read before every `/hs:plan` and `/hs:cook`. Status, verified facts and the decision log live in [AGENTS.md](../AGENTS.md). The adopted roadmap and the owner decisions (§9, all answered by 2026-10-21) live in [docs/project-roadmap.md](project-roadmap.md). Checked against the code on 2026-10-21; decision status updated 2026-10-21.
 > **AS-BUILT** = in the code today. **DECIDED** = AGENTS.md "Decisions" or "Engineering Rules (binding)". **PLANNED** = in the adopted roadmap (ADOPTED 2026-10-21) but not built yet; build it in its phase, and change it only through a dated decision.
 
 ## Overview
 - FinSec AlphaRadar is a research and alerting platform for US (NYSE/NASDAQ) and Vietnam (HOSE/HNX/UPCOM) equities. It aims to turn disclosures, financial statements and market data into probabilities that are scored against what actually happened (target; nothing does this yet).
 - It never places orders and is not investment advice (DECIDED, AGENTS.md "Engineering Rules").
 - Maturity: **prototype** (AGENTS.md "Current Status", verified 2026-10-20).
-  - About 850 lines of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.10`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:4`).
+  - About 850 lines of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.11`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:4`).
   - No HTTP/WebSocket client, database driver, environment-variable read or LLM SDK anywhere in `src/`.
   - No prediction has been made or scored yet.
-  - The only test file is `tests/test_end_to_end.py`. Its entry point `run_modular_verification()` (line 36) is not a `test_*` function, so `PYTHONPATH=src python3 -m pytest` collects 0 tests and exits 5. Without `PYTHONPATH`, collection errors (exit 2): `pyproject.toml` has no `[tool.pytest.ini_options] pythonpath`. `make test` (`Makefile:6-7`) calls bare `pytest`, which is not on PATH on the dev machine (OBSERVED 2026-10-20). The only passing check is the AGENTS.md smoke command (exit 0).
+  - Tests (OBSERVED 2026-10-21): pytest collects 8 tests from `tests/`: the `test_end_to_end()` smoke wrapper plus the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`. `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 8 pass in `.venv` (Python 3.13) and on Python 3.11. CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) calls bare `pytest`, which is not on PATH on the dev machine (OBSERVED 2026-10-20).
 - Shape today: independent engines plus a 3-endpoint FastAPI app. Target shape (PLANNED): a disclosure poller feeding an append-only prediction ledger that is scored automatically (see Data flow).
 
 ## Components
@@ -27,7 +27,7 @@
 | `forensics/xbrl_bctc_auditor.py` | `ForensicAccountingEngine.evaluate`: Altman Z, 8-variable Beneish M, 9-point Piotroski F | Real, test-only. No zero-division guards (e.g. line 28) and no sector gate. |
 | `rag/hybrid_temporal_rag.py` | `HybridTemporalRAGEngine`: BM25 + RRF + exponential time decay; sentence-level diff | BM25, RRF and decay are real. The "dense" and ColBERT MaxSim legs use per-token hash vectors (lines 47-52) with no semantics. Look-ahead bug: lines 112 and 138, and no `published_at <= as_of` filter (lines 118-122). |
 | `router/linucb_bandit.py` | `LinUCBModelRouter`: disjoint LinUCB over model-name arms | Math is real, but no model is ever called. Only the smoke test calls `update_reward` (hard-coded 0.98, test:151); the app never does, so `GET /v1/rag/search` always picks the first arm (line 40). |
-| `api/server.py` | FastAPI: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search` | Thin. No WebSocket, no auth, untyped `Dict[str, Any]` body (line 29), hard-coded unverified model IDs (lines 18-20). fastapi is not installed on the dev machine yet (AGENTS.md). |
+| `api/server.py` | FastAPI: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search` | Thin. No WebSocket, no auth, untyped `Dict[str, Any]` body (line 29), hard-coded unverified model IDs (lines 18-20). fastapi installs into `.venv` with the dev setup (AGENTS.md). |
 
 Outside `src/`:
 - `scripts/train_unsloth_slm.py` only prints a hard-coded training recipe; it does not read `configs/unsloth_qwen3_catalyst.yaml`. Stub.
@@ -121,7 +121,7 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
   - No authentication, rate limit or request model: the body is an untyped dict (`server.py:29`), and a missing key raises a 500.
   - Any caller of `POST /v1/ticks/ingest` mutates shared in-memory engine state.
 - **Secrets:** keys live in `.env` (gitignored, `.gitignore:20`; `*.pem` and `*.key` ignored at lines 26-27). `src/` reads no environment variables today. Guidance (roadmap §4, §8; not an AGENTS.md rule): never commit keys, and never put secrets or personal data in prompts, URLs or logs.
-- **Order-execution boundary (DECIDED):** no trading client in `src/`; keep `ALPACA_PAPER_TRADE=true` (`.env.example:4`); no `trading` MCP toolset; never register SSI FC Trading. A test enforcing this (`tests/test_no_order_execution.py`) is planned for Phase 0.
+- **Order-execution boundary (DECIDED):** no trading client in `src/`; keep `ALPACA_PAPER_TRADE=true` (`.env.example:4`); no `trading` MCP toolset; never register SSI FC Trading. `tests/test_no_order_execution.py` enforces this (since 2026-10-21).
 - **Outputs:** every output carries a not-investment-advice notice and states probabilities, never buy/sell (mua/bán) wording (DECIDED). Owner-only visibility is DECIDED (§9.1, §9.8).
 - **Untrusted inputs** (guidance, roadmap §5.1; not an AGENTS.md rule): validate at the connector boundary and treat as data, never as instructions:
   - vnstock responses (unofficial endpoints that can change or break without notice);
@@ -131,7 +131,6 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
 - **Known gaps against binding rules** (do not copy; fix within scope when touched):
   - RAG gives future-dated documents full weight (`hybrid_temporal_rag.py:112,138`).
   - VN band never validated; unknown exchange silently gets 7% (`domain/models.py:44`).
-  - `.agents/mcp_config.json:16` still lists `trading` in `ALPACA_TOOLSETS`.
   - Forensics has no gate excluding banks, insurers and securities firms (`forensics/xbrl_bctc_auditor.py`).
   - Connectors stamp missing timestamps with `now()` (`us_alpaca_edgar.py:20`, `vn_ssi_vnstock.py:22`), which fakes availability time.
   - API responses carry no not-investment-advice notice (`api/server.py:46-49`, `62-66`).

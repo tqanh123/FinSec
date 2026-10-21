@@ -374,11 +374,11 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 **0b. Foundations.**
 1. Done 2026-10-20: `docs/system-architecture.md` and `docs/code-standards.md` are written and pass `harness/scripts/scaffold_standards.py --check`. Re-check them whenever an owner decision in section 9 is answered.
 2. AGENTS.md now carries the status, proposed direction, facts and rules (done 2026-10-20). CLAUDE.md stays a bare `@AGENTS.md` import. Update AGENTS.md as each owner decision in section 9 is answered.
-3. Tests:
+3. Tests. Done 2026-10-21 (Phase 0b plan, phase 1): GitHub Actions workflow, because a public GitHub remote exists.
    - pytest config with `pythonpath`, the `test_end_to_end()` wrapper and the dev extras;
    - `tests/test_no_order_execution.py`: no TradingClient, submit_order or FC Trading imports in `src/`;
    - `tests/test_agents_md_paths.py`: every path that AGENTS.md describes as existing does exist.
-   - The local gate is `/hs:test`. Add a GitHub Actions workflow only if a GitHub remote exists (there is no `.github/` today); otherwise add a pre-commit config.
+   - The local gate is `/hs:test`; CI is `.github/workflows/ci.yml` (added 2026-10-21 because a public GitHub remote exists, so no pre-commit config).
 4. Hygiene:
    - anchor the `.gitignore` patterns;
    - remove the `trading` toolset and pin the MCP refs;

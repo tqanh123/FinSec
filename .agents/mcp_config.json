@@ -13,7 +13,7 @@
         "ALPACA_API_KEY": "${ALPACA_API_KEY}",
         "ALPACA_SECRET_KEY": "${ALPACA_SECRET_KEY}",
         "ALPACA_PAPER_TRADE": "true",
-        "ALPACA_TOOLSETS": "stock-data,options-data,corporate-actions,news,watchlists,trading"
+        "ALPACA_TOOLSETS": "stock-data,options-data,corporate-actions,news"
       }
     },
     "edgartools-us": {

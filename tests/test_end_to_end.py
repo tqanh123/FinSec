@@ -163,6 +163,10 @@ def run_modular_verification() -> dict:
     }
 
 
+def test_end_to_end() -> None:
+    run_modular_verification()
+
+
 if __name__ == "__main__":
     result = run_modular_verification()
     print(json.dumps(result, indent=2, ensure_ascii=False))
