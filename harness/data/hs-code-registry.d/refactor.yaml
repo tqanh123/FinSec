@@ -15,17 +15,17 @@
 
 domains:
   refactor:
-    move: {module: codegraph.refactor.move, entry: MOVE, help: "move (--flat|--module|--symbol) a file, module, or top-level symbol to a new home"}
-    rename: {module: codegraph.refactor.rename, entry: RENAME, help: "rename one identifier by rewriting only its NAME token spans across the tree"}
-    name-repair: {module: codegraph.refactor.namerepair, entry: NAME_REPAIR, help: "move an imported name's import line to the module that actually defines it"}
-    slice: {module: codegraph.refactor.slice, entry: SLICE, help: "split one module by AST into keep/drop halves, or a registry-declared shape"}
-    slice-audit: {module: codegraph.refactor.slice_audit, entry: SLICE_AUDIT, help: "diff each ported module against its .orig twin to find symbols the port dropped"}
-    clone-dedupe: {module: codegraph.refactor.clone_dedupe, entry: CLONE_DEDUPE, help: "collapse an identical production code clone into one home plus imports"}
-    shim-debt: {module: codegraph.refactor.shim_debt, entry: SHIM_DEBT, help: "count who still imports through a re-export bridge left by move --symbol"}
-    repin-hash: {module: codegraph.refactor.repin_hash, entry: REPIN_HASH, help: "recompute sha256 byte-fence pins in test tables from the files' real bytes"}
-    carve: {module: codegraph.refactor.carve, entry: CARVE, help: "cut named top-level blocks out of one module into sibling modules"}
-    rebind: {module: codegraph.refactor.rebind, entry: REBIND, help: "repoint a test import bound to a different kind of object than its upstream twin"}
-    rewrite-refs: {module: codegraph.refactor.rewrite_refs, entry: REWRITE_REFS, help: "rewrite every reference to a port's old package to its new home via the ledger"}
+    move: {module: codegraph.refactor.move, entry: MOVE, help: "move (--flat|--module|--symbol) a file, module, or top-level symbol to a new home", languages: [python]}
+    rename: {module: codegraph.refactor.rename, entry: RENAME, help: "rename one identifier by rewriting only its NAME token spans across the tree", languages: [python]}
+    name-repair: {module: codegraph.refactor.namerepair, entry: NAME_REPAIR, help: "move an imported name's import line to the module that actually defines it", languages: [python]}
+    slice: {module: codegraph.refactor.slice, entry: SLICE, help: "split one module by AST into keep/drop halves, or a registry-declared shape", languages: [python]}
+    slice-audit: {module: codegraph.refactor.slice_audit, entry: SLICE_AUDIT, help: "diff each ported module against its .orig twin to find symbols the port dropped", languages: [python]}
+    clone-dedupe: {module: codegraph.refactor.clone_dedupe, entry: CLONE_DEDUPE, help: "collapse an identical production code clone into one home plus imports", languages: [python]}
+    shim-debt: {module: codegraph.refactor.shim_debt, entry: SHIM_DEBT, help: "count who still imports through a re-export bridge left by move --symbol", languages: [python]}
+    repin-hash: {module: codegraph.refactor.repin_hash, entry: REPIN_HASH, help: "recompute sha256 byte-fence pins in test tables from the files' real bytes", languages: [python]}
+    carve: {module: codegraph.refactor.carve, entry: CARVE, help: "cut named top-level blocks out of one module into sibling modules", languages: [python]}
+    rebind: {module: codegraph.refactor.rebind, entry: REBIND, help: "repoint a test import bound to a different kind of object than its upstream twin", languages: [python]}
+    rewrite-refs: {module: codegraph.refactor.rewrite_refs, entry: REWRITE_REFS, help: "rewrite every reference to a port's old package to its new home via the ledger", languages: [python]}
 
 # `refactor slice --shape NAME` looks NAME up here: `<name>: {module: DOTTED,
 # entry: FUNC}` (entry defaults to `plan`; its contract is in

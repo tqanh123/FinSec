@@ -33,7 +33,10 @@ the files on disk are what the verdict is about.
    Only when nothing is recorded yet does it resolve the stack's own test command AND check
    required deps in one call. Never assume `pytest`; the verb reports what THIS repo declares.
    exit 11 `ready` → `next_command` is the verbatim runner (`pytest`, `go test ./...`,
-   `pnpm test`, …); run exactly that.
+   `pnpm test`, …); run exactly that. For a runner the harness runs itself (vitest, jest —
+   `executor: harness` in the language book) it is `hs-code test run …`: the harness calls the
+   runner through `node_modules/.bin`, writes the JUnit and the check ledger; add `--plan` +
+   `--phase` so the run lands in the plan, and never run the runner by hand instead.
    exit 10 `no_stack_detected` / `stack_no_test_cmd` → no stack found, or the stack declares
    no runner. Ask the user
    which command to use — do not guess one.
@@ -87,7 +90,8 @@ The JSON also carries a `receipt`: a fingerprint (source ref, snapshot commit, w
   | stack | runner | reporter → JUnit | file |
   |---|---|---|---|
   | Python | `pytest` | `--junitxml` | `junit.xml` |
-  | JS | `jest` | `jest-junit` | `junit.xml` |
+  | JS/TS | `vitest` / `jest` | the harness (`hs-code test run`; `--coverage` adds `coverage/total` cobertura + one `coverage/<group>` per floored group) | `artifacts/harness-runs/*.xml` |
+  | TS | `tsc -b` / `eslint` (declared under `languages.typescript.checks`) | the harness (`hs-code check run`) — JUnit / SARIF against the check's baseline | `artifacts/harness-runs/*` |
   | Go | `go test` | `gotestsum --junitfile` / `go-junit-report` | `junit.xml` |
   | Rust | `cargo test` | `cargo2junit` | `junit.xml` |
   | Java | `mvn`/`gradle test` | surefire/gradle (native JUnit) | `target/surefire-reports/*.xml` |
@@ -121,7 +125,7 @@ hs:test **only runs and reports** — it does not modify code, does not weaken t
 
 ## Related skills
 
-- `manual` evidence tier: exploratory / manual API or UX checks no result file captures. Arm the anchor hook by exporting `HARNESS_MANUAL_TEST_SESSION=<id>` (it then records every Bash command), or stamp one deliberate probe with `manual_test.py --anchor --cmd <cmd> [--session <id>] [--timeout S]` (default 120 s, max 14400); cite the anchor id in the same verification.yaml.
+- `manual` evidence tier: exploratory / manual API or UX checks no result file captures. Arm the anchor hook by exporting `HARNESS_MANUAL_TEST_SESSION=<id>` (records every Bash command), or stamp one deliberate probe with `manual_test.py --anchor --cmd <cmd> [--session <id>] [--timeout S]` (default 120 s, max 14400), output kept at `output=`; cite the anchor id in the same verification.yaml.
 - `hs:rops`: run the suite on another machine when it is too slow or too heavy here, or when a timing needs a host that is not doing anything else. It returns the real exit code and keeps the full log on the remote, so the verdict written here is the run's own, not a truncated tail's.
 - `--ultra [N]`/`--debate`: call `hs:workflow-orchestrate --ultra [N]|--debate --run-id <slug>` to size + drive N independent verdict-route analyses over the SAME test results (no shared context); `hs:escalation-consultant` synthesizes the final verdict written to verification.yaml. Approval gate is `hs:workflow-orchestrate`'s own.
 

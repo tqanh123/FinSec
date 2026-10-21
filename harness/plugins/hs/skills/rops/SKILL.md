@@ -67,12 +67,13 @@ machine.
 |---|---|
 | `doctor` | What rops resolved, where from, and whether the far side answers. |
 | `sync [--delete] [--back]` | rsync there; `--back` pulls the tree over your working copy (it refuses over uncommitted changes). |
-| `run [--sync] -- <cmd>` | Anything. Real exit code, full log kept remote. One argument is a shell string (`'a | b && c'`); several are argv, each quoted whole (`bash -c 'cd X && c'` keeps its `cd`) — same for an alias's extra args and `bench`. `--sync` first brings the remote tree up to yours (a lane is rebuilt only when it differs): an edit costs one command. |
-| `run --at <rev> -- <cmd>` | In a throwaway clean worktree of that commit, with its own sync, removed afterwards (even on failure, timeout or interrupt): nothing uncommitted or half-written reaches the run. |
-| `lane [--name N]` | A real git worktree of this tree on the remote (bare repo + push + rsync), for gates that enumerate the tree through git; `run --lane N -- <cmd>` runs inside it. |
+| `run [--sync] -- <cmd>` | Anything. Real exit code, full log kept remote. The command comes after `--`: a word before it is refused, not run. `--label` takes any text. One argument is a shell string (`'a | b && c'`); several are argv, each quoted whole — same for an alias's extra args and `bench`. `--sync` first brings the remote tree up to yours (a lane is rebuilt only when it differs). |
+| `run --at <rev> -- <cmd>` | In a throwaway clean worktree of that commit, with its own sync, removed afterwards (even on failure, timeout or interrupt): nothing uncommitted or half-written reaches the run. `--lane N` beside it names the lane the run is for (`ROPS_LANE`, its log dir) and leaves the lane's checkout alone; env and locks are the repo's, as without it. |
+| `lane [--name N]` | A real git worktree of this tree on the remote (bare repo + push + rsync), for gates that enumerate the tree through git; `run --lane N -- <cmd>` runs inside it. A lane belongs to the tree that built it: another checkout's rebuild refuses (rc 3) until `--rebind` hands it over; an old lane with no owner record refuses once — see `references/config.md` § Lane ownership. |
 | `<alias> -- <args>` | Every `ROPS_CMD_<NAME>` becomes a verb: `hs-rops test`, `hs-rops lint`, `hs-rops build`. |
 | `bench --label L -- <cmd>` | ≥2 repetitions on a quiet machine, spread reported. |
 | `fetch <remote-path> [dest]` | Pull a log or artifact back. `--print` / `--grep PAT` read it in place, and `--lane NAME` names the lane's dir. None of the three checks or syncs a tree. |
+| `lock [status\|cancel ID\|resize ID N]` | The machine's queue: who holds or waits for which pool, and why. A suite takes seats in the `cpu` pool (70% of the cores) by itself, as wide as its `-n`; `--skip-queue "why"` starts a narrow run now, on record. See `references/pools.md`. |
 | `kill <PGID>` / `kill <pattern>` / `kill --stray` | A number is a PGID: that group gets TERM, then KILL, and the reply counts what is left. Anything else is a `pgrep -f` pattern, never matching the kill itself. `--stray` reaps orphaned CPU burners. |
 | `ci list\|run\|preview\|flatten [jobs]` | Run a GitLab pipeline remotely (capability-gated). |
 | `gitlab [action]` | A real GitLab + runner on the remote — the heavy lane `ci` can target. |
@@ -153,5 +154,6 @@ verb file in `<repo>/.claude/rops/verbs/`. It appears only in that repo. See
 | Content | Drawer |
 |---|---|
 | Every `.env` key, with defaults and why | `references/config.md` |
+| How runs queue for dirs, locks and cores | `references/pools.md` |
 | Verb-module contract + worked example | `references/extending.md` |
 | Measurement recipes that survived review | `references/measuring.md` |

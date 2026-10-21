@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -248,6 +249,49 @@ def _git_lines_z(root: Path, *args: str) -> "list[str]":
             for p in r.stdout.split(b"\0") if p]
 
 
+_COMMIT_HASH = re.compile(r"^[0-9a-f]{7,64}$")
+
+
+def subjects_of_commits(root: Path, commits) -> "list[str]":
+    """The files `commits` touched that are still on disk: the subject set of a change
+    named by its commits rather than by a diff against the default branch, which is
+    empty once that work has merged there. A merge commit adds nothing of its own.
+    One `git log`; a value that is not a commit hash is refused (ValueError) before
+    it can reach git as an option."""
+    bad = [c for c in commits if not _COMMIT_HASH.fullmatch(str(c))]
+    if bad:
+        raise ValueError("not a commit hash: %s" % ", ".join(map(str, bad)))
+    if not commits:
+        return []
+    seen: dict = {}
+    for rel in _git_lines_z(root, "log", "--no-walk=unsorted", "--name-only", "--format=",
+                            "-z", "--end-of-options", *map(str, commits)):
+        if (Path(root) / rel).is_file():
+            seen.setdefault(rel, None)
+    return list(seen)
+
+
+def commits_outside_history(root: Path, commits) -> "list[str]":
+    """Each of `commits` that is not in HEAD's history (or does not resolve)."""
+    out = []
+    for c in commits:
+        try:
+            r = subprocess.run(["git", *_GIT_SAFE, "-C", str(root), "merge-base",
+                                "--is-ancestor", "--end-of-options", str(c), "HEAD"],
+                               capture_output=True, env=_git_env())
+        except OSError:
+            out.append(str(c))
+            continue
+        if r.returncode != 0:
+            out.append(str(c))
+    return out
+
+
+def default_subjects(root: Path) -> "Optional[list[str]]":
+    """`_default_subjects` for a caller outside this module."""
+    return _default_subjects(Path(root))
+
+
 def _default_subjects(root: Path) -> "Optional[list[str]]":
     """the default subject set for a verb that passes no explicit
     `fact_subjects`: files that differ from the default branch's own
@@ -270,9 +314,11 @@ def _default_subjects(root: Path) -> "Optional[list[str]]":
     posture `run_git` does, imported from the one definition site, so this
     local duplicate does not quietly reopen the fsmonitor-hook hole
     `codegraph._core.git.run_git` closes for every OTHER git caller in the
-    tree. `review_recall._main_branch` (the existing default-branch
+    tree. `git_default_branch.main_branch` (the shared default-branch
     resolver: origin/HEAD, then local main/master) decides the base --
-    reused rather than a second copy of that lookup.
+    reused rather than a second copy of that lookup, and a leaf: borrowing
+    `review_recall`'s door pulled the risk rubric and the change class into
+    this closure.
 
     `None` and `[]` are TWO DIFFERENT CLAIMS, never folded together:
     `None` means "could not compute a default at all" (no default branch,
@@ -283,8 +329,8 @@ def _default_subjects(root: Path) -> "Optional[list[str]]":
     Collapsing `[]` into `None` would hand a provider built for "the
     smallest possible answer" (say, cook's "tests reaching the changed
     files") the LARGEST one instead, exactly when the branch is freshest."""
-    import review_recall  # noqa: PLC0415 -- lazy: only the no-explicit-subjects path pays this
-    branch = review_recall._main_branch(str(root))
+    import git_default_branch  # noqa: PLC0415 -- lazy: only the no-explicit-subjects path pays this
+    branch = git_default_branch.main_branch(root)
     if branch is None:
         return None
     mb = _git_text(root, "merge-base", branch, "HEAD")
@@ -339,9 +385,9 @@ def store_base(root: Path) -> Optional[Path]:
     project = project_name(root)
     if project is None:
         return None
-    data_root = harness_paths.tool_data_root()
+    data_root, why = harness_paths.tool_data_root_and_reason()
     if harness_paths.data_root_unresolved(data_root):
-        raise DataHomeUnresolved(str(data_root))
+        raise DataHomeUnresolved(why)
     return reader.snapshot_base(data_root, project, root)
 
 
@@ -414,10 +460,19 @@ def _dirty_scope(root: Path, header: dict) -> "list[str]":
     (the first one `init run --apply` takes) as a clean-tree miss: `stale`, and
     the refresh handed over rewrote the same dirty measurement on every call.
     An empty or `.` scope already covers the whole tree and stays as is."""
-    roots = _roots_of(header)
+    roots = _scope_of(header)
     if not roots or roots == ["."]:
         return roots
     return roots + ["codemap.yaml"] if (Path(root) / "codemap.yaml").is_file() else roots
+
+
+def _scope_of(header: dict) -> "list[str]":
+    """The snapshot's roots plus the config inputs it recorded (a tsconfig outside the
+    roots) -- `freshness.snapshot_scope`, mirrored, never imported."""
+    roots = _roots_of(header)
+    if not roots or "." in roots:
+        return roots
+    return roots + [str(x) for x in header.get("config_inputs") or () if str(x) not in roots]
 
 
 def _read_snapshot_header(d: Path) -> "tuple[dict, bool]":
@@ -559,7 +614,7 @@ def select_snapshot(root: Path, base: Path) -> _Selection:
                 if got is None:
                     continue
                 header, is_full = got
-                scope = _roots_of(header)
+                scope = _scope_of(header)
                 if _diff_touches(root, str(header.get("commit") or ""), head, scope):
                     picked = (d, header, is_full, "stale", None)
                 else:
@@ -617,6 +672,12 @@ def _apply_cap(raw: dict, cap: Optional[int]) -> dict:
     invented empty list) when it did not — the same "never fabricate a key"
     law `total`/`basis` already follow.
 
+    `language_unsupported` (subjects of another language the provider cannot read)
+    passes through the same way, and so does `stories` (`code.tests_reached`: the
+    stories a subject reaches, shown beside the tests, never among them), and
+    `import_flags` (`code.importers`: per subject, per importer, the package-boundary
+    flags of its edges -- kept for the subjects the cap keeps).
+
     `unresolved` (a provider's candidates found by name but not resolved — a
     method's uses through an instance of unknown type) passes through the same
     way: never folded into `value`, never invented when absent.
@@ -651,6 +712,17 @@ def _apply_cap(raw: dict, cap: Optional[int]) -> dict:
     not_in_snapshot = raw.get("not_in_snapshot")
     if not_in_snapshot:
         out["not_in_snapshot"] = list(not_in_snapshot)
+    language_unsupported = raw.get("language_unsupported")
+    if language_unsupported:
+        out["language_unsupported"] = list(language_unsupported)
+    stories = raw.get("stories")
+    if stories:
+        out["stories"] = list(stories)
+    import_flags = raw.get("import_flags")
+    if isinstance(import_flags, dict) and isinstance(value, dict):
+        import_flags = {k: v for k, v in import_flags.items() if k in value}
+    if import_flags:
+        out["import_flags"] = import_flags
     unresolved = raw.get("unresolved")
     if isinstance(unresolved, dict) and isinstance(value, dict):
         unresolved = {k: v for k, v in unresolved.items() if k in value}
@@ -1164,9 +1236,10 @@ def resolve(*, root: "Union[str, Path]", declared: "list[str]", subjects,
             refresh_command = _build_refresh_command(str(rc), root)
     try:
         base = store_base(root)
-    except DataHomeUnresolved:
+    except DataHomeUnresolved as e:
         return _error_outcome(
-            "cannot resolve the snapshot store's data home for fact(s) %s" % ", ".join(declared))
+            "cannot resolve the snapshot store's data home for fact(s) %s (%s)"
+            % (", ".join(declared), e))
     if base is None:
         return _not_adopted_outcome(declared=declared, root=root, state=state)
 
@@ -1233,7 +1306,14 @@ def resolve(*, root: "Union[str, Path]", declared: "list[str]", subjects,
                       "subjects": given, "snapshot": snap})
         except Exception as exc:  # noqa: BLE001 — a provider crash degrades, never crashes hs-run
             return _error_outcome("%s provider crashed: %s: %s" % (fact_id, type(exc).__name__, exc))
-        filled = _apply_cap(dict(raw or {}), spec.get("cap"))
+        if isinstance(raw, dict) and raw.get("unavailable"):
+            # the provider cannot read these subjects at all (another language): a named
+            # marker like the engine's own, never an empty value reading as "none"
+            reason = str(raw.get("reason") or "")
+            filled = {"unavailable": True, "reason": reason,
+                      "warning": "code fact %s unavailable: %s" % (fact_id, reason)}
+        else:
+            filled = _apply_cap(dict(raw or {}), spec.get("cap"))
         if mapped:
             filled["subjects_as_paths"] = mapped
         filled["snapshot"] = snap.get("snapshot") or selection.dir.name

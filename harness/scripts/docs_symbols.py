@@ -94,8 +94,8 @@ def head_snapshot(root: Path) -> Tuple[Optional[Path], str]:
     """(the store's snapshot of `root`'s HEAD, "") or (None, why there is none)."""
     try:
         base = engine.store_base(root)
-    except engine.DataHomeUnresolved:
-        return None, "the snapshot store's data home is unresolved"
+    except engine.DataHomeUnresolved as exc:
+        return None, "the snapshot store's data home is unresolved: %s" % exc
     if base is None:
         return None, "no `project:` in codemap.yaml"
     picked = engine.select_snapshot(root, base)

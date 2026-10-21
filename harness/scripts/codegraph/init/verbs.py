@@ -148,7 +148,7 @@ def _run(args: argparse.Namespace) -> int:
     data = {"dry_run": not apply, "adoption": codemap_adoption.status(root).as_dict(),
             "initializers": out}
     _emit(data, opts)
-    return 2 if worst >= 2 else worst
+    return worst if worst in (0, 1, 3) else 2
 
 
 RUN = Command(add_args=_run_args, run=_run)

@@ -41,7 +41,32 @@ _HOOK = "gate_stage"
 # (traced). A shell-spelled write into one is forgery — an agent fabricating a
 # verdict to clear this gate. Blocked PRE here, the last point a Bash write can
 # be stopped (bash_write_guard is PostToolUse, too late).
-_ARTIFACT_GLOBS = ("plans/*/artifacts/*.json", "plans/*/artifacts/*.yaml")
+_ARTIFACT_GLOBS = ("plans/*/artifacts/*.json", "plans/*/artifacts/*.yaml",
+                   "plans/*/artifacts/harness-checks-*.jsonl", "plans/*/artifacts/phase-commits.jsonl")
+# a removal of the directory itself takes every artifact at once
+_ARTIFACT_DIRS = ("plans/*/artifacts",)
+# The check ledger and a plan's open marks have no Write-tool route either
+# (write_guard refuses both): each has one writer, so a refusal that names it says so.
+_LEDGER_NAME = "harness-checks-"
+_LEDGER_ROUTE = (" The check ledger is appended only by the harness running the check: "
+                 "`hs-code check run <id> --plan … --phase …` (a test runner: "
+                 "`hs-code test run`).")
+_HARNESS_WRITTEN = (
+    (_LEDGER_NAME, "the harness check ledger — the DoD gate reads its newest line as the "
+                   "proof a check ran", _LEDGER_ROUTE),
+    ("phase-commits.jsonl", "a plan's open marks — the base its check and coverage "
+                            "policy is held to",
+     " The marks are appended only by `hs-run cook next` (opening a phase) and "
+     "`hs-run cook verify`."),
+)
+
+
+def _harness_written(name):
+    """(what it is, the one route) when `name` is a file only the harness writes."""
+    for needle, what, route in _HARNESS_WRITTEN:
+        if needle in name:
+            return what, route
+    return None
 # A regex over arbitrary bash cannot reconstruct every write-target spelling
 # (subshell/pushd cwd, tee/sed/dd, python joins, concatenated quotes). So the
 # forgery gate ALSO does a coarse region check: the artifacts DIR appearing in a
@@ -88,6 +113,44 @@ _MODE_LITERAL = r"""['"](?:[wax][bt]?\+?|[wax]\+[bt]?)['"]"""
 _PY_WRITE_METHOD_RE = re.compile(
     r"\.write_(?:text|bytes)\b"
     r"|open\s*\([^()]*,\s*(?:\w+\s*=\s*)?" + _MODE_LITERAL)
+# ...and the calls that take a file away: without its open marks or ledger a plan is
+# re-anchored at HEAD, a looser base as surely as a rewritten one
+_PY_REMOVE_METHOD_RE = re.compile(
+    r"\bos\.(?:remove|unlink|rename|replace)\s*\(|\.unlink\s*\(|\bshutil\.(?:rmtree|move)\s*\(")
+#: what the harness writes into a plan's artifacts beside the gate kinds, as (pattern, a
+#: name of it under a phase id of the usual shape)
+_HARNESS_ARTIFACTS = (
+    (_LEDGER_NAME + "*.jsonl", _LEDGER_NAME + "P1" + ".jsonl"),
+    ("phase-commits.jsonl", "phase-commits.jsonl"),
+    ("phase-latest-*.json", "phase-latest-" + "P1" + ".json"),
+    ("phase-superseded-*.jsonl", "phase-superseded-" + "P1" + ".jsonl"),
+    ("verification-*.json", "verification-" + "P1" + ".json"),
+    ("auto-decisions.jsonl", "auto-decisions.jsonl"),
+    ("scope-sizing*.json", "scope-sizing.json"),
+    ("grid-*.json", "grid-preregistration.json"),
+    ("*verdict*.json", "grid-verdict.json"),
+    ("artifacts", "artifacts"))
+
+
+def _caged():
+    """(patterns, samples) of what the cage holds, by name: every gate kind
+    (`artifact_check._REQUIRED_FIELDS`) under each spelling the gate reads, and what the
+    harness writes beside them. Judged where no reading vouches for the directory a
+    command runs in (`cd "$X"`), and against a glob or a `find -name`."""
+    global _CAGED_CACHE
+    if _CAGED_CACHE is None:
+        import artifact_check
+        pats = [p for p, _s in _HARNESS_ARTIFACTS]
+        smps = [s for _p, s in _HARNESS_ARTIFACTS]
+        for kind in artifact_check._REQUIRED_FIELDS:
+            for ext in artifact_check._ARTIFACT_EXTS:
+                pats.append(kind + "*" + ext)
+                smps.append(kind + ext)
+        _CAGED_CACHE = (tuple(pats), tuple(smps))
+    return _CAGED_CACHE
+
+
+_CAGED_CACHE = None
 
 def _load_artifact_producers():
     """Declared CLI producers (harness/data/artifact-producers.yaml), each
@@ -193,7 +256,7 @@ def _only_names_artifacts_outside_the_repo(stripped):
     return True
 
 
-def _forgery_reason_in_segment(segment):
+def _forgery_reason_in_segment(segment, cwd=None):
     """The coarse-battery forgery check, scoped to ONE top-level segment.
     Extracted so `_artifact_forgery_reason` can run it independently per
     segment — a write pattern in one segment must never be paired with a
@@ -250,6 +313,10 @@ def _forgery_reason_in_segment(segment):
         or (_INTERP_STDIN_RE.search(segment)
             and _ARTIFACT_REGION_RE.search(segment)
             and _PY_WRITE_METHOD_RE.search(segment))
+        or (_PY_C_RE.search(stripped) and _ARTIFACT_REGION_RE.search(stripped)
+            and _PY_REMOVE_METHOD_RE.search(stripped))
+        or (_INTERP_STDIN_RE.search(segment) and _ARTIFACT_REGION_RE.search(segment)
+            and _PY_REMOVE_METHOD_RE.search(segment))
     )
     if not forged:
         return None
@@ -262,14 +329,16 @@ def _forgery_reason_in_segment(segment):
     # has no CLI to point at. _declared_producer only ever changes this
     # WORDING — the `forged` verdict above is already final.
     producer = _declared_producer(stripped)
+    own = _harness_written(stripped)
     route = (
+        own[1] if own else
         " That command runs a producing CLI: pass its own output flag "
         "(`%s <path>`) instead of a shell redirect." % producer["out_flag"]
         if producer else
         " If you are the producing skill, use the Write tool."
     )
     return (
-        "a shell command writes a file and names a plans/<plan>/artifacts/ path, "
+        "a shell command writes or removes a file and names a plans/<plan>/artifacts/ path, "
         "and its target cannot be told apart from that artifact — gate "
         "artifacts are written ONLY by their producing "
         "skill (Write tool / its CLI), never the shell. This is forgery and is "
@@ -277,7 +346,345 @@ def _forgery_reason_in_segment(segment):
     )
 
 
+def _caged_name(name, nocase=False):
+    """Whether a file name -- or a glob/brace pattern over one -- names what the cage holds."""
+    import fnmatch
+    name = (name or "").rstrip("/").rsplit("/", 1)[-1]
+    if not name:
+        return False
+    fold = (lambda x: x.lower()) if nocase else (lambda x: x)
+    pats, smps = _caged()
+    if any(fnmatch.fnmatchcase(fold(name), fold(g)) for g in pats):
+        return True
+    return any(c in name for c in "*?[{") and any(
+        fnmatch.fnmatchcase(fold(smp), fold(pat)) for pat in _braces(name) for smp in smps)
+
+
+#: the programs a `find -exec` or an `xargs` may run without taking a file away
+_KEEPS_FILES = frozenset({"echo", "printf", "cat", "grep", "egrep", "fgrep", "rg", "ls", "head",
+                          "tail", "wc", "stat", "file", "du", "sha256sum", "sha1sum", "sha512sum",
+                          "md5sum", "b2sum", "cksum", "cp", "basename", "dirname", "readlink",
+                          "realpath", "test", "[", "diff", "cmp", "jq", "yq", "sort", "uniq",
+                          "touch", "true", "false", "shasum", "yamllint", "xxd", "od", "hexdump",
+                          "strings", "nl", "tac", "less", "more"})
+#: git subcommands that take a file away
+_GIT_REMOVES = frozenset({"rm", "clean", "mv", "checkout", "restore", "reset", "stash"})
+
+
+def _may_remove(words):
+    """Whether a command (its words, its own name first) may take a file away: any program
+    but the ones known to keep files, and git only through a removing subcommand."""
+    import bash_write_guard
+    if not words:
+        return False
+    if words[0].dynamic:
+        return True
+    name = os.path.basename(words[0].text)
+    if name == "git":
+        texts = [w.text for w in words[1:]]
+        _cdir, sub, args, aliased = bash_write_guard._git_command(texts)
+        return aliased or (sub in _GIT_REMOVES and not (sub == "rm" and "--cached" in args))
+    return name not in _KEEPS_FILES
+
+
+def _find_parts(argv):
+    """A `find`'s (start points, expression), from its words: its own options (`-H -L -P
+    -D x -O1`) skipped, `.` when it names no start."""
+    import shell_reader
+    i = 1
+    while i < len(argv) and (argv[i].text in ("-H", "-L", "-P", "-D") or argv[i].text.startswith("-O")):
+        i += 2 if argv[i].text == "-D" else 1
+    starts = []
+    while i < len(argv) and not argv[i].text.startswith(("-", "(", "!", ",")):
+        starts.append(argv[i])
+        i += 1
+    return starts or [shell_reader.Word(".", ".", False, False)], argv[i:]
+
+
+def _find_removes(expr):
+    """Whether a `find` expression takes what it selects away: `-delete`, or an
+    `-exec`/`-execdir`/`-ok` running a program that may (`_may_remove`)."""
+    import shell_reader
+    for k, w in enumerate(expr):
+        if w.text == "-delete":
+            return True
+        if w.text in ("-exec", "-execdir", "-ok", "-okdir"):
+            inner = []
+            for x in expr[k + 1:]:
+                if x.text in (";", "+"):
+                    break
+                inner.append(x)
+            head, _exact, _own = shell_reader.strip_prefix(inner)
+            if _may_remove(inner[head:]):
+                return True
+    return False
+
+
+def _reaches_plans(start, cwd):
+    """Whether a `find` started at `start` (a Word) walks a plans/ tree: it starts inside
+    one, or above one (a project root, `/`). A start the shell expands (`$PWD`, `~+`,
+    `$(...)`) does, and so does any start under a directory no reading vouches for."""
+    import shell_reader
+    t = start.text
+    if isinstance(cwd, shell_reader.Loose) or "$" in t or "`" in t or t.startswith("~"):
+        return True
+    try:
+        import protected_trees
+        from pathlib import Path
+        p = Path(shell_reader.join(cwd, t)).resolve(strict=False)
+        roots = protected_trees.protected_working_trees() or ()
+    except Exception:  # noqa: BLE001 — unresolvable: judged as reaching
+        return True
+    for root in roots:
+        plans = Path(root).resolve(strict=False) / "plans"
+        if p == plans or plans in p.parents or p in plans.parents:
+            return True
+    return False
+
+
+_FIND_NAMES = {"-name": False, "-iname": True, "-path": False, "-ipath": True,
+               "-wholename": False, "-iwholename": True}
+
+
+#: find primaries that take no argument, and those that take more than one
+_FIND_NOARG = frozenset({"-delete", "-print", "-print0", "-prune", "-quit", "-ls", "-empty", "-true",
+                         "-false", "-depth", "-mount", "-xdev", "-readable", "-writable",
+                         "-executable", "-nouser", "-nogroup", "-follow", "-noleaf", "-daystart",
+                         "-ignore_readdir_race", "-noignore_readdir_race", "-a", "-and"})
+_FIND_TWOARG = frozenset({"-fprintf"})
+
+
+def _rules_out_cage(expr):
+    """Whether a find expression keeps every file it selects clear of what the cage holds,
+    read with find's own precedence (`!` > AND > `-o` > `,`): a name filter no caged name
+    matches rules it out; an AND does when any operand does, an OR or `,` only when every
+    branch does; a negation never does. A line that does not parse is taken as not."""
+    toks = [w.text for w in expr]
+    pos = [0]
+
+    def peek():
+        return toks[pos[0]] if pos[0] < len(toks) else None
+
+    def alternatives(stop):
+        out = [conjunction(stop)]
+        while peek() in ("-o", "-or", ","):
+            pos[0] += 1
+            out.append(conjunction(stop))
+        return all(out)
+
+    def conjunction(stop):
+        out = []
+        while peek() is not None and peek() not in ("-o", "-or", ",", stop):
+            if peek() in ("-a", "-and"):
+                pos[0] += 1
+                continue
+            out.append(unary(stop))
+        if not out:
+            raise ValueError("empty operand")
+        return any(out)
+
+    def unary(stop):
+        t = toks[pos[0]]
+        pos[0] += 1
+        if t in ("!", "-not"):
+            unary(stop)
+            return False
+        if t == "(":
+            ok = alternatives(")")
+            if peek() != ")":
+                raise ValueError("unclosed group")
+            pos[0] += 1
+            return ok
+        if t in _FIND_NAMES:
+            if pos[0] >= len(toks):
+                raise ValueError("missing pattern")
+            pat = expr[pos[0]].text
+            pos[0] += 1
+            return not ("$" in pat or "`" in pat
+                        or _caged_name(pat.rsplit("/", 1)[-1] or pat, _FIND_NAMES[t]))
+        if t in ("-exec", "-execdir", "-ok", "-okdir"):
+            while pos[0] < len(toks) and toks[pos[0]] not in (";", "+"):
+                pos[0] += 1
+            pos[0] += 1
+        elif t not in _FIND_NOARG:
+            pos[0] += 2 if t in _FIND_TWOARG else 1
+        return False
+
+    try:
+        ok = alternatives(None)
+    except (ValueError, IndexError):
+        return False
+    return ok and pos[0] >= len(toks)
+
+
+def _find_selects_artifacts(starts, expr, cwd):
+    """A `find` that could select a gate artifact: it names the artifacts region, or it
+    walks a plans/ tree and its expression does not rule out what the cage holds
+    (`_rules_out_cage`: no name filter, only a negated one, a branch of an `-o` without
+    one, or a name some caged file matches)."""
+    if any(_ARTIFACT_REGION_RE.search(w.text) for w in starts + expr):
+        return True
+    if not any(_reaches_plans(st, cwd) for st in starts):
+        return False
+    return not _rules_out_cage(expr)
+
+
+def _braces(word):
+    """`a{b,c}d` -> [abd, acd], one level at a time; a word with no brace pair is itself."""
+    m = re.search(r"\{([^{}]*,[^{}]*)\}", word)
+    if not m:
+        return [word]
+    return [x for alt in m.group(1).split(",")
+            for x in _braces(word[:m.start()] + alt + word[m.end():])]
+
+
+def _globbed_artifact(path):
+    """A removal operand whose last part is a glob (`*.jsonl`, `phase-*`, `{a,b}.jsonl`)
+    over a plans/<plan>/artifacts directory, matching some file the cage holds."""
+    import fnmatch
+    d, base = os.path.split(str(path))
+    if not any(c in base for c in "*?[{") or not fnmatch.fnmatch(d, "*plans/*/artifacts"):
+        return False
+    return any(fnmatch.fnmatch(smp, pat) for pat in _braces(base) for smp in _caged()[1])
+
+
+_FIND_REASON = (
+    "a `find` deletes, or runs a program that may take away, what could be a "
+    "plans/<plan>/artifacts/ file: it walks a plans/ tree (or starts where no reading can "
+    "tell) and nothing in its expression rules out what the cage holds, so it is blocked. "
+    "Start it from a directory outside plans/, or give it a -name no gate artifact matches.")
+_XARGS_NAMED_REASON = (
+    "a pipeline names a plans/<plan>/artifacts/ path and feeds `xargs` a program that may "
+    "take files away: what it removes cannot be told apart from a gate artifact, and "
+    "removing one takes the plan's evidence away, so it is blocked.")
+_XARGS_FIND_REASON = (
+    "a `find` that could select a plans/<plan>/artifacts/ file feeds `xargs` a program that "
+    "may take files away, so it is blocked. Start the find outside plans/, or give it a "
+    "-name no gate artifact matches.")
+_XARGS_LOOSE_REASON = (
+    "`xargs` runs a program that may take away `%s`, a name the cage holds, in a directory "
+    "this command reaches through a `cd` no reading can follow (an expansion, `~`, `-`, a "
+    "directory that does not exist yet or that an earlier command could replace, a `cd` "
+    "that may not have run): it may be a plan's artifacts directory, so it is blocked. "
+    "Name the directory outright.")
+_UNSEEN_REASON = (
+    "this command removes %s -- what the shell computes, not a name the hook can read -- "
+    "where it may be a plans/<plan>/artifacts/ file (it runs there, a `find` that could "
+    "select one feeds it, or what sets its value names one), so it is blocked. Name the files outright, "
+    "or select them with a `find -name` no gate artifact matches.")
+_UNREAD_REASON = (
+    "this command could not be read whole (an unclosed quote, group or substitution), and it "
+    "removes or moves files while naming what the cage holds (a plans/<plan>/artifacts/ path "
+    "or a gate artifact's name), so it is blocked. Close the quote, or split the command.")
+
+
+def _command_removal_reason(view, cwd=None):
+    """Block reason when a command of `view` -- read by `shell_reader`, from every directory
+    it may run in -- takes away what could be a gate artifact through a `find` or an
+    `xargs`; the files a command names outright are `_artifact_forgery_reason_in`'s."""
+    import bash_write_guard
+    import shell_reader
+    cmds = shell_reader.read(view, bash_write_guard._cwd_anchor(cwd))
+    if cmds is None:
+        bare = re.sub(r"\$?['\"]|\\", "", view)
+        if re.search(r"\b(?:rm|unlink|shred|srm|rmdir|xargs|find|rsync|git|mv)\b", bare) and (
+                _ARTIFACT_REGION_RE.search(bare) or any(_caged_name(t) for t in bare.split())):
+            return _UNREAD_REASON
+        return None
+    for c in cmds:
+        argv = c.argv
+        if c.name == "find":
+            starts, expr = _find_parts(argv)
+            if _find_removes(expr) and any(_find_selects_artifacts(starts, expr, a) for a in c.cwds):
+                return _FIND_REASON
+        # its pipe: every command standing in a pipeline it is part of -- inside a group or
+        # a substitution of one of its elements too; its feed: those standing before it
+        pipe = [d for d in cmds if any(d.position_in(pid) is not None for pid, _p in c.pipes)]
+        feed = [d for d in pipe if any(d.position_in(pid) is not None and d.position_in(pid) < p
+                                       for pid, p in c.pipes)]
+        ops = set(bash_write_guard._removal_operands([w.text for w in argv]))
+        unseen = [w for w in argv[1:] if w.text in ops and ("$" in w.text or "`" in w.raw or w.subs)]
+        if unseen:
+            reason = _unseen_operands_reason(c, unseen, cmds, feed)
+            if reason:
+                return reason
+        inner = bash_write_guard.xargs_command(argv)
+        if not inner or not _may_remove(inner):
+            continue
+        named = [w.text for d in pipe for w in d.words] + [w.text for d in pipe for _op, w in d.redirects]
+        if any(_ARTIFACT_REGION_RE.search(t) for t in named):
+            return _XARGS_NAMED_REASON
+        for d in feed:
+            if d.name == "find":
+                starts, expr = _find_parts(d.argv)
+                if any(_find_selects_artifacts(starts, expr, a) for a in d.cwds):
+                    return _XARGS_FIND_REASON
+        if any(_in_artifacts(a) for a in c.cwds):
+            return _UNSEEN_REASON % "the names `xargs` reads"
+        if any(isinstance(a, shell_reader.Loose) for a in c.cwds):
+            hit = next((w.text for d in feed for w in d.argv[1:] if _caged_name(w.text)), None)
+            if hit:
+                return _XARGS_LOOSE_REASON % hit
+    return None
+
+
+def _in_artifacts(anchor):
+    """Whether a directory a command may run in is, or lies under, a plan's artifacts."""
+    return bool(_ARTIFACT_REGION_RE.search(str(anchor)))
+
+
+def _names_cage(text):
+    """Whether one word names what the cage holds outright: the artifacts region, or a
+    caged file's name (an assignment's value read alone; a glob is a glob's business)."""
+    if _ARTIFACT_REGION_RE.search(text):
+        return True
+    value = re.sub(r"^[A-Za-z_]\w*\+?=", "", text)
+    return not any(ch in value for ch in "*?[{$`") and _caged_name(value)
+
+
+def _unseen_operands_reason(c, unseen, cmds, feed):
+    """Block reason when a removal takes operands the shell computes (`$(find …)`, `"$f"`,
+    a loop variable) and they may be gate artifacts. What can give those operands their
+    value is read: the operands themselves, the line's assignments and loop lists, and the
+    commands their substitutions run. Blocked when one of those names the artifacts region
+    or a caged file's name or runs a `find` that could select one, when a `find` feeds its
+    pipe, or when it runs in a plan's artifacts. A mention elsewhere on the line (a `jq`
+    reading an artifact) is not where an operand comes from."""
+    import shell_reader
+    sources = list(unseen) + [w for d in cmds for w in d.words[:d.head]]
+    for w in sources:
+        if _names_cage(w.text):
+            return _UNSEEN_REASON % ("`%s`, from `%s`," % (unseen[0].raw, w.raw))
+        for line in w.subs:
+            for a in c.cwds:
+                for d in shell_reader.read(line, a) or ():
+                    if d.name == "find" and any(_find_selects_artifacts(*_find_parts(d.argv), x)
+                                                for x in d.cwds):
+                        return _UNSEEN_REASON % ("`%s`" % w.raw)
+                    hit = next((x.raw for x in d.words if _names_cage(x.text)), None)
+                    if hit:
+                        return _UNSEEN_REASON % ("`%s`, from `%s`," % (unseen[0].raw, hit))
+    for d in feed:
+        if d.name == "find" and any(_find_selects_artifacts(*_find_parts(d.argv), x) for x in d.cwds):
+            return _UNSEEN_REASON % "the names its pipe reads from a `find`"
+    if any(_in_artifacts(a) for a in c.cwds):
+        return _UNSEEN_REASON % ("`%s`" % unseen[0].raw)
+    return None
+
+
 def _artifact_forgery_reason(command, cwd=None):
+    """Block reason if ``command`` -- or a `bash -c`/`sh -c` payload it runs -- shell-writes
+    or removes a plan artifact, else None."""
+    if not command:
+        return None
+    for view in shell_unwrap.command_views(command):
+        reason = _command_removal_reason(view, cwd) or _artifact_forgery_reason_in(view, cwd)
+        if reason:
+            return reason
+    return None
+
+
+def _artifact_forgery_reason_in(command, cwd=None):
     """Block reason if ``command`` shell-writes a plan artifact, else None.
     Reuses the shared shell-write-target parser with copy/move INCLUDED.
     `cwd` is the hook payload's own `cwd` field when the caller has one — the
@@ -296,7 +703,7 @@ def _artifact_forgery_reason(command, cwd=None):
     # in the same shell line, and a producing CLI's `--out` flag alongside
     # an unrelated write elsewhere. Both pass run alone.
     for segment in shell_unwrap.top_level_segments(command):
-        reason = _forgery_reason_in_segment(segment)
+        reason = _forgery_reason_in_segment(segment, cwd)
         if reason:
             return reason
     nohere = shell_unwrap.without_heredocs(command)
@@ -316,11 +723,28 @@ def _artifact_forgery_reason(command, cwd=None):
         # missed a RELATIVE symlinked destination (`cp f lnk/x.json`) — the
         # resolved path never followed `lnk` because it was never joined to
         # the directory the symlink actually lives in.
-        candidates = bash_write_guard.shell_write_absolute_targets(
-            nohere, include_copy_move=True, cwd=cwd)
+        written = bash_write_guard.shell_targets(nohere, include_copy_move=True, cwd=cwd)
+        removed = bash_write_guard.shell_targets(nohere, cwd=cwd, removals=True)
     except Exception:  # noqa: BLE001 — a parser error must not invent a block
         return None
-    if not any(write_guard.could_match_tail(str(c), _ARTIFACT_GLOBS) for c in candidates):
+    # Under a directory no reading vouches for (`cd "$X"`, a `cd` that may have failed or
+    # whose target an earlier command could replace) the shell may be standing in any
+    # plan's artifacts: a name the cage holds is refused there, and so is any name under a
+    # path that itself reads as plans/<plan>/artifacts.
+    for (path, vouched), verb in ([(x, "removes") for x in removed]
+                                  + [(x, "writes") for x in written]):
+        if not vouched and (_caged_name(path.name) or write_guard.could_match_tail(
+                str(path), _ARTIFACT_GLOBS + _ARTIFACT_DIRS)):
+            own = _harness_written(path.name)
+            return ("this command %s `%s`, %s, in a directory it reaches through a `cd` no "
+                    "reading can follow (an expansion, `~`, `-`, a directory that does not "
+                    "exist yet or that an earlier command could replace, a `cd` that may not "
+                    "have run): it may be a plan's artifacts directory, so it is blocked. Name "
+                    "the directory outright."
+                    % (verb, path.name, own[0] if own else "a name the gate artifacts carry"))
+    candidates = [p for p, _v in written + removed]
+    if not any(write_guard.could_match_tail(str(c), _ARTIFACT_GLOBS + _ARTIFACT_DIRS)
+               or _globbed_artifact(c) for c in candidates):
         return None
     try:
         # roots=protected_working_trees(), NEVER the bare default (bin_root):
@@ -357,10 +781,25 @@ def _artifact_forgery_reason(command, cwd=None):
     try:
         targets = bash_write_guard.shell_write_targets(
             nohere, include_copy_move=True, roots=roots, cwd=cwd)
+        gone = bash_write_guard.shell_write_targets(nohere, roots=roots, cwd=cwd, removals=True)
     except Exception:  # noqa: BLE001 — a parser error must not invent a block
         return None
+    for rel in gone:
+        if any(fnmatch.fnmatch(rel, pat) for pat in _ARTIFACT_GLOBS + _ARTIFACT_DIRS) \
+                or _globbed_artifact(rel):
+            own = _harness_written(rel.rsplit("/", 1)[-1])
+            return ("%s is %s; removing it takes the plan's evidence away (without its open "
+                    "marks a plan is re-anchored at HEAD, a looser base), so a shell removal "
+                    "here is blocked.%s"
+                    % (rel, own[0] if own else "a gate artifact (or the directory holding them)",
+                       own[1] if own else " A plan is re-opened through `hs-run cook`; a base "
+                       "is re-pinned with `hs-code check run --repin-base <sha> --dec <DEC-id>`."))
     for rel in targets:
         if any(fnmatch.fnmatch(rel, pat) for pat in _ARTIFACT_GLOBS):
+            own = _harness_written(rel.rsplit("/", 1)[-1])
+            if own:
+                return ("%s is %s, so a shell write here is forgery and is blocked.%s"
+                        % (rel, own[0], own[1]))
             return (
                 "%s is a gate artifact — written ONLY by its producing skill "
                 "via the Write tool (which the harness traces), never through "

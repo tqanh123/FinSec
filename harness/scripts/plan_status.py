@@ -6,6 +6,9 @@ two states the gate actually consumes:
   open_plan:  pending | approved -> in_progress   (cook's first step)
   close_plan: in_progress        -> completed     (cook's finalize step)
 
+`hs-run cook open --reason` uses `flip_status` for the way back, completed ->
+in_progress, after writing the reopen line its gates read.
+
 Discipline (mirrored from both callers' original behaviour):
   - Status is read/written ONLY inside the opening `---` … closing `---`/`...`
     block, never from the body — a plan body may quote `status: ...` in prose.
@@ -127,7 +130,7 @@ def _splice_status(plan_dir, root):
     # under neither plans/ root.
     try:
         import fs_guard
-        fs_guard.assert_under(plan_dir, "plans", root=root)
+        fs_guard.assert_under_plan_tree(plan_dir, plan_dir, root=root)
     except ImportError:
         plans = (root_dir(root) / "plans").resolve()
         try:

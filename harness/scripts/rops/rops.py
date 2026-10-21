@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rops — run things on a remote machine: sync · run · test · bench · kill · doctor.
+"""rops — run things on a remote machine: sync · run · test · bench · kill · lock · doctor.
 
 Router only: `HsRopsCli` is the family core (`hs_family.cli.CliBase`) with two sources
 appended. No verb logic here, and no if/else chain on verb names — a new command is a
@@ -24,6 +24,7 @@ import importlib
 import importlib.abc
 import importlib.util
 import pathlib
+import shlex
 import sys
 from types import ModuleType
 from typing import Any, Iterable, Mapping
@@ -143,6 +144,24 @@ class HsRopsCli(CustomCommandMixin, CommandAliasMixin, CliBase):
         sys.stdout.flush()  # last on a shared pipe too: stdout into a pipe is block-buffered
         print(f"[rops] exit_code={rc}", file=sys.stderr)
         return rc
+
+    def finish(self, row: Any, ctx: Any, outcome: Any, output: str) -> dict:
+        """A failed call's `!! …` lines go into `warnings` too: a refusal (rc 3) said why
+        only in `error`, and a rebuild cut at its timeout (rc 124) nowhere a reader of
+        `warnings` looks. One that names `--rebind` gets the call again with it."""
+        env = super().finish(row, ctx, outcome, output)
+        said = [ln[3:].strip() for ln in (self._call.get("stderr") or "").splitlines()
+                if ln.startswith("!! ")]
+        if not outcome.exit_code or not said:
+            return env
+        warnings = list(env.get("warnings") or ()) + said
+        argv = [str(a) for a in self._call.get("argv", ())]
+        if any("--rebind" in s for s in said) and "--rebind" not in argv:
+            cut = argv.index("--") if "--" in argv else len(argv)
+            warnings.append("to hand the lane to this tree: " + shlex.join(
+                [PROG, *argv[:cut], "--rebind", *argv[cut:]]))
+        env["warnings"] = warnings
+        return env
 
     @property
     def cfg(self) -> Any:

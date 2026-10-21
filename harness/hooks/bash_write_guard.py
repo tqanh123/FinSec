@@ -23,9 +23,11 @@ and root resolution (one guarded set, two observers).
 """
 
 import os
+import posixpath
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Diagnostic text may carry non-ASCII; guard stderr encoding so a non-UTF-8
 # locale degrades to replacement chars instead of raising mid-write (fail-open).
@@ -39,6 +41,7 @@ sys.path.insert(0, os.path.join(_HOOKS_DIR, "..", "scripts"))
 if _HOOKS_DIR not in sys.path:
     sys.path.append(_HOOKS_DIR)
 import hook_runtime  # noqa: E402
+import shell_reader  # noqa: E402 — the shell's own reading: commands, words, cwds
 import write_guard  # noqa: E402 — reuse GUARD_LIST + root + path resolution (DRY)
 
 HOOK_CLASS = "telemetry"
@@ -50,17 +53,11 @@ _NAME = Path(__file__).stem
 # that into the hook's ONE terminal JSON blob, so the dispatcher can call core() in
 # process without a double write.
 
-# A command line splits into list/pipeline segments on these connectors, so a
-# write target in one segment is never paired with a verb in another. Shared
-# shape with bash_safety_guard, kept local to avoid a hook→hook import.
+# A line `shell_reader` cannot tokenize still splits into segments on these
+# connectors, so a write target in one segment is never paired with a verb in
+# another. Shared shape with bash_safety_guard, kept local to avoid a hook→hook import.
 _CONNECTOR_RE = re.compile(r"[;&|\n]+")
 _COMMENT_RE = re.compile(r"(?:^|\s)#[^\n]*")
-# A leading `cd <dir>` in a segment sets the cwd for relative writes in later
-# segments (`cd plans/p/artifacts && echo > x.json` lands in that dir). Track it
-# so a relative target is resolved against it, closing the cd-relative blind spot.
-# Capture the cd target as a quoted span (keeping spaces) or an unquoted token,
-# so `cd "some dir"` resolves the full name instead of truncating at the space.
-_CD_RE = re.compile(r"""^\s*cd\s+(?:-[\w-]+\s+)*(?:"([^"]+)"|'([^']+)'|([^'"\s|;&]+))""")
 
 # Redirect target: an optional fd digit, `>`/`>>`, an optional clobber-force
 # `|`, then the path. `>&2` / `2>&1` carry a `&` right after the operator → the
@@ -170,19 +167,217 @@ def _candidate_targets(seg_masked: str, seg_raw: str) -> list:
     return targets
 
 
-# cp/mv/install DEST — the LAST non-option token (SRC args are reads). Kept
-# behind the include_copy_move flag: the config observer EXCLUDES it (cp/mv into
-# a guarded config is the blessed write-to-/tmp-then-move workaround), the
-# artifact gate INCLUDES it (an artifact has no sanctioned shell path).
-_CP_MV_RE = re.compile(r"\b(?:cp|mv|install|ln)\b((?:\s+-\S+)*)\s+(\S.*)$")
+# cp/mv/ln/install/rsync DEST — the LAST operand (SRC args are reads), or the
+# directory `-t`/`--target-directory` names. Kept behind the include_copy_move flag:
+# the config observer EXCLUDES it (cp/mv into a guarded config is the blessed
+# write-to-/tmp-then-move workaround), the artifact gate INCLUDES it (an artifact
+# has no sanctioned shell path).
+# Recognised only as a command's own name (past `VAR=x` and the wrappers that run it):
+# `grep -rn install a b` names the word, it runs no copy.
+_COPIERS = frozenset({"cp", "mv", "ln", "install", "rsync"})
+# A redirection word: `2>&1`, `>/dev/null`, `>>log`, `<in` -- or a bare operator
+# (`>`, `2>`) whose target is the next word. Neither is an operand.
+_REDIR_WORD_RE = re.compile(r"^\d*(?:&>>?|>>?&?|<)(.*)$")
 
 
-def _copy_move_targets(seg_masked: str) -> list:
-    m = _CP_MV_RE.search(seg_masked.strip())
-    if not m:
+#: per copier, the short options that take an argument: in a bundle (`-Dm644`) the rest of
+#: the word is it, alone (`-m`) the next word is -- never an operand either way. rsync's
+#: `-t` is --times and `-m`/`-o`/`-g`/`-S` take nothing; only GNU's copiers have `-t DIR`.
+_SHORT_ARGS = {"cp": "St", "mv": "St", "ln": "St", "install": "Smogt", "rsync": "efBTM@"}
+_TDIR_COPIERS = frozenset({"cp", "mv", "ln", "install"})
+
+
+def _is_tdir_long(name: str) -> bool:
+    """getopt_long reads any unambiguous prefix of a long option: `--t`, `--targ`."""
+    return len(name) >= 1 and "target-directory".startswith(name)
+
+
+def _copy_operands(words: list, cmd: str = "cp") -> "list[tuple[str, list, bool]]":
+    """(dest, sources, dest is a directory) for one copy's argument words, read with the
+    copier's own option grammar (`_SHORT_ARGS`). A long option written without `=` may or
+    may not take the next word, and a wrong guess hides the target either way, so both
+    readings are kept: every target either names is returned."""
+    out: list = []
+    for long_takes_arg in (False, True):
+        for hit in _copy_reading(words, cmd, long_takes_arg):
+            if hit not in out:
+                out.append(hit)
+    return out
+
+
+def _copy_reading(words: list, cmd: str, long_takes_arg: bool) -> list:
+    short_args = _SHORT_ARGS.get(cmd, "")
+    tdir_ok = cmd in _TDIR_COPIERS
+    ops: list = []
+    tdir = None
+    i, opts = 0, True
+    while i < len(words):
+        w = words[i]
+        m = _REDIR_WORD_RE.match(w)
+        if m:
+            i += 1 if m.group(1) else 2
+            continue
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if opts and w == "--":
+            opts = False
+        elif opts and w.startswith("--"):
+            name, eq, val = w[2:].partition("=")
+            if tdir_ok and _is_tdir_long(name):
+                tdir = val if eq else nxt
+                i += 0 if eq else 1
+            elif not eq and long_takes_arg:
+                i += 1
+        elif opts and w.startswith("-") and len(w) > 1:
+            rest = w[1:]
+            for j, ch in enumerate(rest):
+                if ch in short_args:
+                    arg = rest[j + 1:]
+                    if not arg:
+                        arg = nxt
+                        i += 1
+                    if ch == "t" and tdir_ok:
+                        tdir = arg
+                    break
+        else:
+            ops.append(w)
+        i += 1
+    if tdir:
+        return [(tdir, ops, True)] if ops else []
+    if len(ops) < 2:  # need >=1 src + a dest
         return []
-    args = [t for t in m.group(2).split() if not t.startswith("-")]
-    return args[-1:] if len(args) >= 2 else []  # need >=1 src + a dest
+    return [(ops[-1], ops[:-1], ops[-1].endswith("/"))]
+
+
+def _copy_move_targets(words: list) -> "list[tuple[str, list, bool]]":
+    """(dest, sources, dest is a directory) for one command's words, its own name first."""
+    cmd = posixpath.basename(words[0]) if words else ""
+    return _copy_operands(words[1:], cmd) if cmd in _COPIERS else []
+
+
+#: commands whose operands are files they remove
+_REMOVERS = frozenset({"rm", "unlink", "shred", "srm"})
+
+
+def _plain_operands(words: list) -> list:
+    out, opts = [], True
+    for w in words:
+        if _REDIR_WORD_RE.match(w):
+            continue
+        if opts and w == "--":
+            opts = False
+        elif not (opts and w.startswith("-") and len(w) > 1):
+            out.append(w)
+    return out
+
+
+#: git's global options that take the next word (`git -C <dir> rm`, `git -c k=v rm`)
+_GIT_ARG_OPTS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+                           "--config-env", "--attr-source", "--exec-path"})
+#: rsync's long options that take the next word when written without `=`
+_RSYNC_ARG_LONGS = frozenset({
+    "exclude", "include", "exclude-from", "include-from", "files-from", "filter", "rsh", "rsync-path",
+    "backup-dir", "suffix", "temp-dir", "compare-dest", "copy-dest", "link-dest", "partial-dir",
+    "log-file", "log-file-format", "out-format", "password-file", "chmod", "chown", "usermap",
+    "groupmap", "timeout", "contimeout", "bwlimit", "max-size", "min-size", "max-delete",
+    "modify-window", "sockopts", "port", "address", "info", "debug", "skip-compress", "iconv",
+    "checksum-choice", "compress-choice", "compress-level", "outbuf", "stop-after", "stop-at",
+    "write-batch", "read-batch", "only-write-batch", "protocol", "block-size", "max-alloc",
+    "remote-option", "early-input", "copy-as"})
+
+
+def _git_command(rest: list) -> "tuple[str, str, list, bool]":
+    """(the -C directory it runs in, its subcommand, the subcommand's words, whether a
+    `-c alias.*` makes the subcommand unknowable), past git's global options -- the value
+    of `-C`/`-c`/`--git-dir` is no subcommand."""
+    j, cdir, aliased = 0, "", False
+    while j < len(rest) and rest[j].startswith("-"):
+        if rest[j] in _GIT_ARG_OPTS:
+            if rest[j] == "-C" and j + 1 < len(rest):
+                cdir = posixpath.join(cdir, rest[j + 1])
+            aliased |= rest[j] == "-c" and j + 1 < len(rest) and rest[j + 1].startswith("alias.")
+            j += 2
+        else:
+            j += 1
+    return (cdir, rest[j], rest[j + 1:], aliased) if j < len(rest) else (cdir, "", [], aliased)
+
+
+def _rsync_operands(words: list) -> list:
+    """rsync's operands: the words no option took (`--exclude <pat>`, `-e <cmd>` take one)."""
+    out, i, opts = [], 0, True
+    while i < len(words):
+        w = words[i]
+        m = _REDIR_WORD_RE.match(w)
+        if m:
+            i += 1 if m.group(1) else 2
+            continue
+        if opts and w == "--":
+            opts = False
+        elif opts and w.startswith("--"):
+            name, eq, _ = w[2:].partition("=")
+            i += 1 if (not eq and name in _RSYNC_ARG_LONGS) else 0
+        elif opts and w.startswith("-") and len(w) > 1:
+            for j, ch in enumerate(w[1:]):
+                if ch in _SHORT_ARGS["rsync"]:
+                    i += 0 if w[j + 2:] else 1
+                    break
+        elif w:
+            out.append(w)
+        i += 1
+    return out
+
+
+def _removal_operands(words: list) -> list:
+    """The files one command removes, its own name first: rm/unlink/shred's operands,
+    `git rm`'s (never `--cached`: the file stays), `git clean`'s pathspecs, what `mv` moves
+    away (its sources), and what `rsync` deletes (`--del`/`--delete*`: its destination;
+    `--remove-source-files`/`--remove-sent-files`: its sources)."""
+    if not words:
+        return []
+    cmd, rest = posixpath.basename(words[0]), words[1:]
+    if cmd == "git":
+        cdir, sub, args, aliased = _git_command(rest)
+        if sub == "clean":
+            ops = _plain_operands(args) or ["."]  # no pathspec: the directory it runs in
+        elif (sub == "rm" or aliased) and "--cached" not in args:
+            ops = _plain_operands(args)
+        else:
+            return []
+        return [posixpath.join(cdir, o) for o in ops] if cdir else ops
+    if cmd == "mv":
+        return [s for _d, srcs, _isdir in _copy_operands(rest, "mv") for s in srcs]
+    if cmd == "rsync":
+        ops = _rsync_operands(rest)
+        gone = ops[-1:] if any(w == "--del" or w.startswith("--delete") for w in rest) else []
+        sent = any(w in ("--remove-source-files", "--remove-sent-files") for w in rest)
+        return gone + (ops[:-1] if sent else [])
+    if cmd not in _REMOVERS:
+        return []
+    return _plain_operands(rest)
+
+
+#: xargs's options that take the next word (written apart; `-I{}`, `-n1` carry it)
+_XARGS_ARG_OPTS = frozenset({"-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a", "--arg-file",
+                             "--delimiter", "--max-args", "--max-procs", "--max-chars",
+                             "--max-lines", "--replace", "--eof", "--process-slot-var"})
+
+
+def xargs_command(argv: list) -> "Optional[list]":
+    """The words of the command `xargs` runs (its own name first, past the wrappers that
+    run it), from xargs's own words; None when `argv` is not an xargs; [] when it runs
+    the default `echo`."""
+    if not argv or posixpath.basename(argv[0].text) != "xargs":
+        return None
+    i = 1
+    while i < len(argv) and argv[i].text.startswith("-") and argv[i].text != "-":
+        t = argv[i].text
+        i += 1
+        if t == "--":
+            break
+        if t in _XARGS_ARG_OPTS:
+            i += 1
+    inner = argv[i:]
+    head, _exact, _own = shell_reader.strip_prefix(inner)
+    return inner[head:]
 
 
 # Sentinel: `cwd` was never PASSED at all, vs. passed explicitly as None (a
@@ -226,68 +421,100 @@ def _cwd_anchor(cwd) -> Path:
         return Path(".")
 
 
-def shell_write_absolute_targets(command, include_copy_move: bool = False,
-                                 cwd=_CWD_OMITTED) -> list:
-    """Every filesystem WRITE target named in a Bash command, resolved to an
-    ABSOLUTE, symlink-followed path — independent of any protected-tree root.
-    A relative token anchors at a `cd`/`pushd` the command itself tracks
-    (chained across segments, exactly as a real shell would), else at
-    `_cwd_anchor(cwd)`. This is the ONE resolution step every root-relative
-    check now shares (`shell_write_targets` below, and gate_stage's own
-    artifact-region pre-filter) — a token used to be re-anchored PER ROOT
-    tried (`root() / token`), which silently renamed a relative token to
-    whatever root happened to be tried, rather than to the real cwd the
-    shell would have used. Pure + fail-open: junk input → []."""
+def _commands(command, cwd) -> list:
+    """(the words a command runs, the directories it may run in) for each simple command;
+    an `xargs` contributes the command it runs too, its operands written out. A line
+    `shell_reader` cannot tokenize reads segment by segment from `cwd`, each directory
+    loose: no reading vouches for where the shell stands in it."""
+    default_cwd = _cwd_anchor(cwd)
+    cmds = shell_reader.read(command, default_cwd)
+    if cmds is None:
+        out: list = []
+        pos = 0
+        masked = _mask(command)
+        cuts = [(m.start(), m.end()) for m in _CONNECTOR_RE.finditer(masked)] + [(len(command),) * 2]
+        for a, b in cuts:
+            seg = command[pos:a]
+            pos = b
+            words = [shell_reader.Word(t, t, False, False) for t in _unquote(seg).split()]
+            head, _exact, _own = shell_reader.strip_prefix(words)
+            out.append((seg, [w.text for w in words[head:]], [shell_reader.Loose(str(default_cwd))], []))
+        return out
+    out = []
+    for c in cmds:
+        argv = [w.text for w in c.argv]
+        files = [w.text for op, w in c.redirects
+                 if op in (">", ">>", "&>", "&>>", ">|", "<>") or (op == ">&" and not
+                                                                   re.fullmatch(r"\d+-?|-", w.text))]
+        out.append((c.text, argv, c.cwds, files))
+        inner = xargs_command(c.argv)
+        if inner:
+            out.append(("", [w.text for w in inner], c.cwds, []))
+    return out
+
+
+def shell_targets(command, include_copy_move: bool = False, cwd=_CWD_OMITTED,
+                  removals: bool = False) -> "list[tuple[Path, bool]]":
+    """(path, vouched) for every filesystem WRITE target named in a Bash command (with
+    `removals`, every path it REMOVES instead: rm, unlink, git rm, what mv moves away),
+    resolved to an ABSOLUTE, symlink-followed path. A relative token anchors at each
+    directory `shell_reader` says the command may run in -- its `cd`s read the way the
+    shell runs them -- else at `_cwd_anchor(cwd)`. Under a directory no reading vouches
+    for (a `shell_reader.Loose`: `cd "$X"`, a `cd` that may have failed) the token joins
+    the literal text the line names it by, and the pair says `vouched` False; what that
+    means is each caller's own. Pure + fail-open: junk input → []."""
     if not isinstance(command, str) or not command.strip():
         return []
-    default_cwd = _cwd_anchor(cwd)
-    out = []
-    # Clobber-force `>|` is semantically `>`; rewrite to `> ` BEFORE the connector
-    # split so its `|` is not mistaken for a pipe (which would sever the target).
+    out: list = []
+    # Clobber-force `>|` is semantically `>`; the reader reads it as one, the redirect
+    # regex in `_candidate_targets` needs it spelled `>`.
     command = command.replace(">|", "> ")
-    # Split on connectors found in the MASKED command, so a separator inside quotes
-    # (a `;` in a `python -c` payload) does not sever a quoted write. Mask is
-    # equal-length, so the RAW command slices at the same offsets.
-    masked_full = _mask(command)
-    raw_segs, pos = [], 0
-    for m in _CONNECTOR_RE.finditer(masked_full):
-        raw_segs.append(command[pos:m.start()])
-        pos = m.end()
-    raw_segs.append(command[pos:])
-    tracked_cwd = ""
-    for seg_raw in raw_segs:
-        cdm = _CD_RE.match(seg_raw)
-        if cdm:
-            d = (cdm.group(1) or cdm.group(2) or cdm.group(3) or "").strip()
-            if d and not d.startswith("-"):
-                tracked_cwd = (d if d.startswith("/")
-                               else (tracked_cwd.rstrip("/") + "/" + d
-                                     if tracked_cwd else d))
+    for text, argv, cwds, files in _commands(command, cwd):
+        if argv and posixpath.basename(argv[0]) in ("cd", "pushd", "popd"):
             continue
-        seg_masked = _mask(seg_raw)
-        toks = _candidate_targets(seg_masked, seg_raw)
-        if include_copy_move:
-            toks = toks + _copy_move_targets(_unquote(seg_raw))
-        for tok in toks:
-            if not tok:
-                continue
-            if tok.startswith("/"):
-                base = Path(tok)
-            elif tracked_cwd:
-                anchor = (Path(tracked_cwd) if tracked_cwd.startswith("/")
-                          else default_cwd / tracked_cwd)
-                base = anchor / tok
-            else:
-                base = default_cwd / tok
+        if removals:
+            toks = [t for t in _removal_operands(argv) if t]
+        else:
+            toks = files + [t for t in _candidate_targets(_mask(text), text) if t]
+        pairs = [(shell_reader.join(a, tok), a) for tok in toks for a in cwds]
+        if include_copy_move and not removals:
+            for dest, srcs, is_dir in _copy_move_targets(argv):
+                for a in cwds:
+                    base = shell_reader.join(a, dest)
+                    try:
+                        into = is_dir or (not isinstance(base, shell_reader.Loose) and base.is_dir())
+                    except OSError:
+                        into = is_dir
+                    # into a directory, each source lands under its own name
+                    pairs += ([(shell_reader.join(base, Path(x.rstrip("/")).name), a)
+                               for x in srcs if x.rstrip("/")] if into else [(base, a)])
+        for target, a in pairs:
+            vouched = not isinstance(target, shell_reader.Loose)  # an absolute token needs no cwd
             try:
-                out.append(base.resolve(strict=False))
+                p = Path(target).resolve(strict=False)
             except (OSError, ValueError):  # noqa: BLE001 — a bad token never breaks detection
                 continue
+            if (p, vouched) not in out:
+                out.append((p, vouched))
+    return out
+
+
+def shell_write_absolute_targets(command, include_copy_move: bool = False,
+                                 cwd=_CWD_OMITTED, removals: bool = False) -> list:
+    """The paths of `shell_targets`, vouched or not: the ONE resolution step every
+    root-relative check shares (`shell_write_targets` below, gate_stage's artifact arm,
+    the floor guard). A token under a directory no reading vouches for keeps the literal
+    text the line names it by (`$PWD/harness/hooks/x`), so a check that reads a dynamic
+    prefix still sees one. Pure + fail-open: junk input → []."""
+    out = []
+    for p, _vouched in shell_targets(command, include_copy_move, cwd=cwd, removals=removals):
+        if p not in out:
+            out.append(p)
     return out
 
 
 def shell_write_targets(command, include_copy_move: bool = False, roots=None,
-                        cwd=_CWD_OMITTED) -> list:
+                        cwd=_CWD_OMITTED, removals: bool = False) -> list:
     """Every filesystem WRITE target named in a Bash command, as POSIX paths
     relative to EVERY root in `roots` it resolves under (deduped, in order —
     never just the first root that matches). The shared parser behind two
@@ -308,7 +535,8 @@ def shell_write_targets(command, include_copy_move: bool = False, roots=None,
         return []
     roots = tuple(roots) if roots else (_root(),)
     out, seen = [], set()
-    for resolved in shell_write_absolute_targets(command, include_copy_move, cwd=cwd):
+    for resolved in shell_write_absolute_targets(command, include_copy_move, cwd=cwd,
+                                                 removals=removals):
         for root in roots:
             try:
                 rel = write_guard.rel_target(str(resolved), root)

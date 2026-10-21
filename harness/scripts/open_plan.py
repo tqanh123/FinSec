@@ -24,6 +24,7 @@ status such as completed/cancelled).
 """
 import sys
 
+import plan_family
 from plan_status import Result, flip_status  # noqa: F401  (Result re-exported)
 
 # Cook starts a plan from its pre-cook state; the gate only cares that it reaches
@@ -36,7 +37,11 @@ _STARTABLE = {"pending", "approved", "draft"}
 
 
 def open_plan(plan_dir, root=None) -> Result:
-    """Flip plan_dir/plan.md frontmatter status pending|approved -> in_progress."""
+    """Flip plan_dir/plan.md frontmatter status pending|approved -> in_progress.
+    A plan the human split is refused: its children are cooked, never it."""
+    split = plan_family.never_cooked(plan_dir)
+    if split:
+        return Result(False, False, split)
     return flip_status(plan_dir, allowed_from=_STARTABLE, to="in_progress",
                        error_on_other=True, root=root)
 

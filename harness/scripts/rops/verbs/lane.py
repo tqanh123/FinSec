@@ -11,6 +11,12 @@ file, did not skip, and ran red.
 What `lane` does, in order:
   1. `git init --bare` ROPS_BARE on the remote once (default `~/rops/di.git`).
   2. `git push --force` the local HEAD to `refs/heads/lane/<name>` in that bare repo.
+  2a. A lane remembers the tree that built it (`~/rops/.lane-src/<name>`: host +
+     path). A build from any other tree refuses by name before step 2 — a `run
+     --lane` from the main checkout once reset a linked worktree's lane to the main
+     checkout's HEAD without a word — unless `--rebind` hands the lane over. An owner
+     that cannot be read refuses too, and so does a lane checkout with no record (built
+     before owners were recorded) until one `--rebind` from the tree it belongs to.
   3. Make `~/rops/<name>` a worktree of the bare repo at that commit (`worktree add`
      the first time; `reset --hard` afterwards). A pre-existing plain directory is
      moved aside and everything in LANE_KEEP (the venvs, `logs/`) carried over, so
@@ -37,12 +43,14 @@ import base64
 import pathlib
 import posixpath
 import re
+import socket
 import subprocess
 import sys
 import time
+import uuid
 
 from rops.ropslib import detect, hosts
-from rops.ropslib.exec import report, run_remote, wait_for_dir
+from rops.ropslib.exec import LOCK_WAIT_S, report, run_remote, wait_for_dir
 from rops.ropslib.transport import sq
 from rops.ropslib.tree import lane_excludes_for, uncommitted_note
 
@@ -56,10 +64,11 @@ KEEP_FLOOR = (".venv", "logs")
 
 
 def keep_names(cfg) -> list[str]:
-    """Floor + detected + declared, de-duplicated, order stable."""
+    """Floor + detected + declared, de-duplicated, order stable; a name is a path from the
+    lane root, however it is written (`data`, `/data`, `data/`, `./data`)."""
     out = list(KEEP_FLOOR)
-    for n in detect.venvs_in(cfg) + cfg.csv("ROPS_LANE_KEEP"):
-        if n and n not in out:
+    for n in detect.venvs_in(cfg) + [posixpath.normpath(k).strip("/") for k in cfg.csv("ROPS_LANE_KEEP")]:
+        if n and n != "." and n not in out:
             out.append(n)
     return out
 
@@ -73,10 +82,15 @@ def lane_excludes(cfg) -> list[str]:
     moved-aside tree on a rebuild, `--delete` as a stray on every run after.
     """
     out = list(lane_excludes_for(cfg.repo))
-    for n in keep_names(cfg):
-        if not any(e.rstrip("/") == n for e in out):
-            out.append(n + "/")
+    out += anchored_keeps(cfg, out)
     return out
+
+
+def anchored_keeps(cfg, patterns) -> list[str]:
+    """Each kept name no pattern already names, anchored at the lane's root (`/logs/`): a
+    kept directory is the lane's own, and a source directory of the same name deeper in
+    the tree (`app/logs/`) is carried like any other."""
+    return ["/%s/" % n for n in keep_names(cfg) if not any(e.strip("/") == n for e in patterns)]
 
 
 #: `.rops.env` (and the `.bak` doctor keeps beside it) is local config, never part of
@@ -86,11 +100,35 @@ def lane_excludes(cfg) -> list[str]:
 ROPS_ENV_FILTER = ("--filter", "-s /.rops.env*")
 
 
+def perishable(patterns) -> list[str]:
+    """rsync excludes for a push with `--delete`, each perishable (`-p`): it protects the
+    receiver's copy in a directory the sender still has, and nothing in one the sender no
+    longer has. A plain exclude kept such a directory alive -- measured after a dist
+    rename, the old dir stayed on the lane holding only `__pycache__/`, an importable
+    namespace package of the old name. A root-anchored or root-level path (`/.git`, the
+    lane's venv) sits in the root, which is never deleted, so it is protected as before."""
+    out: list[str] = []
+    for e in patterns:
+        out += ["--filter", "-p " + e]
+    return out
+
+
 def tree_rsync_args(cfg) -> list[str]:
-    """Step 4's filter/exclude flags, in rsync order (first match wins)."""
-    out = list(ROPS_ENV_FILTER)
-    for e in lane_excludes(cfg):
-        out += ["--exclude", e]
+    """Step 4's filter/exclude flags, in rsync order (first match wins). A kept name stays
+    a plain exclude, never perishable: it is protected from `--delete` wherever its
+    pattern matches -- at the lane root (`/logs/`, `/.cache/huggingface/` inside a
+    directory only the lane has) when only the keep list names it, at any depth when the
+    shared list does. The shared excludes are the perishable ones."""
+    return list(ROPS_ENV_FILTER) + pushed_excludes(cfg, lane_excludes(cfg))
+
+
+def pushed_excludes(cfg, patterns) -> list[str]:
+    """A push's excludes: a kept name (`keep_names`) plain -- protected from `--delete`
+    wherever its pattern matches -- every other pattern perishable."""
+    kept = set(keep_names(cfg))
+    out: list[str] = []
+    for e in patterns:
+        out += ["--exclude", e] if e.strip("/") in kept else perishable([e])
     return out
 
 
@@ -189,6 +227,9 @@ def add_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-sync", action="store_true", help="skip the uv sync step")
     p.add_argument("--force", action="store_true",
                    help="rebuild even while processes are running inside the lane (they will read a tree that no longer exists)")
+    p.add_argument("--rebind", action="store_true",
+                   help="rebuild a lane another tree built, from this one (the lane then "
+                        "belongs to this tree)")
 
 
 def _local(repo, *argv: str) -> subprocess.CompletedProcess:
@@ -428,7 +469,7 @@ def repair_editables(cfg, host, lane: str, path: str, cmd: str) -> int:
           f"(built before its code existed) — reinstalling")
     again = " ".join(f"--reinstall-package {b}" for b in bad)
     rc = report(run_remote(cfg, host, f"cd {lane} && export PATH={path}:$PATH && {cmd} {again}",
-                           timeout_s=900, tail=3, label="lane-editable-reinstall"))
+                           timeout_s=_step_timeout(cfg), tail=3, label="lane-editable-reinstall"))
     if rc:
         return rc
     still = unhooked(host.out(probe, timeout=120))
@@ -441,8 +482,9 @@ def repair_editables(cfg, host, lane: str, path: str, cmd: str) -> int:
 def run(args: argparse.Namespace) -> int:
     cfg = args.cfg
     host = hosts.gate(args, need_dir=False)[0]
-    name = args.name or cfg.get("ROPS_LANE") or cfg.repo.name
-    return build(cfg, host, name, no_sync=args.no_sync, force=args.force)
+    name = args.name or cfg.get("ROPS_LANE") or detect.tree_name(cfg.repo)
+    return build(cfg, host, name, no_sync=args.no_sync, force=args.force,
+                 rebind=getattr(args, "rebind", False))
 
 
 def run_setup(cfg, host, lane: str, name: str) -> int:
@@ -454,7 +496,7 @@ def run_setup(cfg, host, lane: str, name: str) -> int:
         return 0
     path = cfg.get("ROPS_PATH_PREPEND", "$HOME/.local/bin")
     rc = report(run_remote(cfg, host, f"cd {lane} && export PATH={path}:$PATH && {cmd}",
-                           timeout_s=900, tail=5, label=f"lane-{name}-setup"))
+                           timeout_s=_step_timeout(cfg), tail=5, label=f"lane-{name}-setup"))
     if rc:
         print(f"!! setup failed rc={rc} (ROPS_LANE_SETUP: {cmd}) — the lane is synced but "
               f"what the setup provides is not there")
@@ -463,15 +505,149 @@ def run_setup(cfg, host, lane: str, name: str) -> int:
     return rc
 
 
-def build(cfg, host, name: str, *, no_sync: bool = False, force: bool = False) -> int:
+def _step_timeout(cfg, work_s: int = 900) -> int:
+    """A rebuild step waits on the lane's own locks as long as any lock wait may, and
+    then gets its own `work_s`: ssh cut at 900 s while the step still queued read as a
+    failed rebuild (rc 124) and left the step running detached."""
+    return work_s + int((cfg.get("ROPS_LOCK_WAIT") if cfg is not None else "") or LOCK_WAIT_S)
+
+
+def _rebuild_cfg(cfg):
+    """The call's config without its `--lock`/`ROPS_LOCK` names and its cpu seats:
+    those are the command's, for the command's life. A rebuild before it queued on them — the suite
+    lock another session held — and the command never ran."""
+    for key in ("ROPS_LOCK", "ROPS_CORES", "ROPS_QUEUE_SKIP"):
+        if cfg.get(key):
+            cfg = cfg.override(key, "", "lane rebuild")
+    return cfg
+
+
+def lane_source(cfg) -> str:
+    """How a lane names the tree that built it: this host and this checkout's path."""
+    return f"{socket.gethostname()}:{cfg.repo.resolve()}"
+
+
+def lane_identity(cfg) -> str:
+    """This checkout's own id, kept in its git dir (one per worktree): a hostname that
+    changes, or a path spelled another way, is still the same tree. "" when unreadable."""
+    r = _local(cfg.repo, "rev-parse", "--git-path", "rops-lane-id")
+    if r.returncode or not r.stdout.strip():
+        return ""
+    path = cfg.repo / r.stdout.strip()
+    try:
+        found = path.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[0-9a-f]{32}", found):
+            return found
+    except OSError:
+        pass
+    new = uuid.uuid4().hex
+    try:
+        path.write_text(new + "\n", encoding="utf-8")
+    except OSError:
+        return ""
+    return new
+
+
+#: One path segment under ~/rops/ that needs no quoting in the remote commands: letters
+#: (any script), digits, `.`, `_`, `+`, `@`, `-`; never `.`/`..`, a leading `.` or `-`.
+_LANE_NAME = re.compile(r"^[^\W][\w.+@-]*$")
+
+
+def _lane_owner(host, name: str) -> "tuple[int, str, str, bool]":
+    """(rc of the read, the recorded owner or "" — an empty record is none, the lane
+    checkout's HEAD or "" when there is no checkout, whether `~/rops/<name>` exists
+    but is no checkout at all)."""
+    r = host.run(f"f=~/rops/.lane-src/{name}; L=~/rops/{name}; "
+                 f"[ -f \"$f\" ] && printf 'lane-src %s\\n' \"$(cat \"$f\")\"; "
+                 f"[ -e \"$L/.git\" ] && printf 'lane-head %s\\n' "
+                 f"\"$(git -C \"$L\" rev-parse --short HEAD 2>/dev/null)\"; "
+                 f"[ -e \"$L\" ] && [ ! -e \"$L/.git\" ] && echo 'lane-kind not-lane'; true",
+                 timeout=60)
+    found = {"lane-src": "", "lane-head": "", "lane-kind": ""}
+    for line in (r.stdout or "").splitlines():
+        key, _, value = line.partition(" ")
+        if key in found:
+            found[key] = value.strip()
+    head = found["lane-head"] or ("unknown" if "lane-head" in (r.stdout or "") else "")
+    return r.returncode, found["lane-src"], head, found["lane-kind"] == "not-lane"
+
+
+def _owned_by(owner: str, here: str, tree_id: str) -> bool:
+    """A record is `<host:path>[TAB<id>]`: the id decides when both sides have one, the
+    label does otherwise (records written before ids, a checkout whose id is unreadable)."""
+    label, _, oid = owner.partition("\t")
+    return label == here or bool(oid and tree_id and oid == tree_id)
+
+
+def _trees_holding(repo, short: str) -> list:
+    """Local worktrees whose HEAD's history holds commit `short`."""
+    full = _local(repo, "rev-parse", "--verify", "--quiet", f"{short}^{{commit}}").stdout.strip()
+    if not full:
+        return []
+    out = _local(repo, "worktree", "list", "--porcelain").stdout
+    held = []
+    for block in out.strip().split("\n\n"):
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        path, head = fields.get("worktree"), fields.get("HEAD")
+        if path and head and _local(repo, "merge-base", "--is-ancestor", full, head).returncode == 0:
+            held.append(str(pathlib.Path(path).resolve()))
+    return held
+
+
+def _owner_refusal(name: str, here: str, rc: int, owner: str, lane_head: str,
+                   rebind: bool, tree_id: str = "", repo=None) -> "str | None":
+    """Why this tree may not rebuild lane `name`, or None. Fail-closed: an owner that
+    could not be read (ssh timeout, dropped link) is not an owner that is absent."""
+    if rc:
+        return (f"could not read lane {name}'s owner (rc={rc}) — nothing pushed or reset; "
+                f"retry when the host answers")
+    if rebind or (owner and _owned_by(owner, here, tree_id)):
+        return None
+    if owner:
+        label = owner.partition("\t")[0]
+        return (f"lane {name} was built from {label}, not from {here} — rebuilding it here "
+                f"would reset that tree's lane to this HEAD. Run from "
+                f"{label.split(':', 1)[-1]}, pick another --name/--lane, or pass --rebind "
+                f"to hand the lane to this tree")
+    if lane_head:
+        mine = _local(repo, "rev-parse", "--short", "HEAD").stdout.strip() if repo else ""
+        held = _trees_holding(repo, lane_head) if repo and lane_head != "unknown" else []
+        return (f"lane {name} has a checkout (HEAD {lane_head}) but no recorded owner — it "
+                f"was built before lanes recorded one; this tree's HEAD {mine or '?'} ({here}). "
+                f"Local worktrees whose history holds {lane_head}: "
+                f"{', '.join(held) if held else 'none'}. Rebuild it once with --rebind from "
+                f"the tree it belongs to; from any other tree that resets it to this HEAD")
+    return None
+
+
+def build(cfg, host, name: str, *, no_sync: bool = False, force: bool = False,
+          rebind: bool = False) -> int:
     """The steps `lane` runs from the CLI, as a callable other verbs can drive
     directly — `run --lane NAME` (R5) rebuilds a lane inline through this SAME
     sequence rather than re-implementing it, so the two never drift apart.
     """
     bare = cfg.get("ROPS_BARE", "~/rops/di.git")
+    if not _LANE_NAME.match(name or "") or name == posixpath.basename(bare.rstrip("/")):
+        print(f"!! {name!r} is not a lane name: one segment of letters, digits, '.', '_', "
+              f"'+', '@' or '-', not starting with '.' or '-', and not the bare repo's "
+              f"name", file=sys.stderr)
+        return 2
     lane = f"~/rops/{name}"
     branch = f"lane/{name}"
-    rc = wait_for_dir(cfg, host, lane)
+    # 2a. whose lane this is — before waiting on its lock (a build about to be refused
+    #     must not wait out ROPS_LOCK_WAIT first) and before the push, which alone
+    #     already moves `lane/<name>` under the tree that owns it.
+    here, tree_id = lane_source(cfg), lane_identity(cfg)
+    read_rc, owner, lane_head, not_lane = _lane_owner(host, name)
+    if not read_rc and not_lane:
+        print(f"!! ~/rops/{name} exists and is not a lane checkout (no .git) — a build "
+              f"moves it aside and deletes it; pick another --name/--lane", file=sys.stderr)
+        return 2
+    refusal = _owner_refusal(name, here, read_rc, owner, lane_head, rebind, tree_id, cfg.repo)
+    if refusal:
+        print("!! " + refusal, file=sys.stderr)
+        return 3
+    rc = wait_for_dir(_rebuild_cfg(cfg), host, lane)
     if rc:
         return rc
 
@@ -540,6 +716,17 @@ git -C "$L" rev-parse --short HEAD
     if r.returncode:
         print(r.stderr.strip(), file=sys.stderr)
         return r.returncode
+    record = f"{here}\t{tree_id}" if tree_id else here
+    if owner != record:
+        r = host.run(f"mkdir -p ~/rops/.lane-src && printf '%s\\n' {sq(record)} "
+                     f"> ~/rops/.lane-src/{name}", timeout=60)
+        if r.returncode:
+            print(f"!! could not record {here} as lane {name}'s tree: "
+                  f"{(r.stderr or r.stdout or '').strip()}", file=sys.stderr)
+            return r.returncode
+        was = owner.partition("\t")[0]
+        if was != here:
+            print(f"lane {name} belongs to {here}" + (f" (was {was})" if was else ""))
 
     # 4. rsync over the checkout. --delete so files removed locally vanish there; the
     #    excludes are protected (rsync never deletes an excluded path without
@@ -611,18 +798,19 @@ git -C "$L" rev-parse --short HEAD
             print(why)
         else:
             path = cfg.get("ROPS_PATH_PREPEND", "$HOME/.local/bin")
-            rc = report(run_remote(cfg, host, f"cd {lane} && export PATH={path}:$PATH && {cmd}",
-                                   timeout_s=900, tail=3, label=f"lane-{name}-sync"))
+            rc = report(run_remote(_rebuild_cfg(cfg), host,
+                                   f"cd {lane} && export PATH={path}:$PATH && {cmd}",
+                                   timeout_s=_step_timeout(cfg), tail=3, label=f"lane-{name}-sync"))
             if rc:
                 return rc
-            rc = repair_editables(cfg, host, lane, path, cmd)
+            rc = repair_editables(_rebuild_cfg(cfg), host, lane, path, cmd)
             if rc:
                 return rc
             n_pkg = host.out(f"cd {lane} && export PATH={path}:$PATH && {package_count_cmd(cmd)}",
                              timeout=120)
             print(f"venv: {n_pkg} packages (sync cmd: {cmd})")
 
-    rc = run_setup(cfg, host, lane, name)
+    rc = run_setup(_rebuild_cfg(cfg), host, lane, name)
     if rc:
         return rc
 

@@ -54,6 +54,8 @@ hs-run plan next --plan <dir> --fact-subjects "<module>::<function_name>"
 Read `facts["code.callers"]["value"]["<module>::<function_name>"]` — a list of `{caller, file, lines}`.
 `lines` is best-effort: a text scan restricted to the caller's own definition range, never a guarantee;
 an alias or decorator-wrapped call can leave it empty even though the caller entry itself is real.
+For a method, a `.name` use whose receiver's class the file states (`Store()`, `self`, `x: Store`, `x = Store()`, the class named through the file's own imports) is resolved by that class: an entry carrying `receivers` is a caller found that way;
+every other use is listed under `unresolved`, matched by name; one whose receiver is exactly another class (`Other()`) carries the class it `reaches` and comes last. Read those last, not never: a module elsewhere can rebind the method.
 `not_in_snapshot` names a subject the snapshot never measured; `unavailable`/`facts_stale` name why the
 fact could not answer at all (no codegraph adoption, or a stale/missing snapshot — run the printed
 refresh command). Only when the fact reports one of those reasons, fall back to:

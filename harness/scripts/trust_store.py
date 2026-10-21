@@ -37,7 +37,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -81,12 +81,28 @@ def load_trust() -> Set[str]:
     return {str(e) for e in entries if isinstance(e, str)}
 
 
-def _write_trust(trusted: Set[str]) -> None:
+def load_commands() -> Dict[str, str]:
+    """root (realpath) -> the command fingerprint recorded when it was trusted. A
+    missing/corrupt store, or one written before fingerprints existed, records none."""
+    try:
+        data = json.loads(_store_path().read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+    cmds = data.get("commands") if isinstance(data, dict) else None
+    if not isinstance(cmds, dict):
+        return {}
+    return {str(k): str(v) for k, v in cmds.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def _write_trust(trusted: Set[str], commands: Optional[Dict[str, str]] = None) -> None:
     p = _store_path()
+    doc: Dict[str, object] = {"trusted": sorted(trusted)}
+    cmds = load_commands() if commands is None else commands
+    if cmds:
+        doc["commands"] = dict(sorted(cmds.items()))
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"trusted": sorted(trusted)}, indent=2) + "\n",
-                     encoding="utf-8")
+        p.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
     except OSError as exc:
         # a misconfigured store path (e.g. HARNESS_TRUST_STORE points at a dir)
         # surfaces as a TrustError the CLI reports, not a raw traceback
@@ -105,7 +121,13 @@ def add_trust(repo_root) -> str:
     rp = os.path.realpath(p)
     trusted = load_trust()
     trusted.add(rp)
-    _write_trust(trusted)
+    commands = load_commands()
+    fp = command_fingerprint(p)
+    if fp is None:
+        commands.pop(rp, None)
+    else:
+        commands[rp] = fp
+    _write_trust(trusted, commands)
     return rp
 
 
@@ -210,6 +232,188 @@ def is_trusted(repo_root) -> bool:
     if worktrees is None:
         return False
     return rp in worktrees
+
+
+# ── the project's own commands ───────────────────────────────────────────────
+#
+# Trusting a root once must not trust whatever its commands become: a pull can rewrite
+# the reader script `codemap.yaml` names, an edit can swap its argv. The fingerprint
+# taken at `add_trust` covers both; a command runs only while it still matches.
+
+
+def _check_command(language: str, cid: str, row) -> Optional[List[str]]:
+    """The tool a declared check runs: the pack's `bin` + the repo's `argv` or the pack's.
+    Its policy (mode, baseline, grace) is not a command."""
+    import static_checks
+    spec = next((s for s in static_checks.book(language) if s.id == cid), None)
+    argv = row.get("argv") if isinstance(row, dict) and isinstance(row.get("argv"), list) else None
+    if spec is None:
+        return [cid] + list(argv or [])
+    return [spec.bin] + list(argv if argv is not None else spec.argv)
+
+
+def declared_commands(repo) -> List[List[str]]:
+    """Every argv `repo/codemap.yaml` declares for hs-code to run, in declaration order:
+    `adapters[].command`, `adapters[].resolver`, `languages.<id>.resolver_command`, each
+    `languages.<id>.runners.<rid>` `bin` / `argv` / `select.list_argv` (`hs-code test run`),
+    each declared `languages.<id>.checks.<cid>` as its tool's bin + argv (`hs-code check
+    run`), and `domains.test.command` (`hs-code test prove|mutation`). An unreadable or malformed
+    file declares none (the loader refuses it on its own)."""
+    import yaml_io
+    try:
+        doc = yaml_io.safe_load((Path(repo) / "codemap.yaml").read_text(encoding="utf-8"))
+    except (OSError, ValueError, yaml_io.YAMLError):
+        return []
+    if not isinstance(doc, dict):
+        return []
+    out: List[List[str]] = []
+
+    def take(v) -> None:
+        if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
+            out.append(list(v))
+
+    for row in doc.get("adapters") or ():
+        if isinstance(row, dict):
+            take(row.get("command"))
+            take(row.get("resolver"))
+    langs = doc.get("languages")
+    for _lid, opts in sorted(langs.items() if isinstance(langs, dict) else ()):
+        if isinstance(opts, dict):
+            take(opts.get("resolver_command"))
+            runners = opts.get("runners")
+            for _rid, row in sorted(runners.items() if isinstance(runners, dict) else ()):
+                if isinstance(row, dict):
+                    if isinstance(row.get("bin"), str) and row["bin"]:
+                        take([row["bin"]])
+                    take(row.get("argv"))
+                    sel = row.get("select")
+                    take(sel.get("list_argv") if isinstance(sel, dict) else None)
+            checks = opts.get("checks")
+            for cid, row in sorted(checks.items() if isinstance(checks, dict) else ()):
+                take(_check_command(str(_lid), str(cid), row))
+    test = (doc.get("domains") or {}).get("test") if isinstance(doc.get("domains"), dict) else None
+    take(test.get("command") if isinstance(test, dict) else None)
+    return out
+
+
+def _git(repo_rp: str, *args: str) -> "Optional[subprocess.CompletedProcess]":
+    """`git <args>` in `repo_rp` under the hardened config/env; None when git cannot run."""
+    import process_group
+    try:
+        return process_group.run(["git", *_secret_scan.GIT_SAFE_CONFIG, "-C", repo_rp, *args],
+                                 capture_output=True, text=True, timeout=_GIT_TIMEOUT_S,
+                                 env=_secret_scan.hardened_git_env())
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _checkout_root(repo_rp: str) -> str:
+    """The git work tree `repo_rp` belongs to (realpath), or `repo_rp` itself off git: a
+    package of a monorepo runs scripts from the whole checkout."""
+    r = _git(repo_rp, "rev-parse", "--show-toplevel")
+    top = r.stdout.strip() if r is not None and r.returncode == 0 else ""
+    return os.path.realpath(top) if top else repo_rp
+
+
+def _repo_file(repo_rp: str, token: str, top: "Optional[str]" = None) -> Optional[str]:
+    """`token`, as a path, when it names a regular file inside the repo or, above it, inside
+    the checkout `top` -- relative to the repo (`../tools/x.js`)."""
+    cand = Path(token) if os.path.isabs(token) else Path(repo_rp) / token
+    try:
+        rp = os.path.realpath(cand)
+        if not os.path.isfile(rp):
+            return None
+        bound = top or repo_rp
+        Path(rp).relative_to(bound)
+    except (OSError, ValueError):
+        return None
+    return Path(os.path.relpath(rp, repo_rp)).as_posix()
+
+
+def _argv_paths(argv) -> List[str]:
+    """Every path an argv may run from: each token, the value of a `--flag=value`, and
+    the file a `-m module` names. A bare program name is not looked up on PATH: what PATH
+    finds differs between shells, and a fingerprint must not (`program_in_repo`)."""
+    toks, out = list(argv), []
+    for i, tok in enumerate(toks):
+        out.append(tok)
+        if tok.startswith("-") and "=" in tok:
+            out.append(tok.split("=", 1)[1])
+        if i > 0 and toks[i - 1] == "-m":
+            mod = tok.replace(".", "/")
+            out += [mod + ".py", mod + "/__init__.py", mod + "/__main__.py"]
+    return out
+
+
+def program_in_repo(repo, argv) -> Optional[str]:
+    """The repo-relative file a bare `argv[0]` runs, found on this process's PATH the
+    way a child started in `repo` finds it, when that file is the repo's own source
+    (tracked, or untracked and not ignored); None otherwise. A program installed where
+    git ignores it (a `.venv`, `node_modules/.bin`) is an installed tool, like one
+    outside the repo."""
+    name = str(argv[0]) if argv else ""
+    if not name or "/" in name or os.sep in name:
+        return None
+    repo_rp = os.path.realpath(Path(repo))
+    exts = [""] + ([e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
+                   if os.name == "nt" else [])
+    found = None
+    for entry in os.environ.get("PATH", os.defpath).split(os.pathsep):
+        d = Path(entry) if os.path.isabs(entry) else Path(repo_rp) / (entry or ".")
+        found = next((d / (name + e) for e in exts
+                      if (d / (name + e)).is_file() and os.access(d / (name + e), os.X_OK)), None)
+        if found is not None:
+            break
+    if found is None:
+        return None
+    rel = _repo_file(repo_rp, str(found), _checkout_root(repo_rp))
+    if rel is None:
+        return None
+    r = _git(repo_rp, "check-ignore", "-q", "--", rel)
+    return None if r is not None and r.returncode == 0 else rel
+
+
+def command_files(repo, argvs) -> List[str]:
+    """The repo-relative files inside `repo` the argvs run from (`_argv_paths`), sorted --
+    the scripts a declared command runs from the tree. A module such a script imports is
+    not among them."""
+    repo_rp = os.path.realpath(Path(repo))
+    top = _checkout_root(repo_rp)
+    return sorted({rel for argv in argvs for tok in _argv_paths(argv)
+                   for rel in (_repo_file(repo_rp, tok, top),) if rel is not None})
+
+
+def command_fingerprint(repo) -> Optional[str]:
+    """sha256 over the declared argvs and the bytes of every file inside `repo` an argv
+    token names; None when `repo` declares no command. A comment or any key outside the
+    commands leaves it unchanged."""
+    cmds = declared_commands(repo)
+    if not cmds:
+        return None
+    repo_rp = os.path.realpath(Path(repo))
+    files = {rel: _sha256(Path(repo_rp) / rel) or "unreadable" for rel in command_files(repo, cmds)}
+    blob = json.dumps({"argv": cmds, "files": files}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _trusted_root(repo) -> Optional[str]:
+    """The trust-store root `repo` is trusted through: itself, or the root whose own
+    worktree list names it (the `is_trusted` rule); None when it is not trusted."""
+    if not is_trusted(repo):
+        return None
+    rp = os.path.realpath(Path(repo))
+    return rp if rp in load_trust() else _worktree_hint_root(Path(repo))
+
+
+def commands_trusted(repo) -> Tuple[bool, Optional[str], Optional[str]]:
+    """(ok, recorded, current): `repo`'s commands may run -- it declares none, or it is
+    trusted and its current fingerprint is the one recorded for its trusted root."""
+    current = command_fingerprint(repo)
+    if current is None:
+        return True, None, None
+    root = _trusted_root(repo)
+    recorded = load_commands().get(root) if root else None
+    return recorded is not None and recorded == current, recorded, current
 
 
 def _sha256(path: Path) -> Optional[str]:

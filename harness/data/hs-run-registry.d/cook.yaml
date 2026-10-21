@@ -10,7 +10,7 @@ domains:
     next:      {module: hs_run_cook, entry: NEXT, help: "report the next cook step"}
     status:    {module: hs_run_cook, entry: STATUS, help: "report whole-plan status across every phase (read-only)"}
     preflight: {module: hs_run_cook, entry: PREFLIGHT, help: "run the pre-build gate before phase 1 (plan-graph + grid checks)"}
-    open:      {module: hs_run_cook, entry: OPEN, help: "flip the plan to in_progress before the phase loop starts"}
+    open:      {module: hs_run_cook, entry: OPEN, help: "flip the plan to in_progress before the phase loop starts; --reason reopens a completed one"}
     verify:    {module: hs_run_cook, entry: VERIFY, help: "record a phase's verification verdict"}
     close:     {module: hs_run_cook, entry: CLOSE, help: "finalize the plan once completion, review, and phase-grid gates pass"}
     prompt:    {module: hs_run_cook, entry: PROMPT, help: "report the next model instruction for a role — posture-aware for developer (never spawns it)"}
@@ -116,8 +116,9 @@ step_routing:
       # ---- preflight: the hard gate before any phase runs ------------------
       preflight_blocked:
         summary: >-
-          Preflight refused: the plan skipped an artifact the DAG declares. This
-          is a plan defect, not a cook defect — fix it in hs:plan.
+          Preflight refused: the plan skipped an artifact the DAG declares, or the
+          human chose to split it and its work is cooked in the child plans. This
+          is a plan defect, not a cook defect — fix it in hs:plan, or cook a child.
         rules: [verification-mechanism]
       needs_phase_grid_gate:
         summary: >-
@@ -182,6 +183,30 @@ step_routing:
           model's reading of the report, not a person's decision.
         rules: [verification-mechanism]
         refs: [references/verify-before-done.md]
+      # Before the verdict: a check the repo declares in codemap.yaml (tsc, eslint) or
+      # a test runner the harness runs (vitest, jest), owed by the change and not
+      # proven by the harness's own newest run -- the DoD gate's predicate, asked here
+      # so a verified phase is not refused at ship.
+      needs_declared_check:
+        summary: >-
+          The phase's build is recorded, and a check the repo declares is owed and not
+          proven by the harness's own newest run (none, failed, its result file changed,
+          or its inputs changed since). Run the named command for each, then ask again;
+          an agent's own result file does not satisfy it.
+        ask_user_exempt: >-
+          which checks are owed is read from codemap.yaml and the plan's check ledger;
+          running them is a deterministic step, not a person's decision.
+        rules: [verification-mechanism]
+      declared_check_broken:
+        summary: >-
+          A declared check could not be measured -- its newest run is BROKEN or
+          BLOCKED, or the declaration itself cannot be read. The same command again
+          says the same: fix what the reason names (a missing binary, the config), then
+          run the check.
+        ask_user_exempt: >-
+          the reason is the run's own; fixing a missing binary or a malformed
+          declaration is the model's next step, not a decision to put to a person.
+        rules: [verification-mechanism]
       # Engine-generated (`hs_run_facts.engine._offer_outcome`, kept or dropped by
       # `hs_run._apply_facts`): a state here declares `facts:`, the repo has no code
       # map, someone is at the terminal and nobody has answered this session. The
@@ -287,8 +312,23 @@ step_routing:
       phases_blocked:
         summary: >-
           Nothing runnable is left, yet the plan is not done: every remaining phase
-          needs a paused one. Lift the pause, or drop the edge from a phase that does
-          not need it.
+          needs a paused one, or a sibling plan's phase not passed yet. Lift the pause
+          or drop the edge a phase does not need; a wait clears when the other plan's
+          phase passes, or when a ruling says the edge is met (`waived:` on the edge).
+      phase_waiting:
+        summary: >-
+          The named phase needs a sibling plan's phase (a `{from: <plan>/<phase>}` edge
+          in plan-graph.yaml) that has not passed. Cook that phase in its own plan first,
+          or, when a ruling says the edge is already met, write it as `waived:
+          {decision, reason}` on the edge and re-approve the plan.
+        ask_user:
+          question: Wait for the sibling plan's phase, or record that this edge is already met?
+          facts:
+            - the envelope's waits_on names each `<plan>/<phase>` not passed yet, and next_action the command that moves it
+            - a waiver needs a ruling's id; the other plan still owes its phase either way
+          options:
+            - wait — cook the named phase in its own plan, then run hs-run cook next with the same --phase
+            - "waive — write `waived: {decision, reason}` on the edge in plan-graph.yaml and re-approve the plan"
 
       # ---- the measured post-build review obligation -------------------------
       # Not a flat mandate: the measured disposition (one predicate behind
@@ -305,8 +345,9 @@ step_routing:
           `hs-run cook record code-reviewer --out <file>` was never actually run
           for it — and the run's real diff did not earn a waiver (it crossed a
           size threshold or the risk tier is above tiny, or it could not be
-          sized at all). Spawn the reviewer, then run record; close writes
-          nothing until then.
+          sized at all). Also refused when the review recorded last has no verdict of
+          its own on disk, or never saw commits the run verified after it. Spawn the
+          reviewer, then run record; close writes nothing until then.
         rules: [workflow-handoffs]
       # Same split, at the completion gate: the close verb refuses to write while
       # phases remain, where the projection reports the same tree at rung 0.
@@ -328,13 +369,26 @@ step_routing:
           run it once and record verify before cook close
         rules: [verification-mechanism]
         refs: [references/deferred-suite.md]
+      needs_suite_run:
+        summary: >-
+          Every phase passed and this plan deferred its full suite: run it once and
+          record it, before the review. Run after the review, the fixes it forces
+          would go unreviewed, and every later commit would ask for the review again.
+        ask_user_exempt: >-
+          running the suite and reading its result is the model's step; the plan's
+          own defer_suite flag already decided that it runs once, here.
+        rules: [verification-mechanism]
+        refs: [references/deferred-suite.md]
       needs_review:
         summary: >-
           The build is done and the run's measured diff earned the independent
           review: over a size threshold, or a risk tier above tiny, or the work
           could not be sized (the waiver is earned by measurement, never by
           measurement failing). Spawn the reviewer; reviewing your own diff at
-          this gate is the thing it exists to prevent.
+          this gate is the thing it exists to prevent. A review counts only for the work
+          it saw: one that never read a change verified since (judged by content), one
+          recorded over verified work no branch holds any more, or one whose own verdict
+          was never written, is owed again, and the sentence names the move.
         # anti-tautology-detection was routed here and moved to `recorded`. Its trigger
         # is reading a verification artifact someone else wrote — which happens when a
         # delegated result comes back, one state earlier. At THIS state the reviewer is
@@ -367,7 +421,37 @@ step_routing:
           plan is not finished regardless of the work being done.
       already_closed:
         summary: >-
-          The plan is already closed. Re-opening is a decision, not a retry.
+          The plan is already closed. Re-opening is a decision, not a retry:
+          `cook open --reason` takes it, with the reason its evidence went stale.
+      reopen_needs_reason:
+        summary: >-
+          `cook open` on a completed plan refused: reopening needs `--reason`,
+          the reason its evidence went stale, and `--phase` for each phase that
+          must be verified again. Nothing was written.
+      reopen_not_completed:
+        summary: >-
+          `--reason`/`--phase` reopen a completed plan only; this one is not
+          completed, so there is nothing to reopen. `cook next` says what it owes.
+      reopened:
+        summary: >-
+          The completed plan is back to in_progress. Its review-decision moved
+          aside (review-decision-retired-*), so a fresh recorded review is owed
+          and no measured waiver stands in; each phase named with --phase owes a
+          verify before close. The reason is in the phase-commits log.
+        rules: [verification-mechanism]
+      needs_reopen_verify:
+        summary: >-
+          The plan was reopened and a phase it named has not been verified again.
+          Re-run its checks against the tree as it stands and record the verdict
+          with `cook verify` (`--sha keep` names the commits it already recorded);
+          the old snapshot is what went stale, so do not cite it.
+        rules: [verification-mechanism]
+      reopen_verify_owed:
+        summary: >-
+          `cook close` refused to finalize a reopened plan: a phase the reopen
+          named has not been verified again. Verify it; close writes nothing until
+          then.
+        rules: [verification-mechanism]
       closed:
         summary: >-
           The plan closed. This run is finished.

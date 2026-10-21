@@ -38,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -132,8 +133,8 @@ def core(data: dict) -> None:
         lines += ["NEW since the last write:"] + [f"  · {p}" for p in fresh]
     if standing:
         lines += ["Already there before this write:"] + [f"  · {p}" for p in standing]
-    checker = Path(memory_index_check.__file__)
-    lines.append(f"Re-run: python3 $HARNESS_BIN_ROOT/harness/{checker.parent.name}/{checker.name} {memory_dir}")
+    checker = Path(memory_index_check.__file__).resolve()
+    lines.append(f"Re-run: python3 {shlex.quote(str(checker))} {shlex.quote(str(memory_dir))}")
     hook_runtime.emit_nudge(_NAME, "\n".join(lines), session=data.get("session_id"),
                             default_channel="systemMessage")
 

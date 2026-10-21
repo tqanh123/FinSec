@@ -35,6 +35,8 @@ python3 scripts/pyclasses.py   mypackage --group -o graph.json
 python3 scripts/autolayout.py  graph.json -o diagram.drawio
 ```
 
+On a declared import root of a `codemap.yaml` project, `pyimports.py`/`pyclasses.py` read the shared codegraph; add `--snap REF` (from `hs-code graph snapshot`) to read that stored snapshot instead of measuring the whole repo.
+
 ## Shape search
 
 10,000+ official draw.io stencils + OSS catalog tiles (offline):

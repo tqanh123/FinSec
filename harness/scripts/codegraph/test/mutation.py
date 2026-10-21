@@ -356,7 +356,7 @@ def probe(root: Path, target: Path, *, limit: int = DEFAULT_LIMIT,
 
         with copied_tree(root) as work:
             try:
-                code, tail = run_declared(work, ["."], timeout=timeout)
+                code, tail = run_declared(work, ["."], root=root, timeout=timeout)
             except DeclaredCommandError as e:
                 rep.reason = str(e)
                 return rep
@@ -382,7 +382,7 @@ def probe(root: Path, target: Path, *, limit: int = DEFAULT_LIMIT,
                     continue
                 targets = _select_tests(root, mutant.relpath, idx) or ["."]
                 src_file.write_text(mutated, encoding="utf-8")
-                code, tail = run_declared(work, targets, timeout=timeout)
+                code, tail = run_declared(work, targets, root=root, timeout=timeout)
                 src_file.write_text(original, encoding="utf-8")
                 if code == 0:
                     rep.outcomes.append(Outcome(mutant, "survived", "tests stayed green"))

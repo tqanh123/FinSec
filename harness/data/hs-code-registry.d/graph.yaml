@@ -33,6 +33,11 @@ domains:
 
 # What `hs-code init` runs for this domain (schema: init.yaml's header).
 initializers:
+  lang-tools:
+    order: 5
+    summary: "the pinned npm packages a declared engine runs (languages.<id>.engine), once per user"
+    status: {module: codegraph._core.lang.typescript.node.install, entry: status}
+    run: {module: codegraph._core.lang.typescript.node.install, entry: run}
   graph:
     order: 10
     summary: "codemap.yaml + first snapshot: backs the code.* facts and every graph/change/check/scaffold verb"

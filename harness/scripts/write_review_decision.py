@@ -27,7 +27,6 @@ if str(_HERE) not in sys.path:
 
 import artifact_io  # noqa: E402
 import fs_guard  # noqa: E402
-import harness_paths  # noqa: E402
 
 _VERDICTS = ("PASS", "PASS_WITH_RISK", "BLOCKED")
 
@@ -164,13 +163,10 @@ def main(argv=None) -> int:
         return 2
     target = _canonical_target(plan_dir)
     try:
-        # project_root(), NOT root(): the hint names the tree the plans/ zone resolves
-        # against, and root() is the BIN root (its legacy HARNESS_ROOT alias is a bin
-        # alias too). Only bites with NO global bin — fs_guard._zone_base honours an
-        # explicit root only then, and discards it under HARNESS_BIN_ROOT — so this site
-        # is invisible in the layout most tests arm. Same class and same reasoning as
-        # plan_approval.py's two sites; do not revert one without the others.
-        fs_guard.assert_under(target, "plans", root=harness_paths.project_root())
+        # the plans/ zone of the tree the plan lives in, when it is this project or a
+        # worktree of it -- never root() (the BIN root). Same as plan_approval.py's two
+        # sites; do not revert one without the others.
+        fs_guard.assert_under_plan_tree(target, plan_dir)
     except fs_guard.FenceError as e:
         sys.stderr.write("write_review_decision: %s\n" % e)
         return 2

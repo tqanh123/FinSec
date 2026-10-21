@@ -175,6 +175,16 @@ def _frontmatter_status(text):
     return str(status) if status is not None else None
 
 
+def _is_split(plan_dir) -> bool:
+    """A plan the human split is never cooked itself, so never the active plan: its
+    children are. Read lazily, so a resolver error never comes from this check."""
+    try:
+        import plan_family
+        return plan_family.split_view(Path(plan_dir)) is not None
+    except Exception:  # noqa: BLE001 — a plan unreadable here is judged by status alone
+        return False
+
+
 def resolve_active_plan(root, allow_completed=False):
     """The active plan dir, or None.
 
@@ -210,7 +220,7 @@ def resolve_active_plan(root, allow_completed=False):
             cand.resolve().relative_to((root / "plans").resolve())
         except ValueError:
             return None
-        return cand
+        return None if _is_split(cand) else cand
 
     plans = root / "plans"
     if not plans.is_dir():
@@ -231,7 +241,7 @@ def resolve_active_plan(root, allow_completed=False):
             continue
         norm = status.strip("'\"").replace("-", "_") if status else None
         statuses[d] = norm
-        if norm == "in_progress":
+        if norm == "in_progress" and not _is_split(d):
             actives.append(d)
     if len(actives) == 1:
         return actives[0]
@@ -718,6 +728,10 @@ def _read_normalized_result(plan_dir: Path, rel_file: str, fmt: str):
     """(data, problem). Symlink-escape-safe like _load_artifact: the result file
     MUST resolve under plans/<p>/artifacts/. A missing/over-cap/malformed file is
     a clear problem string, never a crash."""
+    if not isinstance(rel_file, str):
+        return None, "result file %r is not a path" % (rel_file,)
+    if not isinstance(fmt, str):
+        return None, "unknown result format %r" % (fmt,)
     art = plan_dir / "artifacts"
     p = art / rel_file
     try:
@@ -737,6 +751,111 @@ def _read_normalized_result(plan_dir: Path, rel_file: str, fmt: str):
         return getattr(rdr, reader_name)(p), None
     except Exception as e:  # noqa: BLE001 — reader raises TestResultError; one clear problem
         return None, "result %s unreadable: %s" % (rel_file, e)
+
+
+def check_format(check, test_types_cfg):
+    """The result format the DoD gate reads `check` with: its own `format`, else its
+    type's in test-policy `test_types`; None when neither names one as text."""
+    import test_policy
+    tt_cfg = test_types_cfg.get(test_policy.check_type(check.get("name")))
+    fmt = check.get("format") or (tt_cfg.get("format") if isinstance(tt_cfg, dict) else None)
+    return fmt if isinstance(fmt, str) else None
+
+
+def result_problem(plan_dir, check, fmt, tt, cov_floor=None):
+    """The DoD gate's judgement of one check's result file: None when it reads and
+    passes, else why not. `cov_floor` is the change-class's line floor; None skips it."""
+    rel = check.get("file")
+    if not fmt or not rel:
+        return ("required type %r carries no raw result file to verify "
+                "(need format + file on the check)" % tt)
+    data, problem = _read_normalized_result(Path(plan_dir), rel, fmt)
+    if problem:
+        return "required type %r %s" % (tt, problem)
+    want = check.get("sha256")
+    if want:
+        import hashlib
+        try:
+            got = hashlib.sha256((Path(plan_dir) / "artifacts" / rel).read_bytes()).hexdigest()
+        except OSError as e:
+            return "required type %r result %s unreadable: %s" % (tt, rel, e)
+        if got != want:
+            return ("required type %r result %s is not the file that was attached: its "
+                    "sha256 is %s, the record's %s" % (tt, rel, got[:12], str(want)[:12]))
+    if fmt == "junit":
+        bad = (data.get("failed", 0) or 0) + (data.get("errors", 0) or 0)
+        if bad > 0:
+            return ("required type %r has failing tests (%d failed, %d "
+                    "errors)" % (tt, data.get("failed", 0), data.get("errors", 0)))
+    elif fmt in ("cobertura", "jacoco"):
+        if cov_floor is not None and (data.get("line_rate") or 0) * 100 < cov_floor:
+            return ("coverage %.0f%% is below the required %s%% line floor"
+                    % ((data.get("line_rate") or 0) * 100, cov_floor))
+    elif fmt == "sarif":
+        import test_result_readers as rdr
+        verdict, sdetail = rdr.sarif_verdict(data)
+        if verdict == "FAIL":
+            return "required type %r has %s" % (tt, sdetail)
+    return None
+
+
+def status_only_checks(rec, test_types_cfg):
+    """(name, format) for each PASS check of a known type whose result the gate reads
+    from a file and which carries none: its status is all the record holds."""
+    import test_policy
+    out = []
+    for c in (rec or {}).get("checks") or []:
+        if (isinstance(c, dict) and isinstance(c.get("name"), str)
+                and c.get("status") == "PASS" and not c.get("file")
+                and test_policy.check_type(c["name"]) in test_types_cfg):
+            fmt = check_format(c, test_types_cfg)
+            if fmt != "manual":
+                out.append((c["name"], fmt))
+    return out
+
+
+def unread_results(rec, plan_dir, test_types_cfg) -> list:
+    """(name, format, why) for each check of a known type that names a result file the
+    gate would not pass: missing, outside artifacts/, unparseable, or showing failures."""
+    import test_policy
+    out = []
+    for c in (rec or {}).get("checks") or []:
+        if not (isinstance(c, dict) and isinstance(c.get("name"), str) and c.get("file")):
+            continue
+        tt = test_policy.check_type(c["name"])
+        fmt = check_format(c, test_types_cfg)
+        if tt in test_types_cfg and fmt != "manual":
+            why = result_problem(plan_dir, c, fmt, tt)
+            if why:
+                out.append((c["name"], fmt, why))
+    return out
+
+
+def evidence_types(rec, plan_dir, test_types_cfg) -> set:
+    """The test types in `rec` the DoD gate reads a passing result for, every check of
+    the type taken together as the gate takes them: each one's result file passes
+    `result_problem`, or it is a manual check whose anchor the telemetry witnessed (a
+    claimed one is the agent's word). Its status is not read, as the gate does not read
+    it; a record with a failing status does not count its phase and never gets here.
+    Not judged here, being the change-class's: the coverage line floor and a hard
+    manual check's co-sign."""
+    import test_policy
+    verdict: dict = {}  # type -> every check of it passes so far
+    for c in (rec or {}).get("checks") or []:
+        if not (isinstance(c, dict) and isinstance(c.get("name"), str)):
+            continue
+        tt = test_policy.check_type(c["name"])
+        if tt not in test_types_cfg or verdict.get(tt) is False:
+            continue
+        fmt = check_format(c, test_types_cfg)
+        if fmt == "manual":
+            import manual_test
+            import harness_paths
+            ok = manual_test.admissibility(c, harness_paths.state_dir())[0] == "anchored"
+        else:
+            ok = result_problem(plan_dir, c, fmt, tt) is None
+        verdict[tt] = ok
+    return {tt for tt, ok in verdict.items() if ok}
 
 
 def validate_verification_wellformed(plan_dir, root=None):
@@ -808,6 +927,38 @@ def _coverage_threshold(spec: dict):
     return line if isinstance(line, (int, float)) else None
 
 
+def class_coverage_floor(root):
+    """(numeric line floor, enforcement) of the change class the tree derives -- what the
+    DoD gate holds `coverage` to; (None, "hard") when it has none or cannot be derived
+    (the gate, which derives it again, fails closed on its own)."""
+    try:
+        import change_class_derivation as ccd
+        import test_policy
+        d = ccd.derive_from_repo(str(root))
+        policy = test_policy.load_test_policy(root=str(root))
+        spec, _graced = _apply_grace_expiry(test_policy.resolve_for_class(policy, d.cls), d.cls, str(root))
+    except Exception:  # noqa: BLE001 -- a projection makes no claim it cannot derive
+        return None, "hard"
+    return _coverage_threshold(spec), ("soft" if d.ambiguous else spec.get("enforcement", "hard"))
+
+
+def _declared_check_failures(plan_dir, changed_paths, root, class_floor=None, class_enforcement="hard"):
+    """(detail, enforcement) for each check the repo declares that the change owes and the
+    harness's own run does not prove (`harness_checks.unproven`). Required by NAME: an
+    agent's check of the same type neither satisfies one nor is refused by one. A
+    declaration or a policy floor that cannot be read fails closed, hard."""
+    import harness_checks
+    import harness_paths
+    top = Path(root) if root else harness_paths.root()
+    try:
+        rows = harness_checks.unproven(top, plan_dir, list(changed_paths or []),
+                                       class_floor, class_enforcement)
+    except harness_checks.Unreadable as e:
+        return [("the declared checks cannot be held to: %s" % e, "hard")]
+    return [("declared check %r: %s — run `%s --plan %s --phase <phase>`"
+             % (r["check"], r["why"], r["command"], plan_dir), r["enforcement"]) for r in rows]
+
+
 def evaluate_test_policy(plan_dir, change_class, changed_paths, root=None,
                          ambiguous=False):
     """Return a TestPolicyVerdict for a change-class against its DoD.
@@ -875,6 +1026,13 @@ def evaluate_test_policy(plan_dir, change_class, changed_paths, root=None,
         if not checks:
             return ("missing required test type %r (no check in "
                     "the verification artifact)" % tt)
+        if tt == "coverage" and cov_floor is not None and not any(
+                check_format(c, test_types_cfg) in ("cobertura", "jacoco") for c in checks):
+            # a group's JUnit case judges the group's own floor; the class's line floor
+            # reads a whole-report line rate, which only a cobertura/jacoco report carries
+            return ("the change class's %s%% line floor reads a cobertura/jacoco coverage "
+                    "report (`coverage/total`: hs-code test run --all --coverage), and %s "
+                    "carry none" % (cov_floor, ", ".join(sorted(str(c.get("name")) for c in checks))))
         for c in checks:
             d = _detail_one(tt, c, enf)
             if d:
@@ -882,8 +1040,7 @@ def evaluate_test_policy(plan_dir, change_class, changed_paths, root=None,
         return None
 
     def _detail_one(tt, c, enf):
-        tt_cfg = test_types_cfg.get(tt)
-        fmt = c.get("format") or (tt_cfg.get("format") if isinstance(tt_cfg, dict) else None)
+        fmt = check_format(c, test_types_cfg)
         if fmt == "manual":
             # A manual-test check carries evidence_tier + an anchor citation, not
             # a result file. Hard requirement → needs anchored output AND a human
@@ -899,34 +1056,13 @@ def evaluate_test_policy(plan_dir, change_class, changed_paths, root=None,
             tier, why = manual_test.admissibility(c, state)
             return ("required manual type %r: %s" % (tt, why)
                     if tier == "rejected" else None)
-        rel = c.get("file")
-        if not fmt or not rel:
-            return ("required type %r carries no raw result file to verify "
-                    "(need format + file on the check)" % tt)
-        data, problem = _read_normalized_result(plan_dir, rel, fmt)
-        if problem:
-            return "required type %r %s" % (tt, problem)
-        if fmt == "junit":
-            bad = (data.get("failed", 0) or 0) + (data.get("errors", 0) or 0)
-            if bad > 0:
-                return ("required type %r has failing tests (%d failed, %d "
-                        "errors)" % (tt, data.get("failed", 0),
-                                     data.get("errors", 0)))
-        elif fmt in ("cobertura", "jacoco"):
-            if cov_floor is not None and (data.get("line_rate") or 0) * 100 < cov_floor:
-                return ("coverage %.0f%% is below the required %s%% line floor"
-                        % ((data.get("line_rate") or 0) * 100, cov_floor))
-        elif fmt == "sarif":
-            import test_result_readers as rdr
-            verdict, sdetail = rdr.sarif_verdict(data)
-            if verdict == "FAIL":
-                return "required type %r has %s" % (tt, sdetail)
-        return None
+        return result_problem(plan_dir, c, fmt, tt, cov_floor)
 
     for tt, enf in requirements.items():
         d = _detail(tt, enf)
         if d:
             failures.append((d, enf))
+    failures.extend(_declared_check_failures(plan_dir, changed_paths, root, cov_floor, class_enf))
 
     if not failures:
         return TestPolicyVerdict("GRACE" if graced else "PASS", None, class_enf)
@@ -1421,6 +1557,14 @@ def check_stage(stage, root, plan_dir=None):
         sweep_reason, _n_phases = _phase_snapshot_sweep(plan_dir)
         if sweep_reason:
             return sweep_reason
+        # A reopened plan's named phases stay owed until verified again: their
+        # snapshots still count, and are exactly what the reopen called stale.
+        import phase_commits_log
+        line, owed = phase_commits_log.reverify_owed(plan_dir)
+        if owed:
+            return ("hard stage %r: plan %s was reopened (%s) and phase(s) %s are not "
+                    "verified again — hs-run cook verify --plan %s --phase <id> ..."
+                    % (stage, plan_dir.name, line.get("reason"), ", ".join(owed), plan_dir))
         blast_reason = _blast_radius_consistency(plan_dir, root)
         if blast_reason:
             return blast_reason

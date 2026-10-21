@@ -34,6 +34,8 @@ def core(data: dict) -> None:
     spawn_provenance.record_spawn(
         data.get("session_id"),
         tool_use_id=data.get("tool_use_id"),
+        # the dispatcher resolves the session's latest `hs-run` call once per group
+        run_id=data.get("hs_run_id"),
         subagent_type=subagent_type if isinstance(subagent_type, str) and subagent_type else None,
     )
 

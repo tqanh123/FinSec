@@ -123,6 +123,8 @@ hooks:
     enabled: true
   usage_nudge:
     enabled: true
+  yaml_comment_cut_nudge:
+    enabled: true
   zsh_split_nudge:
     enabled: true
 inject_refresh_mode: slim

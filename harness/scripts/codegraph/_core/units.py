@@ -59,13 +59,15 @@ def module_unit_map(index: dict) -> "dict[str, str]":
             for unit, mods in index.get("units", {}).items() for m in mods}
 
 
-def unit_of_dotted(dotted: str, mod_unit: "dict[str, str]") -> "str | None":
+def unit_of_dotted(dotted: str, mod_unit: "dict[str, str]", lang: "str | None" = None) -> "str | None":
     """Unit of the longest module prefix of `dotted` — the string may carry
     trailing attribute segments (`pkg.mod.Class.attr`) or a `::symbol` tail a
-    module name never has. None = no measured module matched."""
-    parts = dotted.split("::", 1)[0].split(".")
-    for i in range(len(parts), 0, -1):
-        unit = mod_unit.get(".".join(parts[:i]))
+    module name never has; a path id (`a/b.ts`) is matched whole, never by a
+    prefix (`lang.ids.lookup_keys`), and so is a target of a record of `lang` other than
+    Python. None = no measured module matched."""
+    from .lang.ids import lookup_keys
+    for key in lookup_keys(dotted, lang):
+        unit = mod_unit.get(key)
         if unit is not None:
             return unit
     return None

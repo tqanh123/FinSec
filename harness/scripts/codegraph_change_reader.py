@@ -58,7 +58,7 @@ import configparser
 import fnmatch
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -430,9 +430,25 @@ class FilesLayout:
     the same shape as this module's own bare `is_test_dir`/`in_test_tree`/
     `is_test_file` functions (which stay as the UNDECLARED-convention-only
     door: a caller with no descriptor in hand at all, or a fixture-level
-    unit test, still has a plain function to call)."""
+    unit test, still has a plain function to call).
+
+    `with_roles(idx)` answers for the files a language pack other than Python named: a
+    record carrying `lang` is a test exactly when its `role` is "test" (a story when
+    "story"), whatever its path. A Python record keeps the predicate below -- the
+    `role: test` the snapshot writes on a `test_modules` record means test-tree code
+    (a helper, an `__init__.py`), not a file pytest collects."""
     tests_subdir: "str | None"
     patterns: "tuple[str, ...]"
+    #: path -> role ("" for a source) of every pack-named record; None before `with_roles`
+    roles: "dict[str, str] | None" = field(default=None, compare=False, repr=False)
+
+    def with_roles(self, idx: "dict | None") -> "FilesLayout":
+        if idx is None:
+            return self
+        return replace(self, roles={m["path"]: m.get("role") or "" for m in _modules(idx) if m.get("lang")})
+
+    def is_story_file(self, rel: str) -> bool:
+        return (self.roles or {}).get(rel) == "story"
 
     def is_test_dir(self, unit_or_dir: str) -> bool:
         segs = [s for s in unit_or_dir.replace("\\", "/").split("/") if s]
@@ -447,6 +463,8 @@ class FilesLayout:
         return self.is_test_dir(parent)
 
     def is_test_file(self, rel: str) -> bool:
+        if self.roles and rel in self.roles:
+            return self.roles[rel] == "test"
         if not self.in_test_tree(rel):
             return False
         name = Path(rel).name
@@ -572,6 +590,9 @@ def string_channel(idx: dict, changed_paths: "Iterable[str]", root: Path,
                        (a bare filename in an f-string or a fixture ID).
         path_literals  a string literal of the test naming the changed path, a
                        directory holding it, or a glob matching it (`path_literals`).
+
+    The last two read Python source: a test of another language is not read by them,
+    and the stats count it (`skipped_non_python`, present when non-zero).
     """
     changed_paths = list(changed_paths)
     by_path = _module_by_path(idx)
@@ -589,9 +610,13 @@ def string_channel(idx: dict, changed_paths: "Iterable[str]", root: Path,
     stems = {os.path.basename(cp) for cp in changed_paths if cp.endswith(".py")}
     via_fallback: "set[str]" = set()
     via_literals: "set[str]" = set()
+    skipped = 0
     for m in _modules(idx):
         tp = m["path"]
         if not layout.is_test_file(tp) or tp in selected:
+            continue
+        if m.get("lang"):
+            skipped += 1
             continue
         if stems:
             try:
@@ -606,8 +631,11 @@ def string_channel(idx: dict, changed_paths: "Iterable[str]", root: Path,
                for cp in changed_paths):
             selected.add(tp)
             via_literals.add(tp)
-    return selected, {"path_drivers": len(via_drivers), "text_fallback": len(via_fallback),
-                      "path_literals": len(via_literals)}
+    stats = {"path_drivers": len(via_drivers), "text_fallback": len(via_fallback),
+             "path_literals": len(via_literals)}
+    if skipped:
+        stats["skipped_non_python"] = skipped
+    return selected, stats
 
 
 # ── the whole_tree channel's codemap rows (`test_select:`) ──────────────────

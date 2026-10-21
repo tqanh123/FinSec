@@ -5,7 +5,7 @@
 SDLC harness — one hs: plugin holding the full skill catalog (spine SDLC loop hs:plan/cook/test/ship/fix/debug/code-review/review-pr/git/scout/understand/setup/triage plus opt-in groups flow/think/research/create/mem/meta and the domain ports ai/devops/stack/uiux/integrations/extra/viz). Groups are install-time logical labels; skills are selected per-skill at install.
 
 **Default:** always-on (the SDLC spine — installed and enabled on every harness).
-**Version:** 7.2.0
+**Version:** 7.3.0
 
 ## Packaging notes
 

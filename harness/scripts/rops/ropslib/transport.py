@@ -66,6 +66,17 @@ class Host:
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(args=[], returncode=124, stdout="", stderr="timeout")
 
+    def spawn(self, remote_cmd: str) -> None:
+        """Start `remote_cmd` and do not wait for it: in a session of its own, so a
+        SIGKILL sent to this process's group after it (a supervisor whose grace ran
+        out) does not reach it."""
+        try:
+            subprocess.Popen([*self._argv(), remote_cmd], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        except OSError:
+            pass
+
     def out(self, remote_cmd: str, *, timeout: int | None = DEFAULT_TIMEOUT) -> str:
         return self.run(remote_cmd, timeout=timeout).stdout.strip()
 

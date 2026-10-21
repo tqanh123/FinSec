@@ -15,7 +15,7 @@ You run on the artifact that is about to be acted on: a plan before cook, a conf
 
 ## Attack posture
 
-- A command the plan relies on that needs the project's environment (a `python -c` against its packages, a test) is run, not reasoned about: `hs-rops run --lane <lane> -- '<cmd>'` runs it in a lane carrying the project venv. Never install into the tree under review. No lane available: the finding stays `suspected` and names the exact command that would prove it.
+- A command the plan relies on that needs the project's environment (a `python -c` against its packages, a test) is run, not reasoned about: `hs-rops run --lane <lane> --cores 1 -- '<cmd>'` runs it in a lane carrying the project venv. Never install into the tree under review. No lane available: the finding stays `suspected` and names the exact command that would prove it.
 - Assume the artifact was written to pass review, not to survive production. Polished phrasing, a confident rationale, and green happy-path tests are not evidence of safety.
 - Hunt the unhandled case: empty/None/huge inputs, concurrent actors, partial failure mid-operation, the second run, the rollback path, the trust boundary, the resource that isn't there (missing binary, missing dir, denied permission).
 - Ask what is **irreversible**. Rank a data-loss or unrecoverable-state path above a cosmetic one.

@@ -20,7 +20,7 @@ FAMILY_OF = {
     # architecture components.role
     "frontend": "client", "backend": "service", "database": "data", "cache": "data",
     "queue": "queue", "storage": "data", "gateway": "gateway", "auth": "security",
-    "external": "external", "worker": "worker",
+    "external": "external", "worker": "worker", "person": "person", "system": "system",
     # workflow steps.kind
     "start": "start", "action": "process", "decision": "decision", "wait": "waiting",
     "subprocess": "process", "terminal-success": "success", "terminal-failure": "failure",
@@ -40,7 +40,7 @@ FAMILY_COLORS = {
     "gateway": "#7c3aed", "security": "#dc2626", "external": "#6b7280", "worker": "#0891b2",
     "start": "#16a34a", "process": "#2563eb", "decision": "#d97706", "waiting": "#94a3b8",
     "success": "#16a34a", "failure": "#dc2626", "transform": "#7c3aed", "filter": "#0ea5e9",
-    "governance": "#334155",
+    "governance": "#334155", "person": "#1e3a8a", "system": "#1d4ed8",
 }
 DEFAULT_FAMILY = "process"
 

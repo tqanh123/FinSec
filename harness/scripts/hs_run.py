@@ -306,10 +306,37 @@ def read_run_ledger(state_dir=None) -> list:
     return out
 
 
-def run_question(verb, args) -> str:
-    """What one call ASKED: its verb and its arguments, as a short stable digest."""
+_QUESTION_FILE_CAP = 4 * 1024 * 1024
+
+
+def _file_digest(arg: str) -> str:
+    """The content digest of the regular file `arg` names (`--x=path` included), else
+    "". A directory, a missing path or an unreadable one stays just its name."""
     import hashlib
-    return hashlib.sha256(json.dumps([str(verb), [str(a) for a in args]])
+    path = arg.partition("=")[2] if arg.startswith("--") and "=" in arg else arg
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return ""
+        with p.open("rb") as fh:
+            return hashlib.sha256(fh.read(_QUESTION_FILE_CAP)).hexdigest()
+    except (OSError, ValueError):
+        return ""
+
+
+def run_question(verb, args) -> str:
+    """What one call ASKED: its verb, its arguments, and what any argument that names a
+    file holds, as a short stable digest. The same `--from rec.json` holding another
+    record is another question: measured, three verifies each writing a different
+    record were told on the third to stop and ask for counsel."""
+    import hashlib
+    asked = []
+    for a in args:
+        asked.append(str(a))
+        held = _file_digest(str(a))
+        if held:
+            asked.append(held)
+    return hashlib.sha256(json.dumps([str(verb), asked])
                           .encode("utf-8")).hexdigest()[:16]
 
 
@@ -712,7 +739,7 @@ def latest_state(*, session, domain=None, verb=None, state_dir=None):
 
 #: The states in which `cook open` left a plan open — the only ledger lines that
 #: say "this session chose this plan".
-_OPENED_STATES = ("opened", "already_open")
+_OPENED_STATES = ("opened", "already_open", "reopened")
 
 
 def latest_opened_plan(*, session, state_dir=None):
@@ -848,6 +875,11 @@ class State(StrEnum):
     APPROVAL_DRIFTED = "approval_drifted"
     AMBIGUOUS_APPROVED = "ambiguous_approved"
     HANDED_OFF_TO_COOK = "handed_off_to_cook"
+    # The human chose to split the plan: its work is cooked in child plans that name
+    # it as `parent_plan`, never here. Done once a child names it and it holds no
+    # phase; pending until then.
+    SPLIT = "split"
+    SPLIT_PENDING = "split_pending"
     # plan — the grid leg. Peer states of the plan ladder, not sub-states: one
     # name, one routing row, one exit code per call. The two judgment rungs
     # (axes, fill) ride exit 10; the three deterministic rungs (build, expand,
@@ -874,11 +906,24 @@ class State(StrEnum):
     # so a routing row for either read as pointing at a state no verb returns.
     ALREADY_OPEN = "already_open"
     OPEN_FAILED = "open_failed"
+    # `open --reason` on a completed plan: taken back to in_progress, or refused for
+    # want of the reason, or given the flags on a plan that is not completed.
+    REOPENED = "reopened"
+    REOPEN_NEEDS_REASON = "reopen_needs_reason"
+    REOPEN_NOT_COMPLETED = "reopen_not_completed"
+    # A reopened plan's named phases owe a verify: `next` at rung 10, `close` refusing.
+    NEEDS_REOPEN_VERIFY = "needs_reopen_verify"
+    REOPEN_VERIFY_OWED = "reopen_verify_owed"
     NEEDS_IMPLEMENTATION = "needs_implementation"
     # The same phase one beat later: `record developer` ran for it and no verdict is
     # on disk. Distinct from NEEDS_IMPLEMENTATION because the move is `verify`, and
     # one word for both sent a caller back to rebuild what it had just recorded.
     NEEDS_VERIFICATION = "needs_verification"
+    # The beat before the verdict when the change owes a check the repo declares
+    # (codemap `checks:`, a harness-run test runner): run it (11), or fix what kept
+    # its run from measuring (10).
+    NEEDS_DECLARED_CHECK = "needs_declared_check"
+    DECLARED_CHECK_BROKEN = "declared_check_broken"
     # The whole-plan reading of the same tree `NEEDS_IMPLEMENTATION` describes one
     # phase of. Separate words because they ride separate rungs: `next` acts on
     # the resolved phase at 10, `status` reports the plan at 0, and one word on
@@ -894,6 +939,8 @@ class State(StrEnum):
     PHASE_NEEDS_REVERIFY = "phase_needs_reverify"
     PHASE_PASSED = "phase_passed"
     PHASE_PAUSED = "phase_paused"
+    # Named by `--phase` while a sibling plan's phase it needs has not passed.
+    PHASE_WAITING = "phase_waiting"
     PHASE_NEEDS_POST_ARTIFACT = "phase_needs_post_artifact"
     NO_PHASE_RESOLVED = "no_phase_resolved"
     PHASES_BLOCKED = "phases_blocked"
@@ -909,13 +956,14 @@ class State(StrEnum):
     STACK_NO_TEST_CMD = "stack_no_test_cmd"
     VERIFY_FAILED = "verify_failed"
     # review
+    NEEDS_SUITE_RUN = "needs_suite_run"
     NEEDS_REVIEW = "needs_review"
     PHASES_INCOMPLETE = "phases_incomplete"
     VERIFICATION_RECORDED = "verification_recorded"
     REVIEW_MISSING = "review_missing"
-    # A fourth close refusal, narrower than the three above it: those ask
-    # "is the plan done", this asks "did an opt-in deferred-suite plan pay
-    # its debt" — only reachable when the plan carried the flag.
+    # A close refusal asked BEFORE the review (an opt-in deferred-suite plan
+    # that has not paid its debt; `needs_suite_run` is `next`'s word for the
+    # same fact) — only reachable when the plan carried the flag.
     SUITE_DEBT_UNPAID = "suite_debt_unpaid"
     REJECTED = "rejected"
     UNRESOLVED_CONFLICT = "unresolved_conflict"

@@ -19,7 +19,7 @@ import argparse
 import sys
 
 from rops.ropslib import hosts, tree
-from rops.ropslib.exec import report, run_remote
+from rops.ropslib.exec import report, run_remote, seated
 from rops.ropslib.gitlab import capability as cap
 from rops.ropslib.gitlab import lane as gl
 from rops.ropslib.gitlab import pipeline as pl
@@ -188,7 +188,8 @@ def run(args: argparse.Namespace) -> int:
         return _print_list(doc, listing, lane)
 
     def runner(command: str) -> tuple[int, str]:
-        res = run_remote(cfg, host, f"{gl.preflight(cfg)}; {command}",
+        res = run_remote(seated(cfg, command, why="a CI job"), host,
+                         f"{gl.preflight(cfg)}; {command}",
                          timeout_s=args.timeout, tail=args.tail, label="ci-run")
         # The full log stays remote (behavior 4). `classify` counts jobs, so it needs
         # the whole log, not the tail -- fetched as one read rather than piped.

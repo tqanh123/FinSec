@@ -48,7 +48,11 @@ Commit after 3.V includes test + module, conventional commit; AI attribution fol
 
 When 3.V fails: fix the **code**, do not delete/skip/weaken tests. Report lists ALL failures (name + 1-line reason). Verdict PASS / PASS_WITH_RISK / BLOCKED is written to `plans/<plan>/artifacts/verification.json`. Include `phase: <P-id>` (the matching `plan-graph.yaml` node id) in that verification — on a PASS, the `phase_progress_writer` hook snapshots it to `verification-<phase>.json`, the
 per-phase evidence safe auto-close counts.
-That snapshot is first-wins (completion and the hard-stage snapshot sweep read it): a re-verify of the same phase lands in `phase-latest-<phase>.json` (completion reads it only to un-count a regression), and the DoD test-policy check reads neither — it reads `verification.json`, the plan's last write.
+That snapshot is first-wins (completion and the hard-stage snapshot sweep read it): a re-verify of the same phase lands in `phase-latest-<phase>.json`,
+unless it shows the DoD gate strictly more: every check name a `test_types` type, a passing result file (or witnessed manual anchor) for every type the snapshot has one for,
+and one more such type or a name the snapshot carried that the gate cannot see. Then it replaces the snapshot, and the old one goes to `phase-superseded-<phase>.jsonl`.
+A status-only `--check <type>:PASS` adds no such type; `--check <type>/<name>:PASS:<file>` attaches the result file, copied under `artifacts/results/<phase>/` (a run on another machine is fetched back first: `hs-rops fetch <remote path> <scratch file> --lane <lane>`). Otherwise the re-verify stays in phase-latest (completion reads it only to un-count a regression),
+and the DoD test-policy check reads neither — it reads `verification.json`, the plan's last write.
 `hs-run cook status` names each phase's `latest_record`, plus a `snapshot_note` when the two differ.
 
 **Preferred write path:** `python3 "${HARNESS_BIN_ROOT:-.}"/harness/scripts/write_verification.py <plan_dir> --phase <id> --stage <stage> --verdict PASS --check <type>:PASS ...` writes the canonical verification, snapshots it, and drives the plan lifecycle deterministically in one run — 

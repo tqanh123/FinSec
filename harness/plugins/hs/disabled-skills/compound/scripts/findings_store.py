@@ -152,7 +152,9 @@ def _append(path: Path, record: dict) -> dict:
         # Fail CLOSED here (unlike the telemetry hooks): a findings record is evidence,
         # so losing it silently is worse than refusing the write outright.
         raise ValueError(
-            "refusing to append under the unresolved data root — no project resolved")
+            "refusing to append under the unresolved data root — %s"
+            % (harness_paths.data_root_and_reason()[1]
+               or "the data root resolves, so %s was built for another project" % p))
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "a", encoding="utf-8") as fh:
         fh.write(line)

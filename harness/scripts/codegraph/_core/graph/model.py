@@ -43,6 +43,8 @@ import fnmatch
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
+from ..lang.ids import lookup_keys
+
 
 class HasLadder(Protocol):
     dist_tier: dict[str, int]
@@ -59,6 +61,10 @@ def _path_glob(rel: str, pattern: str) -> bool:
     if pattern.endswith("/**"):
         return rel == pattern[:-3] or rel.startswith(pattern[:-2])
     return fnmatch.fnmatch(rel, pattern)
+
+
+#: the group rule, for a reader outside the graph (coverage floors group files by it)
+path_glob = _path_glob
 
 
 @dataclass(frozen=True)
@@ -156,7 +162,7 @@ class Graph:
                     g.mixed_dist.add(m["module"])
         return g
 
-    def dist_of_target(self, tgt: str) -> str | None:
+    def dist_of_target(self, tgt: str, lang: "str | None" = None) -> str | None:
         """Which group an import target belongs to. None = UNRESOLVED.
 
         Longest-prefix match against real modules (trap 1). No module match:
@@ -169,40 +175,35 @@ class Graph:
             if tgt in self.sym_dist:
                 return self.sym_dist[tgt]
             tgt = tgt.split("::", 1)[0]
-        parts = tgt.split(".")
-        for i in range(len(parts), 0, -1):  # a top-level module has a one-part name
-            cand = ".".join(parts[:i])
+        for cand in lookup_keys(tgt, lang):  # a top-level module has a one-part name
             if cand in self.mod_dist:
                 return self.mod_dist[cand]
-        u = self._unit_of(tgt)
+        u = self._unit_of(tgt, lang)
         dset = self.unit_dists.get(u) if u else None
         if dset and len(dset) == 1:
             return next(iter(dset))
         return None
 
-    def _unit_of(self, mod: str) -> str | None:
+    def _unit_of(self, mod: str, lang: "str | None" = None) -> str | None:
         """Unit of the longest matching module prefix. None = no module matched
         (the old `parts[1]` guess returned None for EVERY edge once unit keys
         gained their root prefix — a whole resolution branch silenced)."""
-        parts = mod.split(".")
-        for i in range(len(parts), 0, -1):
-            u = self.mod_unit.get(".".join(parts[:i]))
+        for cand in lookup_keys(mod, lang):
+            u = self.mod_unit.get(cand)
             if u:
                 return u
         return None
 
-    def root_of_target(self, tgt: str) -> str | None:
+    def root_of_target(self, tgt: str, lang: "str | None" = None) -> str | None:
         """Which root an edge target lives in. None = no real module matched."""
-        base = tgt.split("::", 1)[0]
-        parts = base.split(".")
-        for i in range(len(parts), 0, -1):
-            cand = ".".join(parts[:i])
+        for cand in lookup_keys(tgt, lang):
             if cand in self.mod_root:
                 return self.mod_root[cand]
         return None
 
     def walk(self, judge: Judge,
-             on_mixed_target: Callable[["Edge", str], None] | None = None) -> None:
+             on_mixed_target: Callable[["Edge", str], None] | None = None,
+             include_type_only: "bool | None" = None) -> None:
         """Walk EVERY edge, calling `judge(Edge)`; a target into a mixed file
         without a symbol goes to `on_mixed_target(Edge, tgt)`.
 
@@ -212,6 +213,10 @@ class Graph:
         never runs. Mixed-file targets still reach `on_mixed_target` with
         `dst=None` (unattributable) but keep both roots — trap 2; an early
         `continue` here once erased every such edge from BOTH axes.
+
+        A fourth kind, `type_only` (`imports_type_only`), when `include_type_only`
+        says so; None means by the record's language: a pack's record (`lang`)
+        counts it -- an `import type` is coupling -- a Python one does not.
         """
         for mods in self.idx["units"].values():
             for m in mods:
@@ -219,23 +224,25 @@ class Graph:
                 # from declared groups lives in mod_dist, and reading m["dist"]
                 # here would undeclare every group on a dist-less tree.
                 src = self.mod_dist.get(m["module"], m.get("dist"))
-                for key, kind in (("imports_module_level", "module"),
-                                   ("imports_function_local", "lazy")):
+                keys = [("imports_module_level", "module"), ("imports_function_local", "lazy")]
+                if include_type_only or (include_type_only is None and m.get("lang")):
+                    keys.append(("imports_type_only", "type_only"))
+                for key, kind in keys:
                     for tgt in m.get(key, []):
                         label = f"{m['module']}  ->  {tgt}"
                         e = Edge(kind=kind, src=src, dst=None, label=label,
                                  same_file=m["module"] in self.mixed_dist,
                                  src_root=m.get("root"),
-                                 dst_root=self.root_of_target(tgt))
+                                 dst_root=self.root_of_target(tgt, m.get("lang")))
                         if "::" not in tgt and tgt in self.mixed_dist:
                             if on_mixed_target is not None:
                                 on_mixed_target(e, tgt)
                             continue
-                        judge(Edge(kind=kind, src=src, dst=self.dist_of_target(tgt),
+                        judge(Edge(kind=kind, src=src, dst=self.dist_of_target(tgt, m.get("lang")),
                                    label=label,
                                    same_file=m["module"] in self.mixed_dist,
                                    src_root=m.get("root"),
-                                   dst_root=self.root_of_target(tgt)))
+                                   dst_root=self.root_of_target(tgt, m.get("lang"))))
         for mods in self.idx["units"].values():
             for m in mods:
                 for s in m["symbols"]:
@@ -250,4 +257,4 @@ class Graph:
                                        label=f"{own}  ->  {r}",
                                        same_file=r.rsplit("::", 1)[0] == m["module"],
                                        src_root=m.get("root"),
-                                       dst_root=self.root_of_target(r)))
+                                       dst_root=self.root_of_target(r, m.get("lang"))))

@@ -7,7 +7,7 @@ Verbs (surfaced by the `harness` wrapper on PATH):
       Copy the engine out of the plugin cache into the stable engine home
       (~/.local/share/harness/<version>), verify it BEFORE repointing `current`
       (red-team F5), then wire the CURRENT repo per-project: HARNESS_BIN_ROOT into
-      settings.local.json (F3 — never the global ~/.claude), hooks, the plugin
+      .claude/settings.json (F3 — never the global ~/.claude), hooks, the plugin
       marketplace (absolute path into the engine home), and the .harness/ skeleton.
   upgrade
       Copy + verify + swap `current` to the cache version, side-by-side with the

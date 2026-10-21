@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "C1 idp-studio",
+    "description": "probe"
+  },
+  "components": [
+    {
+      "id": "dev",
+      "label": "Dev template",
+      "role": "frontend",
+      "layer": 0
+    },
+    {
+      "id": "agent",
+      "label": "idp-studio agent",
+      "role": "backend",
+      "layer": 1
+    },
+    {
+      "id": "di",
+      "label": "vsf-di OCR production",
+      "role": "external",
+      "layer": 2
+    },
+    {
+      "id": "alert",
+      "label": "vsf-alert",
+      "role": "external",
+      "layer": 2
+    },
+    {
+      "id": "llm",
+      "label": "LLMGW",
+      "role": "external",
+      "layer": 2
+    }
+  ],
+  "boundaries": [
+    {
+      "id": "mod01",
+      "label": "MOD-01",
+      "role": "trust-boundary",
+      "components": [
+        "agent",
+        "di"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "dev",
+      "to": "agent",
+      "label": "mở run, trả lời HITL",
+      "kind": "sync"
+    },
+    {
+      "from": "agent",
+      "to": "di",
+      "label": "đọc template, chạy OCR",
+      "kind": "sync"
+    },
+    {
+      "from": "alert",
+      "to": "agent",
+      "label": "cảnh báo lệch",
+      "kind": "async"
+    },
+    {
+      "from": "agent",
+      "to": "llm",
+      "label": "gọi model",
+      "kind": "sync"
+    }
+  ]
+}

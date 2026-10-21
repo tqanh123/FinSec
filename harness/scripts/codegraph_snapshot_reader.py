@@ -41,20 +41,25 @@ import secret_scan_before_ship as secret_scan
 from hs_family.errors import UsageError
 from hs_family.versioning import int_version_problem
 
-#: The kernel's descriptor + snapshot schema version. SOURCE OF TRUTH: moved
-#: here (out of `codegraph._core.descriptor.model`) so a reader outside the
-#: `codegraph` package never has to import that package to learn it.
-#: `codegraph._core.descriptor.model.KERNEL_SCHEMA_VERSION` now imports THIS
-#: constant and re-exports it under the same name — one constant, not two.
-KERNEL_SCHEMA_VERSION = 2
+#: The schema versions of the kernel's two documents. SOURCE OF TRUTH: here (not
+#: in `codegraph._core.descriptor.model`) so a reader outside the `codegraph`
+#: package never has to import that package to learn them; `descriptor.model`
+#: re-exports the descriptor's under the same name.
+#:
+#: Two numbers, not one: a project's `codemap.yaml` and a snapshot's `_index.json`
+#: used to share a single constant, so a snapshot format change would have made
+#: every descriptor in every repo unreadable.
+DESCRIPTOR_SCHEMA_VERSION = 2
+#: A snapshot of Python records only -- its bytes are what they always were.
+SNAPSHOT_SCHEMA_VERSION = 2
+#: A snapshot holding a record of another language, whose module id is a path
+#: (`a/b.ts`): a reader that predates path ids refuses it rather than splitting
+#: one on dots.
+SNAPSHOT_SCHEMA_VERSION_MIXED = 3
 
-#: Every `schema_version` this reader accepts. A snapshot's own `_index.json`
-#: schema and a project descriptor's `schema_version:` currently share one
-#: version number (see the kernel format's `index_json`), so this is a
-#: single-element set today — a frozenset, not a bare `==`, so a second
-#: accepted version later is one line here, not a rewritten check at every
-#: call site.
-KNOWN_SCHEMA_VERSIONS: "frozenset[int]" = frozenset({KERNEL_SCHEMA_VERSION})
+#: Every snapshot `schema_version` this reader accepts.
+KNOWN_SNAPSHOT_SCHEMA_VERSIONS: "frozenset[int]" = frozenset({SNAPSHOT_SCHEMA_VERSION,
+                                                              SNAPSHOT_SCHEMA_VERSION_MIXED})
 
 _INDEX_NAME = "_index.json"
 
@@ -74,7 +79,7 @@ class SnapshotIndexError(UsageError):
     """`_index.json` is missing, unreadable, unparseable as JSON, or stamped
     with a `schema_version` this reader does not know (including absent —
     `dict.get` returns `None`, and `None` is never a member of
-    `KNOWN_SCHEMA_VERSIONS`). Inherits `UsageError`'s exit code (2, the
+    `KNOWN_SNAPSHOT_SCHEMA_VERSIONS`). Inherits `UsageError`'s exit code (2, the
     hs-* family's "honest cannot-run") — a snapshot this old/new/broken is
     not a warning to route around, it is a refusal to read.
     """
@@ -127,7 +132,8 @@ def _record_read(d: Path, data: dict) -> None:
                        "snapshot": str(data.get("snapshot") or d.name),
                        "snapshot_commit": str(data.get("commit") or "") or None,
                        "roots": [r["path"] for r in data.get("roots") or []
-                                 if isinstance(r, dict) and r.get("path")]})
+                                 if isinstance(r, dict) and r.get("path")]
+                       + [str(x) for x in data.get("config_inputs") or []]})
 
 
 def read_index(snapshot_dir: "Union[str, Path]", *,
@@ -172,8 +178,8 @@ def read_index(snapshot_dir: "Union[str, Path]", *,
         if record:
             _record_read(d, data)
         return data
-    if int_version_problem(got, KNOWN_SCHEMA_VERSIONS) is not None:
-        known = ", ".join(str(v) for v in sorted(KNOWN_SCHEMA_VERSIONS))
+    if int_version_problem(got, KNOWN_SNAPSHOT_SCHEMA_VERSIONS) is not None:
+        known = ", ".join(str(v) for v in sorted(KNOWN_SNAPSHOT_SCHEMA_VERSIONS))
         raise SnapshotIndexError(
             f"{f} declares schema_version {got!r}; known version(s): {known}")
     if record:
@@ -212,11 +218,13 @@ META_FIELDS: "tuple[str, ...]" = (
 
 
 def write_meta(snapshot_dir: "Union[str, Path]", *, commit: str, snapshot: str,
-               package: str, roots: "list[dict]", schema_version: int = KERNEL_SCHEMA_VERSION,
+               package: str, roots: "list[dict]", schema_version: int = SNAPSHOT_SCHEMA_VERSION,
                tool: "Union[dict, None]" = None, tree_hash: "Union[str, None]" = None,
                content_key: "Union[str, None]" = None,
                measured_at: "Union[float, None]" = None,
-               descriptor_sha: "Union[str, None]" = None) -> None:
+               descriptor_sha: "Union[str, None]" = None,
+               languages: "Union[dict, None]" = None,
+               config_inputs: "Union[list, None]" = None) -> None:
     """Write `_meta.json` from the writer's own already-in-hand values —
     never reads `_index.json` back to build it (the WRITER already holds
     every one of these as a local variable while building the full index;
@@ -238,6 +246,10 @@ def write_meta(snapshot_dir: "Union[str, Path]", *, commit: str, snapshot: str,
         meta["measured_at"] = measured_at
     if descriptor_sha is not None:
         meta["descriptor_sha"] = descriptor_sha
+    if languages:
+        meta["languages"] = languages
+    if config_inputs:
+        meta["config_inputs"] = list(config_inputs)
     d = Path(snapshot_dir)
     (d / _META_NAME).write_text(json.dumps(meta, sort_keys=True), encoding="utf-8")
 
@@ -286,7 +298,7 @@ def read_meta(snapshot_dir: "Union[str, Path]") -> "Union[dict, None]":
     here, fall back to `read_index`".
 
     A sidecar that DOES parse but declares a `schema_version` outside
-    `KNOWN_SCHEMA_VERSIONS` (including absent) is a DIFFERENT signal: the
+    `KNOWN_SNAPSHOT_SCHEMA_VERSIONS` (including absent) is a DIFFERENT signal: the
     snapshot itself is unreadable, not merely lacking the cheap path. This now RAISES
     `SnapshotIndexError` for that case, the identical
     check `read_index` runs (`int_version_problem`, never a second,
@@ -305,8 +317,8 @@ def read_meta(snapshot_dir: "Union[str, Path]") -> "Union[dict, None]":
     if not isinstance(data, dict):
         return None
     got = data.get("schema_version")
-    if int_version_problem(got, KNOWN_SCHEMA_VERSIONS) is not None:
-        known = ", ".join(str(v) for v in sorted(KNOWN_SCHEMA_VERSIONS))
+    if int_version_problem(got, KNOWN_SNAPSHOT_SCHEMA_VERSIONS) is not None:
+        known = ", ".join(str(v) for v in sorted(KNOWN_SNAPSHOT_SCHEMA_VERSIONS))
         raise SnapshotIndexError(
             f"{p} declares schema_version {got!r}; known version(s): {known}")
     return data
@@ -336,11 +348,34 @@ def read_meta(snapshot_dir: "Union[str, Path]") -> "Union[dict, None]":
 #: UNSTAMPED side is never silently folded into a REAL one.
 UNSTAMPED = "<unstamped>"
 
-#: `.py` files under this tree shape a snapshot's OUTPUT bytes; a change
-#: outside it (a hook, a rule, an unrelated script) does not, so the hash
-#: intentionally never reads harness/ beyond this closure.
+#: The files under this tree shape a snapshot's OUTPUT bytes -- `.py` code and the
+#: assets a language pack reads beside it (a grammar query, a Node bridge, a table);
+#: a change outside it (a hook, a rule, an unrelated script) does not, so the hash
+#: intentionally never reads harness/ beyond this closure plus the language book and
+#: the data files its rows declare under `stamp:`.
 _TOOL_CODE_DIRNAME = "codegraph"
 _TOOL_CODE_SELF = "codegraph_snapshot_reader.py"
+_TOOL_CODE_SUFFIXES = frozenset({".py", ".scm", ".cjs", ".json", ".yaml"})
+#: relative to harness/ (the parent of `scripts_dir`)
+_LANGUAGE_BOOK = "data/hs-code-languages.yaml"
+
+
+def _language_assets(harness_dir: Path) -> "list[Path]":
+    """The language book plus every file its rows declare under `stamp:`, those that
+    exist. Read with `yaml_io`, never through `codegraph`: this module imports none
+    of it."""
+    book = harness_dir / _LANGUAGE_BOOK
+    if not book.is_file():
+        return []
+    import yaml_io
+    out = [book]
+    doc = yaml_io.safe_load(book.read_text(encoding="utf-8")) or {}
+    for row in (doc.get("languages") or []) if isinstance(doc, dict) else []:
+        for rel in (row.get("stamp") or []) if isinstance(row, dict) else []:
+            f = harness_dir / str(rel)
+            if f.is_file() and f not in out:
+                out.append(f)
+    return out
 
 
 def compute_tool_stamp(scripts_dir: "Union[str, Path, None]" = None) -> "dict[str, Any]":
@@ -353,9 +388,10 @@ def compute_tool_stamp(scripts_dir: "Union[str, Path, None]" = None) -> "dict[st
 
     `hash` is a sha256 (truncated to 16 hex chars, the length `python_
     adapter.py`'s own `file_sha` already uses for a content fingerprint)
-    over every `.py` file under `codegraph/` plus this reader module
-    itself — sorted, keyed by the path RELATIVE to `scripts_dir` (never an
-    absolute machine path) so two hosts running byte-identical code compute
+    over every `.py`/`.scm`/`.cjs`/`.json`/`.yaml` file under `codegraph/`, this
+    reader module itself, the language book and the data files its rows declare
+    — sorted, keyed by the path RELATIVE to `scripts_dir` (never an absolute
+    machine path) so two hosts running byte-identical code compute
     the byte-identical hash. Depends on nothing about the tree a snapshot
     measures, and nothing about wall-clock time — only on the measurement
     code itself.
@@ -372,13 +408,17 @@ def compute_tool_stamp(scripts_dir: "Union[str, Path, None]" = None) -> "dict[st
         raise SnapshotIndexError(
             f"{codegraph_dir} does not exist -- cannot stamp the code that "
             f"shapes snapshot output")
-    files = [p for p in codegraph_dir.rglob("*.py") if "__pycache__" not in p.parts]
+    files = [p for p in codegraph_dir.rglob("*") if "__pycache__" not in p.parts
+             and p.suffix in _TOOL_CODE_SUFFIXES and p.is_file()]
     files.append(root / _TOOL_CODE_SELF)
     files.sort(key=lambda p: p.relative_to(root).as_posix())
+    # keyed relative to harness/, after the code: a key never collides with a code path
+    assets = sorted(_language_assets(root.parent), key=lambda p: p.relative_to(root.parent).as_posix())
 
     h = hashlib.sha256()
-    for p in files:
-        h.update(p.relative_to(root).as_posix().encode("utf-8"))
+    for key, p in ([(f.relative_to(root).as_posix(), f) for f in files]
+                   + [("../" + f.relative_to(root.parent).as_posix(), f) for f in assets]):
+        h.update(key.encode("utf-8"))
         h.update(b"\0")
         h.update(p.read_bytes())
         h.update(b"\0")
@@ -496,7 +536,7 @@ def stamp_mismatch(index_a: "dict[str, Any]", index_b: "dict[str, Any]", *,
 # MOVED from `codegraph._core.snapshot.worktree_key` (that module now rebinds
 # `_digest`/`worktree_toplevel`/`worktree_key` to these same function objects —
 # `worktree_key = codegraph_snapshot_reader.worktree_key`, the identical
-# re-export shape `descriptor.model.KERNEL_SCHEMA_VERSION` already uses for
+# re-export shape `descriptor.model.DESCRIPTOR_SCHEMA_VERSION` already uses for
 # the constant above). A reader outside the `codegraph` package (hs-run's
 # facts engine) needs to resolve a snapshot's OWN path layout without paying
 # the whole-package import this module exists to avoid — `worktree_key` and

@@ -44,8 +44,10 @@ _SCRIPTS = Path(__file__).resolve().parents[2]  # harness/scripts/codegraph/test
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
+import hs_family  # noqa: E402
 import process_group  # noqa: E402 -- the timeout takes the runner's own children (xdist workers) too
 import run_local_tests  # noqa: E402 -- ci_environment(): the SAME TMPDIR posture ci.sh runs under
+from codegraph._core.adapter.command_adapter import AdapterRefused, require_commands_trusted  # noqa: E402
 from codegraph._core.git import source_files  # noqa: E402
 
 from .declared_command import declared_test_command, expand_targets  # noqa: E402
@@ -115,13 +117,19 @@ def copied_tree(repo: Path) -> "Iterator[Path]":
         yield work
 
 
-def run_declared(copy_root: Path, targets: "Sequence[str]", *,
+def run_declared(copy_root: Path, targets: "Sequence[str]", *, root: Path,
                  timeout: int = DEFAULT_TIMEOUT) -> "tuple[int, str]":
     """Run `copy_root`'s own declared `domains.test.command`, expanded with
     `targets`, inside the copy. Returns `(exit_code, tail_of_output)`;
     `-1` is a timeout, `-2` an `OSError` launching the process (a runner
-    named in the declaration that does not exist on this machine, say)."""
+    named in the declaration that does not exist on this machine, say).
+    The command is the repo's own: it runs only when `root` -- the REAL repo the
+    copy was taken from, never the copy -- is trusted with it (`RefusedError`)."""
     template = declared_test_command(copy_root)
+    try:
+        require_commands_trusted(Path(root), "domains.test.command", template)
+    except AdapterRefused as e:
+        raise hs_family.RefusedError(str(e)) from None
     argv = expand_targets(template, targets)
     env = run_local_tests.ci_environment()
     # A same-second stale .pyc from a PRIOR run (baseline, or a sibling

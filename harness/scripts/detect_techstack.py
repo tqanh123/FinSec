@@ -60,26 +60,52 @@ def _node_stack(root: Path) -> Optional[Dict[str, Any]]:
     if not (root / "package.json").is_file():
         return None
     language = "typescript" if (root / "tsconfig.json").is_file() else "javascript"
-    if (root / "pnpm-lock.yaml").is_file():
-        pkg_mgr = "pnpm"
-    elif (root / "yarn.lock").is_file():
-        pkg_mgr = "yarn"
-    elif (root / "bun.lockb").is_file():
-        pkg_mgr = "bun"
-    else:
-        pkg_mgr = "npm"
-    # test_cmd only when a test script is actually declared (honest: don't invent one)
-    test_cmd = None
     try:
         pkg = json.loads(_read(root / "package.json"))
-        if isinstance(pkg, dict) and isinstance(pkg.get("scripts"), dict) \
-                and pkg["scripts"].get("test"):
-            test_cmd = f"{pkg_mgr} test"
     except (ValueError, TypeError):
-        pass  # malformed package.json → stack still detected, just no test_cmd
+        pkg = None  # malformed package.json → stack still detected, just no test_cmd
+    pkg = pkg if isinstance(pkg, dict) else {}
+    pkg_mgr = _node_pkg_mgr(root, pkg)
+    # test_cmd only when a test script is actually declared (honest: don't invent one)
+    test_cmd = None
+    if isinstance(pkg.get("scripts"), dict) and pkg["scripts"].get("test"):
+        test_cmd = f"{pkg_mgr} test"
     return {"language": language, "marker": "package.json",
             "test_cmd": test_cmd, "pkg_mgr": pkg_mgr,
-            "test_exts": (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")}
+            "test_exts": _node_test_exts(root)}
+
+
+_NODE_PKG_MGRS = ("pnpm", "yarn", "bun", "npm")
+
+
+def _node_pkg_mgr(root: Path, pkg: Dict[str, Any]) -> str:
+    """corepack's `packageManager` (`pnpm@10.4.1`) names the tool the repo runs; else the
+    lockfile; else a pnpm workspace marker; else npm."""
+    declared = str(pkg.get("packageManager") or "").split("@", 1)[0].strip()
+    if declared in _NODE_PKG_MGRS:
+        return declared
+    if (root / "pnpm-lock.yaml").is_file():
+        return "pnpm"
+    if (root / "yarn.lock").is_file():
+        return "yarn"
+    if (root / "bun.lockb").is_file():
+        return "bun"
+    if (root / "pnpm-workspace.yaml").is_file():
+        return "pnpm"
+    return "npm"
+
+
+def _node_test_exts(root: Path) -> "tuple[str, ...]":
+    """The JS/TS suffixes a node stack's tests carry: the plain six, plus whatever the
+    typescript pack's runners claim (`.mts`/`.cts`). A broken runner row is the runner
+    module's to report; detection keeps the plain six."""
+    base = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
+    try:
+        import test_runners
+        claimed = [e for s in test_runners.load(root, "typescript") for e in s.test_exts]
+    except (ImportError, ValueError):
+        claimed = []
+    return tuple(dict.fromkeys(base + tuple(claimed)))
 
 
 def _go_stack(root: Path) -> Optional[Dict[str, Any]]:
@@ -123,7 +149,9 @@ def _detect_ci(root: Path) -> List[str]:
     return ci
 
 
-def scoped_test_command(stack: Optional[Dict[str, Any]], targets: List[str]) -> Optional[str]:
+def scoped_test_command(stack: Optional[Dict[str, Any]], targets: List[str],
+                        root: Optional[Path] = None, *, plan: Any = None,
+                        phase: Optional[str] = None) -> Optional[str]:
     """`stack`'s own `test_cmd`, narrowed to just `targets` in that stack's
     OWN idiom -- the one place a caller building a "run just these paths"
     command gains target arguments, so a targeted-test consumer (a defer_
@@ -142,7 +170,9 @@ def scoped_test_command(stack: Optional[Dict[str, Any]], targets: List[str]) -> 
 
     Each stack's own targeting idiom (not exhaustive of every tool that
     stack could use, but the CONVENTIONAL one for its declared `test_cmd`):
-    python (pytest) and rust (cargo test) take file/filter args directly;
+    python takes the runner its language pack names (`test_runners`: the bin's
+    pytest row, or what the repo at `root` declares in its codemap); rust (cargo
+    test) takes file/filter args directly;
     node's package-manager `test` script forwards args after `--`; go
     takes its own package-path args verbatim (never file paths); maven
     takes a comma-joined `-Dtest=`; gradle takes one `--tests` per target.
@@ -150,14 +180,20 @@ def scoped_test_command(stack: Optional[Dict[str, Any]], targets: List[str]) -> 
     rather than silently keeping the unscoped command — this function's own
     job is to NEVER leave a caller holding an unscoped command when targets
     were named."""
-    if not stack:
+    if not stack or not targets:
         return None
+    import test_runners
+    if root is not None and all(test_runners.harness_runs(root, str(t)) for t in targets):
+        return test_runners.harness_command(targets, plan=plan, phase=phase)
     test_cmd = stack.get("test_cmd")
-    if not test_cmd or not targets:
+    if not test_cmd:
         return None
     quoted = " ".join(shlex.quote(str(t)) for t in targets)
     language = stack.get("language")
-    if language in ("python", "rust"):
+    if language == "python":
+        spec = test_runners.pick("python", root)
+        return test_runners.render(test_runners.scoped_argv(spec, targets)) if spec else None
+    if language == "rust":
         return "%s %s" % (test_cmd, quoted)
     if language in ("javascript", "typescript"):
         return "%s -- %s" % (test_cmd, quoted)
@@ -169,6 +205,22 @@ def scoped_test_command(stack: Optional[Dict[str, Any]], targets: List[str]) -> 
         return "gradle test %s" % " ".join(
             "--tests %s" % shlex.quote(str(t)) for t in targets)
     return "%s %s" % (test_cmd, quoted)
+
+
+def full_test_command(stack: Optional[Dict[str, Any]], root: Optional[Path] = None) -> Optional[str]:
+    """The command that runs `stack`'s whole suite: `hs-code test run --all` when a
+    language pack enabled in `root`'s codemap.yaml has a harness runner claiming the
+    stack's `test_exts` (that run reads the code map's snapshot for its scope), else
+    the stack's own `test_cmd` (None when it declares none)."""
+    if not stack:
+        return None
+    if root is not None:
+        import test_runners
+        enabled = test_runners.enabled_languages(root)
+        if any(lang in enabled and set(spec.test_exts) & set(stack.get("test_exts") or ())
+               for lang, spec in test_runners.harness_specs(root)):
+            return test_runners.harness_command()
+    return stack.get("test_cmd")
 
 
 def route_targets_to_stacks(
@@ -219,7 +271,8 @@ def route_targets_to_stacks(
 
 def scoped_test_commands(
         stacks: List[Dict[str, Any]],
-        targets: List[str]) -> "tuple[List[str], List[str]]":
+        targets: List[str], root: Optional[Path] = None, *, plan: Any = None,
+        phase: Optional[str] = None) -> "tuple[List[str], List[str]]":
     """One `scoped_test_command` per stack that owns at least one of
     `targets` (via `route_targets_to_stacks`), plus every target no command
     covers: unclaimed by any stack, or claimed by a stack that declares no
@@ -229,7 +282,7 @@ def scoped_test_commands(
     groups, unrun = route_targets_to_stacks(stacks, targets)
     commands = []
     for stack, owned in groups:
-        cmd = scoped_test_command(stack, owned)
+        cmd = scoped_test_command(stack, owned, root, plan=plan, phase=phase)
         if cmd:
             commands.append(cmd)
         else:

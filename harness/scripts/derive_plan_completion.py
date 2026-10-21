@@ -72,9 +72,9 @@ def _latest_verdict_regressed(art: Path, node: str):
 
     verification_snapshot.snapshot() is deliberately immutable/first-wins by
     ratified policy: once a phase earns a snapshot that counts it is never
-    rewritten, even by a later regression on the SAME phase (only one that does
-    not count yields, to a write that does). That is correct
-    evidence policy, but it means the snapshot alone cannot answer "is this
+    rewritten, even by a later regression on the SAME phase (it yields only to a
+    write the DoD gate sees strictly more of: `verification_snapshot._supersede`).
+    That is correct evidence policy, but it means the snapshot alone cannot answer "is this
     STILL true" — a phase that regressed PASS -> BLOCKED keeps its stale PASS
     snapshot, and once a LATER phase's write overwrites the plan's single
     canonical verification.json, even that regression stops being visible
@@ -102,6 +102,30 @@ def _latest_verdict_regressed(art: Path, node: str):
     return None
 
 
+def _artifact_kind(name: str) -> "str | None":
+    """The artifact kind a post entry names when the gate reads it under either
+    spelling (`review-decision`, `.yaml`, `.json`), else None (a file named outright)."""
+    if "/" in name:
+        return None
+    for ext in artifact_check._ARTIFACT_EXTS:
+        if name.endswith(ext):
+            return name[:-len(ext)]
+    return name if "." not in name.rsplit("/", 1)[-1] else None
+
+
+def _post_file(art: Path, name: str) -> Path:
+    """The file a post entry names: as written when it is there, else the artifact the
+    gate reads for its kind (`artifact_check._artifact_path`: .yaml first, .json the
+    legacy spelling) -- a writer that produces review-decision.yaml satisfies a post
+    that names review-decision.json, the name hs:plan writes. A verification snapshot
+    (verification-<node>.json) is read as written: only its .json writer exists."""
+    f = art / name
+    kind = _artifact_kind(name)
+    if f.is_file() or kind is None or _is_verification_post(name):
+        return f
+    return artifact_check._artifact_path(art.parent, kind)
+
+
 def _node_post_satisfied(art: Path, post_list, node: str):
     """None when the node is satisfied, else why it is not (the caller folds
     those into completion_state's reason, so an unclosed plan says which phase
@@ -120,13 +144,15 @@ def _node_post_satisfied(art: Path, post_list, node: str):
     counted as done while the gate blocked on it, so a plan could report N/N
     complete with work still red underneath."""
     for name in post_list:
-        f = art / name
+        f = _post_file(art, name)
         if not f.is_file():
-            return "missing %s" % name
+            kind = _artifact_kind(name)
+            return "missing %s" % (name if kind is None or _is_verification_post(name)
+                                    else kind + " (.yaml or .json)")
         if _is_verification_post(name):
-            try:
-                rec = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            rec, err = artifact_check._parse_artifact_text(f.read_text(encoding="utf-8"), f) \
+                if f.is_file() else (None, "unreadable")
+            if err or rec is None:
                 return "%s is unreadable" % name
             why = verification_shortfall(rec)
             if why:
@@ -137,8 +163,9 @@ def _node_post_satisfied(art: Path, post_list, node: str):
 def verification_shortfall(rec) -> "str | None":
     """None when a verification record counts its phase done, else why not, as a
     clause to follow the file's name. The one predicate the completion counter
-    and the snapshot writer share: a snapshot that counts is immutable, one that
-    does not yields to a write that does (`verification_snapshot.snapshot`)."""
+    and the snapshot writer share: one that does not count yields to a write that
+    does, and one that counts only to a write the DoD gate sees strictly more of
+    (`verification_snapshot._supersede`)."""
     if not isinstance(rec, dict) or rec.get("verdict") not in _PASS_VERDICTS:
         return " does not carry a PASS verdict"
     missing = _missing_gate_fields(rec)

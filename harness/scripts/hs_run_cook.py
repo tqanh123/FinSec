@@ -99,12 +99,17 @@ the single source of truth for every state this module can return:
                           for COOK to act on — a `plan` step must run first),
                           completed, closed/already_closed.
   EXIT_NEEDS_MODEL (10) — phase_needs_work, phase_failed, needs_verification,
-                          needs_review,
+                          declared_check_broken (a declared check's run could
+                          not measure; its reason, not a rerun),
+                          needs_review, needs_reopen_verify (a reopened
+                          plan's named phase owes its verdict again),
                           waiting_on_model (`prompt`), `record developer`'s
                           `recorded` (a model must read the report and choose
                           the verdict).
   EXIT_NEEDS_STEP (11)  — needs_open, ok (`preflight`), opened/already_open,
                           verified, phase_needs_reverify, needs_phase_grid_gate,
+                          needs_declared_check (`hs-code check run` / `test run`),
+                          reopened (`open --reason`),
                           needs_close, `record <non-developer>`'s `recorded`
                           (its own follow-up is just `cook next` again) — a
                           deterministic CLI call remains; no judgment needed.
@@ -114,8 +119,14 @@ the single source of truth for every state this module can return:
                           all, unlike `next`/`status`'s idle "nothing to do
                           yet"), preflight_blocked, not_startable,
                           no_plan_graph, no_phase_resolved, unknown_phase,
-                          phase_needs_post_artifact, state_conflict, and every
-                          `error`/`*_failed` state.
+                          phase_needs_post_artifact, state_conflict,
+                          reopen_not_completed, and every `error`/`*_failed`
+                          state.
+  EXIT_REFUSED (3)       — the mutating verbs declining on purpose:
+                          approval_refused, reopen_needs_reason, and close's
+                          phases_incomplete, reopen_verify_owed,
+                          review_missing, blocked_grid_phase_gate,
+                          suite_debt_unpaid.
 
 Hard Cases — NOT disk-provable, named explicitly rather than assumed:
 whether a step was actually delegated through a real `Task(subagent_type=...)`
@@ -151,6 +162,8 @@ import grid_flag_carry  # noqa: E402
 import hs_run_next_command  # noqa: E402
 import hs_run_scoped_tests  # noqa: E402
 import plan_evidence_paths  # noqa: E402
+import plan_family  # noqa: E402
+import review_seen  # noqa: E402
 import plan_graph  # noqa: E402
 import plan_layout_check  # noqa: E402
 import plan_status  # noqa: E402
@@ -167,6 +180,7 @@ _GIT_SAFE = secret_scan_before_ship.GIT_SAFE_CONFIG
 _git_env = secret_scan_before_ship.git_safe_env
 from close_plan import close_plan as _close_plan  # noqa: E402
 from open_plan import open_plan as _open_plan  # noqa: E402
+import phase_commits_log  # noqa: E402
 
 # hs_run.py's own four-tier contract, IMPORTED rather than
 # re-declared: the per-module copies drifted, so hs_run owns the ladder and
@@ -360,6 +374,11 @@ def _resolve_plan_dir_verbose(root, explicit=None):
     if active is not None:
         return active, None
     if env_raw:
+        # Named, but split: hand it to the caller, whose door refuses it as split —
+        # "does not resolve to a plan" would name the wrong reason.
+        named = _env_named_split(root, env_raw)
+        if named is not None:
+            return named, None
         # R15: HARNESS_ACTIVE_PLAN was explicitly SET but
         # resolve_active_plan's own fail-closed contract rejected it (it
         # names something outside <root>/plans/, or nothing at all —
@@ -373,12 +392,15 @@ def _resolve_plan_dir_verbose(root, explicit=None):
     # `resolve_active_plan` refuses to pick between several in_progress plans. That
     # refusal must surface as what it is: falling through reported "no ... in_progress
     # plan found" with three on disk, and a lone approved plan won over all of them.
-    in_progress = [d for d in _plan_dirs(root) if _frontmatter_status(d) == "in_progress"]
+    in_progress = [d for d in _plan_dirs(root) if _frontmatter_status(d) == "in_progress"
+                   and plan_family.split_view(d) is None]
     if len(in_progress) > 1:
         return None, {"kind": "ambiguous_in_progress",
                       "candidates": [str(d) for d in in_progress]}
 
-    approved = [d for d in _plan_dirs(root) if _frontmatter_status(d) == "approved"]
+    # A split plan stays `approved` for good and is never cooked: never a candidate.
+    approved = [d for d in _plan_dirs(root) if _frontmatter_status(d) == "approved"
+                and plan_family.split_view(d) is None]
     if len(approved) == 1:
         return approved[0], None
 
@@ -390,6 +412,19 @@ def _resolve_plan_dir_verbose(root, explicit=None):
         return None, {"kind": "ambiguous_approved",
                        "candidates": [str(d) for d in approved]}
     return None, {"kind": "no_candidates"}
+
+
+def _env_named_split(root: Path, raw: str) -> "Path | None":
+    """The split plan HARNESS_ACTIVE_PLAN names under <root>/plans/, or None."""
+    plans = (Path(root) / "plans").resolve()
+    for cand in ((Path(raw),) if Path(raw).is_absolute() else (plans / raw, Path(root) / raw)):
+        try:
+            cand.resolve().relative_to(plans)
+        except ValueError:
+            continue
+        if (cand / "plan.md").is_file() and plan_family.split_view(cand) is not None:
+            return cand
+    return None
 
 
 def _resolve_plan_dir(root: Path, explicit=None):
@@ -514,8 +549,8 @@ def _approval_gate_reason(plan_dir: Path, root) -> "str | None":
 
 def _phase_order(graph: dict) -> list:
     """A deterministic phase visiting order: plan_graph's own topological
-    batches (each batch already sorted by name), flattened. For a plan with
-    no edges at all every node lands in one batch, sorted by name — reuses
+    batches (each batch sorted by the numbers in its ids, 2 before 10), flattened.
+    For a plan with no edges at all every node lands in one batch — reuses
     `plan_graph.find_parallel_batches` rather than re-deriving order here
     (survival invariant #4)."""
     order = []
@@ -543,10 +578,12 @@ def _phase_order(graph: dict) -> list:
 #               approval, an opted-into gate not yet satisfied).
 _REASON_CLASS = {
     "approval": "refused",
+    "split": "refused",
     "graph_malformed": "broken",
     "graph_missing_post": "broken",
     "graph_bad_prefix": "broken",
     "graph_phase_file": "broken",
+    "graph_cross_plan": "broken",
     "evidence_dangling": "broken",
     "grid_macro_missing": "refused",
 }
@@ -577,6 +614,32 @@ def _preflight_exit_code(reason_kinds):
     return EXIT_BROKEN if "broken" in classes else EXIT_REFUSED
 
 
+def _split_reason(plan_dir: Path) -> "str | None":
+    """Why this plan is never cooked, or None: the human chose to split it, and its
+    work is cooked in the child plans."""
+    split = plan_family.split_view(plan_dir)
+    if split is None:
+        return None
+    owed = plan_family.split_sentence(split, plan_dir)
+    return ("plan-size (0.5x): this plan was split (the human's size decision) and is "
+            "never cooked itself — cook each child plan instead%s%s" % (
+                ": " + ", ".join(str(k) for k in split["children"]) if split["children"] else "",
+                "; the split is not finished: " + owed if owed else ""))
+
+
+def _split_refusal(plan_dir: Path) -> "dict | None":
+    """The answer every door that would start or continue cooking gives a split plan,
+    whatever its status — the preflight alone runs only on an approved one."""
+    why = _split_reason(plan_dir)
+    if why is None:
+        return None
+    return hs_run.StepResult(
+        state="preflight_blocked", next_action=why,
+        artifacts=[str(plan_dir)], warnings=[why],
+        exit_code=_preflight_exit_code(["split"]),
+    ).as_dict()
+
+
 def _run_preflight(plan_dir: Path, root=None) -> dict:
     """The ONE-TIME, plan-level preflight (cook Steps 0.5a-0.5c): the
     plan-approval gate (see `_approval_gate_reason`), the
@@ -603,6 +666,11 @@ def _run_preflight(plan_dir: Path, root=None) -> dict:
     if approval_reason:
         _preflight_reason("approval", "plan-approval (0.5x): %s" % approval_reason,
                           reasons=reasons, kinds=kinds)
+    # The human chose to split this plan: its work is cooked in the child plans,
+    # never here, whatever phases it still holds.
+    split = _split_reason(plan_dir)
+    if split:
+        _preflight_reason("split", split, reasons=reasons, kinds=kinds)
     graph = plan_graph.parse_phase_graph(plan_dir)
     if graph.get("error"):
         _preflight_reason("graph_malformed", "plan-graph (0.5a): %s" % graph["error"],
@@ -638,6 +706,12 @@ def _run_preflight(plan_dir: Path, root=None) -> dict:
                 "graph_phase_file",
                 "plan-graph (0.5a): %s" % "; ".join(p["msg"] for p in phase_file_problems),
                 reasons=reasons, kinds=kinds)
+        # An edge on a sibling plan's phase that cannot hold would leave its phase
+        # waiting forever, or never waiting at all.
+        cross = plan_graph.find_cross_plan_problems(graph, plan_dir)
+        if cross:
+            _preflight_reason("graph_cross_plan", "plan-graph (0.5a): %s" % "; ".join(cross),
+                              reasons=reasons, kinds=kinds)
 
     # 0.5d — an evidence row that points at nothing. BLOCKING, unlike its
     # advisory neighbour `_layout_warnings`, because the two make different
@@ -722,11 +796,29 @@ def _layout_warnings(plan_dir: Path) -> list:
 
 
 
+def _cook_door(fn, *, report_only: bool = False):
+    """Every cook verb that acts on a plan answers a split one first, with the same
+    refusal — one door, so a verb added later cannot forget it. The plan-less pick
+    never lands on a split plan (`_resolve_plan_dir_verbose`); a named one is
+    refused here. `report_only` (status) says the same at exit 0: status always
+    reports, never refuses."""
+    def run(ns):
+        plan_dir, _miss = _resolve_plan_dir_verbose(Path(ns.ctx.root),
+                                                    explicit=getattr(ns, "plan", None))
+        refused = _split_refusal(plan_dir) if plan_dir is not None else None
+        if refused and report_only:
+            refused["exit_code"] = EXIT_DONE
+        return hs_run_next_command.finalize(refused) if refused else fn(ns)
+    run.__name__ = getattr(fn, "__name__", "run")
+    run.__doc__ = fn.__doc__
+    return run
+
+
 def _preflight(ns) -> dict:
     return hs_run_next_command.finalize(_cmd_preflight_impl(ns.ctx.root, plan=ns.plan))
 
 
-PREFLIGHT = hs_run.verb(_preflight, options=("plan",), helps={"plan": _PLAN_HELP})
+PREFLIGHT = hs_run.verb(_cook_door(_preflight), options=("plan",), helps={"plan": _PLAN_HELP})
 
 
 def _cmd_preflight_impl(root, *, plan=None) -> dict:
@@ -781,15 +873,26 @@ def _cmd_preflight_impl(root, *, plan=None) -> dict:
 
 
 def _open(ns) -> dict:
-    return hs_run_next_command.finalize(_cmd_open_impl(ns.ctx.root, plan=ns.plan))
+    return hs_run_next_command.finalize(_cmd_open_impl(
+        ns.ctx.root, plan=ns.plan, reason=ns.reason, phases=ns.phase))
 
 
-OPEN = hs_run.verb(_open, options=("plan",), helps={"plan": _PLAN_HELP})
+_OPEN_HELPS = {
+    "plan": _PLAN_HELP,
+    "reason": "reopen a completed plan, saying why (kept in its phase-commits log): "
+              "it returns to in_progress, its review-decision moves aside so a fresh "
+              "recorded review is owed, and close waits for every --phase verified "
+              "again",
+    "phase": "with --reason: phase(s) whose evidence went stale, comma-separated — "
+             "each must be verified again before close"}
+OPEN = hs_run.verb(_cook_door(_open), options=("plan", "reason", "phase"), helps=_OPEN_HELPS)
 
 
-def _cmd_open_impl(root, *, plan=None) -> dict:
-    """`hs-run cook open [--plan <dir>]` — wraps `open_plan.open_plan`
-    (cook Step 0.6). The raw script's own refusal is exit 1 (E24); here it is
+def _cmd_open_impl(root, *, plan=None, reason=None, phases=None) -> dict:
+    """`hs-run cook open [--plan <dir>] [--reason <why> [--phase <id>,...]]` —
+    wraps `open_plan.open_plan` (cook Step 0.6). On a completed plan it reopens
+    instead (`_reopen`), and only with `--reason`: the flags on any other plan
+    are a usage error, a completed plan without them a refusal. The raw script's own refusal is exit 1 (E24); here it is
     normalized to EXIT_BROKEN(2), never passed through and never reported as
     a silent success. A successful open still leaves the deterministic
     `cook next` step — EXIT_NEEDS_STEP (D10/L3).
@@ -809,6 +912,21 @@ def _cmd_open_impl(root, *, plan=None) -> dict:
             warnings=[],
             exit_code=EXIT_BROKEN,
         ).as_dict()
+    status = _frontmatter_status(plan_dir)
+    named = [p for p in re.split(r"[,\s]+", phases or "") if p]
+    if (reason is not None or named) and status != "completed":
+        return hs_run.StepResult(
+            state="reopen_not_completed",
+            next_action="--reason/--phase reopen a completed plan; %s is %s — "
+                        "hs-run cook next --plan %s" % (plan_dir, status, plan_dir),
+            artifacts=[str(plan_dir)], warnings=[], exit_code=EXIT_BROKEN).as_dict()
+    if status == "completed" and not (reason or "").strip():
+        return hs_run.StepResult(
+            state="reopen_needs_reason",
+            next_action="%s is completed; reopening it takes the reason its evidence "
+                        "went stale: hs-run cook open --plan %s --reason <why> "
+                        "[--phase <id>,<id>]" % (plan_dir, plan_dir),
+            artifacts=[str(plan_dir)], warnings=[], exit_code=EXIT_REFUSED).as_dict()
     gate_reason = _approval_gate_reason(plan_dir, root)
     if gate_reason is not None:
         return hs_run.StepResult(
@@ -822,6 +940,8 @@ def _cmd_open_impl(root, *, plan=None) -> dict:
             warnings=[gate_reason],
             exit_code=EXIT_REFUSED,
         ).as_dict()
+    if status == "completed":
+        return _reopen(plan_dir, root, reason.strip(), named)
     res = _open_plan(plan_dir, root=root)
     if not res.ok:
         return hs_run.StepResult(
@@ -854,6 +974,92 @@ def _cmd_open_impl(root, *, plan=None) -> dict:
         # the active plan from it (hs_run.latest_opened_plan).
         extra={"plan": str(plan_dir)},
     ).as_dict()
+
+
+@_attrs.define(frozen=True, kw_only=True)
+class ReopenRecord:
+    """The `kind: reopen` line: a completed plan taken back to in_progress, why, the
+    phases owed a verify, and where each review-decision it retired now lives."""
+
+    reason: str
+    phases: list = _attrs.field(factory=list)
+    from_status: str = "completed"
+    retired: list = _attrs.field(factory=list)
+    actor: str = ""
+    ts: str = ""
+
+    def as_dict(self) -> dict:
+        return {"kind": "reopen", "reason": self.reason, "phases": list(self.phases),
+                "from_status": self.from_status, "retired": list(self.retired),
+                "actor": self.actor, "ts": self.ts}
+
+
+def _reopen(plan_dir: Path, root, reason: str, phases: list) -> dict:
+    """completed -> in_progress, after the approval gate `open` runs.
+
+    Every review-decision on disk (each format) moves aside to
+    `review-decision-retired-<ts>.<ext>`: it reviewed the plan as closed, and every
+    reader of the canonical name — close, the hard-stage gate, fix — now finds none.
+    The live `record code-reviewer` lines are superseded with it, and the ledger line
+    lands before the flip: a flip with no line would close again on the old review.
+    A flip that then fails leaves the line, and `next` already owes what it names;
+    the same command again finishes the reopen."""
+    graph = plan_graph.parse_phase_graph(plan_dir)
+    for phase in phases:
+        why = _phase_refusal(plan_dir, phase, graph)
+        if why:
+            return _unknown_phase(plan_dir, why)
+    import hook_runtime
+    actor, ts = hook_runtime.resolve_actor(), write_verification._now_iso()
+    retired = []
+    try:
+        for ext in artifact_check._ARTIFACT_EXTS:
+            live = plan_dir / "artifacts" / ("review-decision%s" % ext)
+            if live.is_file():
+                aside = live.with_name("review-decision-retired-%s%s"
+                                       % (re.sub(r"[^0-9]", "", ts), ext))
+                os.replace(live, aside)
+                retired.append(aside.name)
+        _append_phase_commits_record(plan_dir, ReopenRecord(
+            reason=reason, phases=list(dict.fromkeys(phases)), retired=retired,
+            actor=actor, ts=ts).as_dict())
+        for phase, recs in _live_records(plan_dir, "code-reviewer").items():
+            if recs:
+                _append_record_log_entry(plan_dir, SupersedeLogEntry(
+                    role="code-reviewer", phase=phase, actor=actor, ts=ts).as_dict())
+        res = plan_status.flip_status(plan_dir, allowed_from={"completed"},
+                                      to="in_progress", error_on_other=True, root=root)
+    except OSError as e:
+        res = plan_status.Result(False, False, "%s: %s" % (type(e).__name__, e))
+    if not res.ok:
+        why = ("reopen did not finish (%s)%s — fix that and run the same command again"
+               % (res.message, "; review-decision moved aside: %s" % ", ".join(retired)
+                  if retired else ""))
+        return hs_run.StepResult(state="open_failed", next_action=why,
+                                 artifacts=[str(plan_dir)], warnings=[why],
+                                 exit_code=EXIT_BROKEN).as_dict()
+    nxt = "hs-run cook next --plan %s" % plan_dir
+    return hs_run.StepResult(
+        state="reopened",
+        next_action=nxt,
+        next_command=nxt,
+        artifacts=[str(plan_dir), str(_phase_commits_path(plan_dir))],
+        warnings=[],
+        exit_code=EXIT_NEEDS_STEP,
+        extra={"plan": str(plan_dir), "phases": list(dict.fromkeys(phases))},
+    ).as_dict()
+
+
+def _reverify_owed(plan_dir: Path) -> "tuple[str, list] | None":
+    """(sentence, phases) while a reopen names a phase no later verify answered, else
+    None — one predicate for `next`, `close` and the hard-stage gate."""
+    line, owed = phase_commits_log.reverify_owed(plan_dir)
+    if not owed or line is None:
+        return None
+    return ("plan reopened (%s): phase(s) %s must be verified again before its review "
+            "and close — hs-run cook verify --plan %s --phase <id> %s (`--sha keep` "
+            "names the commits a phase already recorded)"
+            % (line.get("reason"), ", ".join(owed), plan_dir, _VERIFY_PLACEHOLDERS), owed)
 
 
 def _snapshot_heads_up(root: Path):
@@ -907,6 +1113,10 @@ _VERIFY_PLACEHOLDERS = "--verdict <%s> --check <name>:<%s> ..." % (
     "|".join(_VERDICT_CHOICES), "|".join(_CHECK_STATUSES))
 
 
+# The `--sha` token that names the phase's last recorded commits.
+_SHA_KEEP = "keep"
+
+
 def _verify_args(p) -> None:
     """`cook verify`'s declared flag set — the one its `--help` usage is printed
     from, so the two cannot drift apart. It mirrors `write_verification`'s own
@@ -922,22 +1132,30 @@ def _verify_args(p) -> None:
                                    "full-suite run that pays a defer_suite debt"
                                    % DEBT_STAGE)
     p.add_argument("--from", dest="from_file",
-                   help="a verification record file (or - for stdin) instead of "
-                        "--phase/--verdict/--check")
+                   help="a verification record file (or - for stdin) carrying the "
+                        "verdict and checks; --verdict/--check/--stage are refused beside "
+                        "it. --phase may accompany it and must match the file's `phase` "
+                        "(it fills one the file leaves out)")
     p.add_argument("--check", action="append", default=[],
-                   help="name:status, repeatable; name is a test-policy test type, or "
-                        "<type>/<name> to keep the tool's own name (lint/ruff, "
-                        "typecheck/mypy); status one of: %s" % ", ".join(_CHECK_STATUSES))
+                   help="name:status[:result file], repeatable; name is a test-policy "
+                        "test type, or <type>/<name> to keep the tool's own name (lint/ruff, "
+                        "typecheck/mypy); status one of: %s. The result file (junit, sarif, "
+                        "...: what the type's format reads) is copied under the plan's "
+                        "artifacts/results/ -- the DoD gate reads it, not the status; a run "
+                        "on another machine is fetched back first (`hs-rops fetch`)"
+                        % ", ".join(_CHECK_STATUSES))
     p.add_argument("--sha", action="append", default=[],
                    help="commit,commit — the commits this phase made; replaces the range "
                         "from the phase's open mark (a phase cooked in another worktree, "
                         "or committed before it was marked). Repeatable; commas or "
-                        "whitespace separate them. A merge, or a commit off HEAD's "
+                        "whitespace separate them; `keep` names the commits the phase's "
+                        "last verify recorded. A merge, or a commit off HEAD's "
                         "first-parent line, is refused — "
-                        "`git rev-list --first-parent --no-merges <start>..HEAD`; one "
-                        "another branch's first-parent line also holds is recorded "
-                        "with a warning. The review gate still sizes the run up to "
-                        "HEAD, whatever is named")
+                        "`git rev-list --first-parent --no-merges <start>..HEAD` — unless "
+                        "the phase's last verify already recorded it (a lane merged "
+                        "since); one another branch's first-parent line also holds is "
+                        "recorded with a warning. The review gate still sizes the run up "
+                        "to HEAD, whatever is named")
 
 
 def _verify_argv(ns, plan_dir) -> list:
@@ -958,6 +1176,16 @@ def _verified_phase(ns, plan_dir) -> "str | None":
     write_verification when `--from` is also given), else the `--from` file's own
     `phase`. The canonical record is the last resort only — a sibling tree verifying
     another phase of the same plan can overwrite it between the write and this read."""
+    named = _named_phase(ns)
+    if named:
+        return named
+    rec, _p = artifact_check._load_artifact(plan_dir, "verification")
+    return rec.get("phase") if isinstance(rec, dict) else None
+
+
+def _named_phase(ns) -> "str | None":
+    """The phase the caller named before anything is written: `--phase`, else the
+    `--from` file's own `phase`. None for stdin or a file naming none."""
     if ns.phase:
         return ns.phase
     if ns.from_file and ns.from_file != "-":
@@ -968,8 +1196,7 @@ def _verified_phase(ns, plan_dir) -> "str | None":
             rec = None
         if isinstance(rec, dict) and rec.get("phase"):
             return str(rec["phase"])
-    rec, _p = artifact_check._load_artifact(plan_dir, "verification")
-    return rec.get("phase") if isinstance(rec, dict) else None
+    return None
 
 
 def _next_for(plan_dir, phase) -> str:
@@ -980,7 +1207,7 @@ def _verify(ns) -> dict:
     return hs_run_next_command.finalize(_cmd_verify_impl(ns, ns.ctx.root))
 
 
-VERIFY = Command(add_args=_verify_args, run=_verify)
+VERIFY = Command(add_args=_verify_args, run=_cook_door(_verify))
 
 
 def _cmd_verify_impl(ns, root) -> dict:
@@ -1005,7 +1232,8 @@ def _cmd_verify_impl(ns, root) -> dict:
     nothing about closing), and a subsequent `review-decision.json` verdict
     BLOCKED then locked the plan in `completed` with NO verb able to reopen
     it (`open_plan` only accepts pending/approved/draft; `close_plan` only
-    accepts in_progress). Hand-reproduced in both the self-host shape and
+    accepts in_progress; `cook open --reason` reopens one now, and owes the
+    review again). Hand-reproduced in both the self-host shape and
     the exact global-install shape (HARNESS_BIN_ROOT set,
     CLAUDE_PROJECT_DIR pointing at a project distinct from the bin root —
     the self-host shape alone silently no-ops the flip, per the
@@ -1045,9 +1273,34 @@ def _cmd_verify_impl(ns, root) -> dict:
             warnings=[],
             exit_code=EXIT_BROKEN,
         ).as_dict()
+    import harness_checks
+    gone = harness_checks.marks_removed(plan_dir)
+    if gone:
+        return hs_run.StepResult(
+            state="verify_failed",
+            next_action=harness_checks.marks_removed_reason(plan_dir, gone, _named_phase(ns) or "<phase>"),
+            artifacts=[str(plan_dir)], warnings=[], exit_code=EXIT_BROKEN,
+        ).as_dict()
     named = None
+    sha_warnings: list = []
     if getattr(ns, "sha", None):
-        named, unresolved = _resolve_named_commits(Path(root), " ".join(ns.sha))
+        phase = _named_phase(ns)
+        tokens = [t for t in re.split(r"[,\s]+", " ".join(ns.sha)) if t]
+        recorded = _phase_commit_shas(plan_dir, phase) if phase else []
+        if _SHA_KEEP in tokens and not recorded:
+            return hs_run.StepResult(
+                state="verify_failed",
+                next_action=("--sha %s names the commits phase %s's last verify recorded, "
+                             "and it recorded none — name them: --sha <c>,<c>"
+                             % (_SHA_KEEP, phase) if phase else
+                             "--sha %s needs the phase: --phase <id>, or a --from file "
+                             "naming its phase" % _SHA_KEEP),
+                artifacts=[str(plan_dir)],
+                warnings=[],
+                exit_code=EXIT_BROKEN,
+            ).as_dict()
+        tokens = [c for t in tokens for c in (recorded if t == _SHA_KEEP else [t])]
+        named, unresolved = _resolve_named_commits(Path(root), " ".join(tokens))
         if unresolved:
             return hs_run.StepResult(
                 state="verify_failed",
@@ -1057,24 +1310,44 @@ def _cmd_verify_impl(ns, root) -> dict:
                 warnings=[],
                 exit_code=EXIT_BROKEN,
             ).as_dict()
-        off = _off_own_line(Path(root), named)
+        named_off = _off_own_line(Path(root), named)
+        # A commit the phase's own last verify recorded was its work on the line it
+        # was made on; a lane merged since puts it off this HEAD's first-parent line.
+        kept = [c for c, why in named_off if c in set(recorded) and why != _NOT_IN_HISTORY]
+        off = [(c, why) for c, why in named_off if c not in set(kept)]
+        if kept:
+            sha_warnings.append(
+                "phase %s: %d named commit(s) are off HEAD's first-parent line but its "
+                "last verify already recorded them, so they stay its own: %s"
+                % (phase, len(kept), _listed([c[:9] for c in kept], 5, "commit(s)")))
         if off:
-            mark = _phase_open_mark(plan_dir, ns.phase, Path(root)) if ns.phase else None
+            mark = _phase_open_mark(plan_dir, phase, Path(root)) if phase else None
             return hs_run.StepResult(
                 state="verify_failed",
                 next_action=(
                     "--sha names %d commit(s) that are not this branch's own work, so "
                     "nothing was recorded: %s. A phase's own commits sit on HEAD's "
                     "first-parent line and are no merge; `git rev-list --first-parent "
-                    "--no-merges %s..HEAD` lists them" % (
+                    "--no-merges %s..HEAD` %s" % (
                         len(off), _listed(["%s (%s)" % (c[:9], why) for c, why in off], 5,
                                           "commit(s)"),
-                        mark[:12] if mark else "<the phase's first commit>^")),
+                        mark[:12] if mark else "<the phase's first commit>^",
+                        _own_line_listing(Path(root), mark))
+                    + _where_they_are_own(Path(root), plan_dir, phase,
+                                          [(c, why) for c, why in named_off
+                                           if why != "a merge"], kept)),
                 artifacts=[str(plan_dir)],
-                warnings=[],
+                warnings=list(sha_warnings),
                 exit_code=EXIT_REFUSED,
             ).as_dict()
     full_argv = _verify_argv(ns, plan_dir)
+    # The phase's commits, taken before the write, scope the record's blast radius:
+    # a merge-base diff is empty once the phase's lane merged.
+    pre_phase = _named_phase(ns)
+    commit_set = (_phase_commit_set(plan_dir, pre_phase, Path(root), named=named)
+                  if pre_phase else None)
+    if commit_set and commit_set[0]:
+        full_argv += ["--commits", ",".join(commit_set[0])]
 
     import contextlib
     import io
@@ -1115,13 +1388,14 @@ def _cmd_verify_impl(ns, root) -> dict:
     # field), not re-derived from the flags — `--from FILE` never puts `--phase`
     # on the command line at all.
     verified_phase = _verified_phase(ns, plan_dir)
-    commit_warnings = (_record_phase_commits(plan_dir, str(verified_phase), Path(root),
-                                             named=named)
-                       if verified_phase else [])
+    commit_warnings = (_record_phase_commits(
+        plan_dir, str(verified_phase), Path(root), named=named,
+        computed=commit_set if verified_phase == pre_phase else None)
+        if verified_phase else [])
     # What write_verification said on a success is still said: the advisory that
     # the phase's snapshot kept an earlier record is the caller's only cue to read
     # the latest one elsewhere.
-    advisories = [l for l in err_text.splitlines() if l.startswith("[advisory]")]
+    advisories = [ln for ln in err_text.splitlines() if ln.startswith("[advisory]")]
     latest_p = plan_dir / "artifacts" / ("phase-latest-%s.json" % verified_phase)
     latest = [str(latest_p)] if verified_phase and latest_p.is_file() else []
     return hs_run.StepResult(
@@ -1138,7 +1412,7 @@ def _cmd_verify_impl(ns, root) -> dict:
                      % (verified_phase or "?", _next_for(plan_dir, verified_phase))),
         next_command=_next_for(plan_dir, verified_phase),
         artifacts=[str(plan_dir / "artifacts")] + latest,
-        warnings=advisories + commit_warnings,
+        warnings=advisories + sha_warnings + commit_warnings,
         exit_code=EXIT_NEEDS_STEP,
     ).as_dict()
 
@@ -1148,10 +1422,16 @@ def _cmd_verify_impl(ns, root) -> dict:
 
 
 def _close(ns) -> dict:
-    return hs_run_next_command.finalize(_cmd_close_impl(ns.ctx.root, plan=ns.plan))
+    # resolved BEFORE closing: a close flips the plan's status, and asked again the
+    # resolver would name another plan
+    plan_dir, _miss = _resolve_plan_dir_verbose(Path(ns.ctx.root), explicit=ns.plan)
+    result = _cmd_close_impl(ns.ctx.root, plan=ns.plan)
+    if plan_dir is not None:
+        result = _with_waived_edges(plan_dir, result, ns.ctx.root)
+    return hs_run_next_command.finalize(result)
 
 
-CLOSE = hs_run.verb(_close, options=("plan",), helps={"plan": _PLAN_HELP})
+CLOSE = hs_run.verb(_cook_door(_close), options=("plan",), helps={"plan": _PLAN_HELP})
 
 
 def _cmd_close_impl(root, *, plan=None) -> dict:
@@ -1204,6 +1484,26 @@ def _cmd_close_impl(root, *, plan=None) -> dict:
             warnings=[comp["reason"]],
             exit_code=EXIT_REFUSED,
         ).as_dict()
+    reverify = _reverify_owed(plan_dir)
+    if reverify:
+        return hs_run.StepResult(
+            state="reopen_verify_owed", next_action=reverify[0], artifacts=[str(plan_dir)],
+            warnings=[reverify[0]], exit_code=EXIT_REFUSED,
+            extra={"phases": reverify[1]}).as_dict()
+    # The deferred full suite is owed before the review: run after it, the suite's own
+    # fixes went unreviewed, or every commit since (docs, another session's) asked for
+    # the review again. Reuses `_suite_debt_unpaid` — the exact function `pending`
+    # reads — so the two can never answer this question differently.
+    if (defer_suite_carry.resolve_defer_suite_carry(plan_dir)["carried"]
+            and _suite_debt_unpaid(plan_dir)):
+        action, extra_warnings = _debt_repay_message(Path(root))
+        return hs_run.StepResult(
+            state="suite_debt_unpaid",
+            next_action=action,
+            artifacts=[str(plan_dir)],
+            warnings=extra_warnings,
+            exit_code=EXIT_REFUSED,
+        ).as_dict()
     rec = None
     disposition = _review_disposition(plan_dir, root)
     if not disposition.cleared:
@@ -1233,22 +1533,6 @@ def _cmd_close_impl(root, *, plan=None) -> dict:
             next_action=msg,
             artifacts=[str(plan_dir)],
             warnings=[msg],
-            exit_code=EXIT_REFUSED,
-        ).as_dict()
-    # Fourth refusal, narrowest question and last asked: only a plan that opted
-    # into defer_suite rides this branch at all (`_suite_debt_unpaid` is never
-    # consulted otherwise), and only when its canonical verification still
-    # lacks a closeable verdict. Reuses `_suite_debt_unpaid` — the exact
-    # function `pending` above already reads — so the two can never answer
-    # this question differently.
-    if (defer_suite_carry.resolve_defer_suite_carry(plan_dir)["carried"]
-            and _suite_debt_unpaid(plan_dir)):
-        action, extra_warnings = _debt_repay_message(Path(root))
-        return hs_run.StepResult(
-            state="suite_debt_unpaid",
-            next_action=action,
-            artifacts=[str(plan_dir)],
-            warnings=extra_warnings,
             exit_code=EXIT_REFUSED,
         ).as_dict()
     res = _close_plan(plan_dir, root=root)
@@ -1290,7 +1574,7 @@ def _prompt(ns) -> dict:
                          plan=ns.plan))
 
 
-PROMPT = hs_run.verb(_prompt, options=("plan", "phase", "flags"), optional=("role",),
+PROMPT = hs_run.verb(_cook_door(_prompt), options=("plan", "phase", "flags"), optional=("role",),
                     helps={"plan": _PLAN_HELP,
                            "flags": "comma-separated forcing flags relayed to the "
                                     "workflow-weight posture (parallel/subagents force a "
@@ -1412,7 +1696,7 @@ def _phase_refusal(plan_dir, phase, graph=None) -> "str | None":
     if phase in nodes:
         return None
     return ("--phase %r is not a node in %s/plan-graph.yaml (known: %s)%s"
-            % (phase, plan_dir, ", ".join(sorted(nodes)) or "(none)",
+            % (phase, plan_dir, ", ".join(sorted(nodes, key=plan_graph.phase_sort_key)) or "(none)",
                plan_graph.phase_spelling_hint(graph, phase)))
 
 
@@ -1524,7 +1808,7 @@ def _cmd_prompt_impl(role, phase, *, flags=(), root=None, plan=None) -> dict:
             warnings=warnings,
             exit_code=EXIT_NEEDS_MODEL,
             extra={"prompt_text": text, "role": role, "posture_mode": p.mode,
-                   "posture_reason": p.reason},
+                   "posture_reason": p.reason, **_plan_key(plan_dir)},
         ).as_dict()
     if plan_dir is not None:
         _append_prompt_log(plan_dir, role, phase)
@@ -1538,7 +1822,7 @@ def _cmd_prompt_impl(role, phase, *, flags=(), root=None, plan=None) -> dict:
         artifacts=[],
         warnings=[],
         exit_code=EXIT_NEEDS_MODEL,
-        extra={"prompt_text": text, "role": role},
+        extra={"prompt_text": text, "role": role, **_plan_key(plan_dir)},
     ).as_dict()
 
 
@@ -1574,11 +1858,28 @@ class RecordLogEntry:
     out_sha256: str = ""
     actor: str = ""
     ts: str = ""
+    # A plan-level code-reviewer record pins the review-decision on disk when it
+    # ran: a later review recorded against the SAME decision left its own verdict
+    # unwritten (`_review_claim`).
+    decision: "dict | None" = None
+    pins_decision: bool = False
+    # The patch-ids of every change a review could read when it was recorded
+    # (`_review_seen`): the code it saw, by content (`_review_claim`).
+    seen: "list | None" = None
+    # A report outside the plan dir is copied into it (`artifacts/records/`): a
+    # session's scratchpad does not outlive the session, the plan does.
+    kept: "str | None" = None
 
     def as_dict(self) -> dict:
-        return {"kind": "record", "role": self.role, "phase": self.phase,
-                "out": self.out, "out_sha256": self.out_sha256,
-                "actor": self.actor, "ts": self.ts}
+        out: dict = {"kind": "record", "role": self.role, "phase": self.phase,
+                     "out": self.out, "out_sha256": self.out_sha256,
+                     "actor": self.actor, "ts": self.ts}
+        if self.kept:
+            out["kept"] = self.kept
+        if self.pins_decision:
+            out["decision"] = self.decision
+            out["seen"] = list(self.seen or [])
+        return out
 
 
 @_attrs.define(frozen=True, kw_only=True)
@@ -1634,6 +1935,28 @@ def _append_prompt_log(plan_dir, role, phase, posture_mode=None) -> None:
         ).as_dict())
     except Exception:  # noqa: BLE001 — bookkeeping, never the beat
         pass
+
+
+def _plan_key(plan_dir) -> dict:
+    """`{"plan": <dir>}` for an envelope whose call resolved one: the run ledger keeps
+    it, so a reader finds every plan a session prompted in."""
+    return {"plan": str(plan_dir)} if plan_dir is not None else {}
+
+
+def _next_prompt_at(plan_dir, prompt):
+    """The clock of the next `prompt` line of the same role and session, in `plan_dir`
+    or any plan the session prompted in since: where `prompt`'s spawn window ends -- a
+    spawn after it answers that call, not this one. None when none is recorded."""
+    at = float(prompt.get("at") or 0)
+    session = prompt.get("session")
+    plans = {str(plan_dir)} | {rec.plan for rec in hs_run.read_run_ledger()
+                               if rec.session == session and rec.domain == "cook"
+                               and rec.verb == "prompt" and rec.plan
+                               and float(rec.ts or 0) >= at}
+    later = [float(r.get("at") or 0) for d in sorted(plans) for r in _read_record_log(Path(d))
+             if r.get("kind") == "prompt" and r.get("role") == prompt.get("role")
+             and r.get("session") == session and float(r.get("at") or 0) > at]
+    return min(later) if later else None
 
 
 def _matching_prompt(plan_dir, role, phase):
@@ -1711,6 +2034,84 @@ def _live_records(plan_dir: Path, role: str) -> dict:
     return live
 
 
+@_attrs.define(frozen=True, kw_only=True)
+class OwedCheck:
+    """One declared check a phase owes before its verdict: the ledger's name for it,
+    why its newest run does not prove it (`harness_checks.provenance_problem`'s kind
+    and detail), and the command that runs it for this plan and phase."""
+
+    check: str
+    kind: str
+    why: str
+    command: str
+
+    def as_dict(self) -> dict:
+        return {"check": self.check, "kind": self.kind, "why": self.why, "command": self.command}
+
+
+def _declared_check_step(plan_dir: Path, phase: str, root, numbers: str):
+    """(envelope, warnings): the `hs-code check run` / `test run` a phase owes before its
+    verdict, or None. Asks `harness_checks.unproven` on the changed paths the DoD gate
+    judges -- the gate's own answer, so a phase is never verified only for ship to refuse
+    it. A hard requirement routes; a soft one rides as a warning. A run that could not
+    measure (BROKEN/BLOCKED) names its reason: the same command again would say the same."""
+    import change_class_derivation as ccd
+    import harness_checks
+    floor, enforcement = artifact_check.class_coverage_floor(root)
+    try:
+        # a plan that defers its suite proves each phase on its scoped run; the DoD gate
+        # still holds the full one
+        scoped = defer_suite_carry.resolve_defer_suite_carry(plan_dir)["carried"]
+        rows = harness_checks.unproven(Path(root), plan_dir, ccd.repo_changed_paths(str(root)),
+                                       floor, enforcement, scoped_ok=scoped)
+    except harness_checks.Unreadable as e:
+        return hs_run.StepResult(
+            state="declared_check_broken",
+            # the declaration, the plan's base or its check ledger: the error names which
+            next_action="the declared checks cannot be held to: %s — fix what it names; "
+                        "the DoD gate refuses ship until it reads" % e,
+            next_command=None, artifacts=[str(Path(root) / "codemap.yaml")], warnings=[],
+            exit_code=EXIT_NEEDS_MODEL, extra={"phase": phase, "summary_numbers": numbers},
+        ).as_dict(), []
+
+    def cmd(row):
+        return "%s --plan %s --phase %s" % (row["command"], plan_dir, phase)
+
+    warnings = ["advisory check %s: %s — `%s`" % (r["check"], r["why"], cmd(r))
+                for r in rows if r["enforcement"] != "hard"]
+    owed = [OwedCheck(check=r["check"], kind=r["problem"], why=r["why"], command=cmd(r))
+            for r in rows if r["enforcement"] == "hard"]
+    if not owed:
+        return None, warnings
+    runnable = [o for o in owed if o.kind != "unmeasured"]
+    broken = ["%s: %s" % (o.check, o.why) for o in owed if o.kind == "unmeasured"]
+    if not runnable:
+        return hs_run.StepResult(
+            state="declared_check_broken",
+            next_action="phase %s owes declared checks whose newest run could not measure — "
+                        "%s. Fix what the reason names, then run the check again"
+                        % (phase, "; ".join(broken)),
+            next_command=None, artifacts=[str(plan_dir / "artifacts")],
+            warnings=warnings, exit_code=EXIT_NEEDS_MODEL,
+            extra={"phase": phase, "owed_checks": [o.as_dict() for o in owed],
+                   "summary_numbers": numbers},
+        ).as_dict(), []
+    return hs_run.StepResult(
+        state="needs_declared_check",
+        next_action="phase %s owes %d declared check(s) the harness's own run does not prove "
+                    "now — %s. Run each, then cook next" % (
+                        phase, len(runnable),
+                        "; ".join("%s: %s (`%s`)" % (o.check, o.why, o.command) for o in runnable)),
+        # one `--all --coverage` run also proves the runner's own check
+        next_command=next((o.command for o in runnable if "--coverage" in o.command),
+                          runnable[0].command), artifacts=[str(plan_dir / "artifacts")],
+        warnings=warnings + ["could not measure — %s" % b for b in broken],
+        exit_code=EXIT_NEEDS_STEP,
+        extra={"phase": phase, "owed_checks": [o.as_dict() for o in owed],
+               "summary_numbers": numbers},
+    ).as_dict(), []
+
+
 def _stale_build_warning(plan_dir: Path, phase: str) -> "str | None":
     """Why the phase's live build record is known stale, or None: its report is
     gone, or it predates the plan's current approval. Either way it may describe a
@@ -1721,7 +2122,9 @@ def _stale_build_warning(plan_dir: Path, phase: str) -> "str | None":
     last = recs[-1]
     why = []
     if last.get("out") and not Path(last["out"]).is_file():
-        why.append("its report %s no longer exists" % last["out"])
+        why.append("its report %s no longer exists%s" % (
+            last["out"], " (a copy is kept at %s)" % last["kept"]
+            if last.get("kept") and Path(last["kept"]).is_file() else ""))
     approval, _problem = artifact_check._load_artifact(plan_dir, "plan-approval")
     approved_at = _parse_ts((approval or {}).get("ts") if isinstance(approval, dict) else None)
     recorded_at = _parse_ts(last.get("ts"))
@@ -1735,6 +2138,195 @@ def _stale_build_warning(plan_dir: Path, phase: str) -> "str | None":
             "--plan %s --phase %s --supersede" % (phase, "; ".join(why), plan_dir, phase))
 
 
+def _decision_pin(plan_dir: Path) -> "dict | None":
+    """{sha256, verdict} of the review-decision on disk, whatever its format, or None
+    when there is none to read."""
+    import hashlib
+    import json as _json
+    rec, _problem = artifact_check._load_artifact(plan_dir, "review-decision")
+    if not isinstance(rec, dict):
+        return None
+    blob = _json.dumps(rec, sort_keys=True, default=str).encode("utf-8")
+    return {"sha256": hashlib.sha256(blob).hexdigest(), "verdict": rec.get("verdict")}
+
+
+def _write_verdict_command(plan_dir: Path) -> str:
+    import runnable_command
+    return ("%s %s --verdict PASS|PASS_WITH_RISK|BLOCKED --rationale \"<why>\" "
+            "--rounds-run <N>" % (runnable_command.python_script("write_review_decision.py"),
+                                  plan_dir))
+
+
+def _review_lines(plan_dir: Path) -> list:
+    """Every live code-reviewer record, phase-level ones included, in ledger order —
+    the order the reviews were recorded in."""
+    out: list = []
+    for rec in _read_record_log(plan_dir):
+        if rec.get("role") != "code-reviewer":
+            continue
+        if rec.get("kind") == "record":
+            out.append(rec)
+        elif rec.get("kind") == "supersede":
+            out = [r for r in out if r.get("phase") != rec.get("phase")]
+    return out
+
+
+def _review_claim(plan_dir: Path, root) -> "tuple[str, bool] | None":
+    """(what the recorded reviews still owe, whether that is a fresh review) or None.
+
+    The review recorded last owns the review-decision it pinned when it was recorded
+    (the verdict is written first, then the review is recorded). It owes its verdict
+    when none is on disk; when the decision changed after it, no recorded review owns
+    that decision until the one it belongs to is recorded; and when an earlier review
+    with another report pinned the same decision, the last one never wrote its own.
+    Recording one report twice is not a second review. Lines written before records
+    pinned a decision are not judged on ownership.
+
+    It is stale when the run's verified work goes past the HEAD it was recorded at:
+    commits it never saw. A verify that adds no commit (a re-verify, the deferred-suite
+    run) leaves it standing."""
+    lines = _review_lines(plan_dir)
+    if not lines:
+        return None
+    last = lines[-1]
+    now = _decision_pin(plan_dir)
+    record = "hs-run cook record code-reviewer --plan %s --out %s"
+    if "decision" in last:
+        if now is None:
+            return ("the review recorded last (%s, at %s) has no verdict on disk — write "
+                    "it: %s, then record it again: %s"
+                    % (last.get("out"), last.get("ts"), _write_verdict_command(plan_dir),
+                       record % (plan_dir, _report_path(last))), False)
+        if last.get("decision") != now:
+            return ("review-decision (verdict %s) was written after the review recorded "
+                    "last (%s, at %s), so no recorded review owns it — record the review "
+                    "it belongs to: %s"
+                    % (now.get("verdict"), last.get("out"), last.get("ts"),
+                       record % (plan_dir, "<its report>")), False)
+        first = next((r for r in lines[:-1] if r.get("decision") == now
+                      and r.get("out_sha256") != last.get("out_sha256")), None)
+        if first is not None:
+            return ("the review recorded last (%s, at %s) has no verdict on disk: "
+                    "review-decision is still the one recorded with %s at %s (verdict %s) "
+                    "— write this review's verdict: %s, then record it again: %s. If it is "
+                    "the same review recorded under another file, retire the plan's "
+                    "review records (hs-run cook record code-reviewer --plan %s "
+                    "--supersede) and record it once"
+                    % (last.get("out"), last.get("ts"), first.get("out"), first.get("ts"),
+                       now.get("verdict"), _write_verdict_command(plan_dir),
+                       record % (plan_dir, _report_path(last)), plan_dir), False)
+    if "seen" not in last:
+        return None
+    gone = _verified_gone(plan_dir)
+    if gone:
+        return gone, False
+    seen = set(last.get("seen") or [])
+    unseen = [sha for sha, pid in _verified_patches(plan_dir).items() if pid not in seen]
+    if not unseen:
+        return None
+    return ("the review recorded last (%s, at %s) never saw commit %s%s, verified since "
+            "— a change it never read. Review again: %s, write its verdict (%s), then %s"
+            % (last.get("out"), last.get("ts"), unseen[-1][:12],
+               " (and %d more)" % (len(unseen) - 1) if len(unseen) > 1 else "",
+               _review_prompt_command(plan_dir), _write_verdict_command(plan_dir),
+               record % (plan_dir, "<file>")), True)
+
+
+def _verified_patches(plan_dir: Path) -> "dict[str, str]":
+    """sha -> patch-id of every verified commit a review reads, oldest line first. A
+    line an older harness wrote carries no patch-ids: they are read from the plan's
+    repo now, and a commit git no longer knows there is not judged."""
+    repo = plan_graph.root_for_plan_dir(plan_dir)
+    out: dict = {}
+    for r in phase_commits_log.read_records(plan_dir):
+        if r.get("kind") != "verify":
+            continue
+        ids = r.get("patch_ids")
+        out.update(ids if isinstance(ids, dict)
+                   else review_seen.patch_ids(repo, r.get("sha") or []))
+    return out
+
+
+def _review_seen(plan_dir: Path, report: "str | None" = None) -> list:
+    """The patch-ids a review recorded now could have read: every verified change,
+    and every change from the run's base to HEAD in the plan's repo and in each tree
+    the run opened or verified a phase in (a review reads the code there, verified
+    yet or not). A report recorded before — retired or not — is the same review: it
+    keeps what it saw the first time, so recording it again never widens that."""
+    for r in _read_record_log(plan_dir):
+        if (report and r.get("kind") == "record" and r.get("role") == "code-reviewer"
+                and r.get("out_sha256") == report and isinstance(r.get("seen"), list)):
+            return list(r["seen"])
+    seen = set(_verified_patches(plan_dir).values())
+    base, _tails, _measurable = _run_commit_ends(plan_dir)
+    trees = [plan_graph.root_for_plan_dir(plan_dir)] + [
+        Path(str(r["tree"])) for r in phase_commits_log.read_records(plan_dir)
+        if r.get("kind") in ("open", "verify") and r.get("tree")
+        and Path(str(r["tree"])).is_dir()]
+    for tree in dict.fromkeys(trees):
+        head = _git_head(tree)
+        if base and head:
+            seen.update(review_seen.patch_ids(
+                tree, review_seen.range_shas(tree, base, head, limit=_SEEN_RANGE_LIMIT)
+            ).values())
+    return sorted(seen)
+
+
+# The newest commits of base..HEAD a review is credited with reading unverified. Every
+# verified change is credited from the ledger whatever its age; this only bounds the
+# work done since the last verify, so a cut costs one more review, never a pass.
+_SEEN_RANGE_LIMIT = 500
+
+
+def _last_verify(plan_dir: Path) -> "dict | None":
+    lines = [r for r in phase_commits_log.read_records(plan_dir) if r.get("kind") == "verify"]
+    return lines[-1] if lines else None
+
+
+def _verified_gone(plan_dir: Path) -> "str | None":
+    """Why the run's verified work is not the code checked out, or None. The verified
+    tail must be in HEAD's history of the tree the last verify read or of the plan's
+    repo (work merged on from a worktree reads there). A ref elsewhere — a pushed
+    branch, a backup, a tag — proves the commit exists, never that the code checked
+    out is the code verified: after an amend or rebase, or on another branch, the
+    code at HEAD was never verified and no review can be judged against it. A line
+    with no tree (an older harness) is not judged."""
+    last = _last_verify(plan_dir)
+    if not last or not last.get("tree"):
+        return None
+    shas = [str(s) for s in (last.get("sha") or []) if s]
+    tail = shas[0] if shas else (str(last.get("head") or "") or None)
+    if not tail:
+        return None
+    trees = [Path(str(last["tree"])), plan_graph.root_for_plan_dir(plan_dir)]
+    heads: "list[tuple[Path, str]]" = []
+    for tree in dict.fromkeys(trees):
+        head = _git_head(tree) if tree.is_dir() else None
+        if head:
+            heads.append((tree, head))
+    if not heads or any(_git_contains(tree, head, tail) is True for tree, head in heads):
+        return None
+    return ("the run's verified work ends at commit %s, which HEAD in %s no longer holds "
+            "— history was rewritten, or another branch is checked out. Verify the code at "
+            "HEAD: hs-run cook verify --plan %s --phase %s --verdict <PASS|FAIL> "
+            "--check <kind>:<status>, then close again"
+            % (tail[:12], " or ".join("%s (%s)" % (tree, head[:12]) for tree, head in heads),
+               plan_dir, last.get("phase") or "<phase>"))
+
+
+def _git_contains(root: Path, head: str, sha: str) -> "bool | None":
+    """Whether `sha` is in `head`'s history; None when git cannot say (either is
+    unknown here, or there is no repo) — only a definite no reads as unseen work."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", *_GIT_SAFE, "-C", str(root), "merge-base",
+                            "--is-ancestor", sha, head],
+                           capture_output=True, text=True, env=_git_env())
+    except OSError:
+        return None
+    return {0: True, 1: False}.get(r.returncode)
+
+
 def _parse_ts(value):
     from datetime import datetime
     try:
@@ -1743,7 +2335,34 @@ def _parse_ts(value):
         return None
 
 
-def _append_record_log(plan_dir, role, phase, out_path) -> "str | None":
+def _keep_report(plan_dir: Path, role: str, phase, data: bytes, digest: str,
+                 suffix: str) -> Path:
+    """The copy kept of a report that lives outside `plan_dir`, content-addressed so two
+    reports of one phase never overwrite each other. Written whole or not at all: a
+    half-written copy would pass `is_file()` on every later call."""
+    target = plan_dir / "artifacts" / "records" / ("%s-%s-%s%s" % (
+        phase or "plan", role, digest[:12], suffix or ".md"))
+    if not target.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp-%d" % os.getpid())
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+        finally:
+            tmp.unlink(missing_ok=True)
+    return target
+
+
+def _report_path(rec: dict) -> "str | None":
+    """The report a ledger line points a re-run at: its own file while it is there,
+    else the copy kept in the plan (a scratchpad report is gone after a restart)."""
+    out, kept = rec.get("out"), rec.get("kept")
+    if out and not Path(out).is_file() and kept and Path(kept).is_file():
+        return kept
+    return out
+
+
+def _append_record_log(plan_dir, role, phase, out_path, root=None) -> "tuple[str | None, str | None]":
     """Best-effort append for beat 2 into the plan the verb resolved — through
     `_resolve_plan_dir_verbose`, the `--plan` -> `in_progress` ->
     approved-and-unopened -> freshly-closed chain `next`/`close` already use —
@@ -1756,35 +2375,60 @@ def _append_record_log(plan_dir, role, phase, out_path) -> "str | None":
     clear can never be told it ran (measured: a real driver hit exactly this
     ordering and the ledger stayed empty).
 
-    Returns None when the line landed, else why it did not. A miss must not
-    take the `record` beat down, but it is said: a silent skip left the review
-    gate and the per-phase projection unable to see a call the caller believes
-    it made."""
+    Returns (why the line did not land, or None; where a report outside the plan
+    was kept, or None). A miss must not take the `record` beat down, but it is
+    said: a silent skip left the review gate and the per-phase projection unable
+    to see a call the caller believes it made."""
     try:
         import hashlib
         import hook_runtime
-        digest = hashlib.sha256(Path(out_path).read_bytes()).hexdigest()
+        data = Path(out_path).read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        inside = Path(out_path).resolve().is_relative_to(Path(plan_dir).resolve())
+        kept, kept_problem = None, None
+        if not inside:
+            try:
+                kept = _keep_report(Path(plan_dir), role, phase, data, digest,
+                                    Path(out_path).suffix)
+            except OSError as exc:  # the copy is a convenience; the ledger line is not
+                kept_problem = exc
+        pins = role == "code-reviewer"
         _append_record_log_entry(Path(plan_dir), RecordLogEntry(
             role=role, phase=phase, out=str(out_path), out_sha256=digest,
+            kept=str(kept) if kept else None,
             actor=hook_runtime.resolve_actor(),
             ts=write_verification._now_iso(),
+            decision=_decision_pin(Path(plan_dir)) if pins else None,
+            pins_decision=pins,
+            seen=_review_seen(Path(plan_dir), report=digest) if pins else None,
         ).as_dict())
     except Exception as exc:  # noqa: BLE001 — the ledger write must never break the beat
-        return "record ledger line not written: %s" % exc
-    return None
+        return "record ledger line not written: %s" % exc, None
+    if kept_problem is not None:
+        return None, ("%s lives outside the plan and was not kept: %s — the ledger line "
+                      "names only the original" % (out_path, kept_problem))
+    note = (None if kept is None else
+            "%s lives outside the plan; kept a copy at %s (the ledger line names both)"
+            % (out_path, kept))
+    return None, note
 
 
-def _prompt_run_id(session, at):
-    """The run id of the `cook prompt` call a `PromptLogEntry` was written by: the
-    first such run-ledger line of `session` at or after the entry's own clock."""
+def _prompt_run(session, at=None):
+    """(run id, epoch clock) of a `cook prompt` call of `session`: the first one at
+    or after `at` (the clock of the `PromptLogEntry` it wrote), else the latest."""
+    found = (None, None)
     for rec in hs_run.read_run_ledger():
         if (rec.session == session and rec.domain == "cook" and rec.verb == "prompt"
-                and rec.run_id and float(rec.ts or 0) >= at):
-            return rec.run_id
-    return None
+                and rec.run_id):
+            ts = float(rec.ts or 0)
+            if at is None:
+                found = (rec.run_id, ts)
+            elif ts >= at:
+                return rec.run_id, ts
+    return found
 
 
-def _attest_spawn(role, prompt=None):
+def _attest_spawn(role, prompt=None, plan_dir=None):
     """(attested, note) — did a spawn of `role` land against the `hs-run cook
     prompt` call this record pairs with?
 
@@ -1794,17 +2438,18 @@ def _attest_spawn(role, prompt=None):
     only a transcript fact.
 
     `prompt` is the plan's own `PromptLogEntry` for this role and phase; its run
-    is looked up by session and clock, so a later prompt for ANOTHER phase does not
-    stand in for it. Without one (no plan resolved) the session's latest prompt
-    call is used. The session is resolved exactly as the run-ledger WRITER resolves
-    it (`hs_run._resolve_session`: the env id, else the newest session file) —
-    reading only the env var matched nothing on every Bash-tool call, where that
-    var is unset.
+    is looked up by session and clock. Without one (no plan resolved) the session's
+    latest prompt call is used. The session is resolved exactly as the run-ledger
+    WRITER resolves it (`hs_run._resolve_session`: the env id, else the newest
+    session file) — reading only the env var matched nothing on every Bash-tool
+    call, where that var is unset.
 
-    Matching is on run_id AND session AND subagent_type. Dropping the last one
-    would leave a check that proves only that SOMETHING was spawned, so a model
-    could spawn any agent and still record a `developer` step — the laundering
-    this exists to catch, surviving it.
+    A spawn matches on session AND subagent_type AND either the call's run_id (the
+    stamp the dispatcher put on it) or its clock: at or after this prompt, before
+    the plan's next prompt of the same role and session — a spawn after that one
+    answers it, so an earlier phase built in place never borrows a later phase's
+    spawn. Dropping subagent_type would leave a check that proves only that
+    SOMETHING was spawned — the laundering this exists to catch, surviving it.
 
     Returns `(False, note)` for every hole in the chain, and the note says NO
     EVIDENCE, never "no spawn happened". The difference is the whole design: the
@@ -1816,14 +2461,18 @@ def _attest_spawn(role, prompt=None):
         import spawn_provenance
 
         session = hs_run._resolve_session() or ""
+        until = None
         if prompt is not None:
             session = str(prompt.get("session") or session)
-            run_id = _prompt_run_id(session, float(prompt.get("at") or 0))
+            at = float(prompt.get("at") or 0)
+            run_id, since = _prompt_run(session, at)
+            if not at:
+                since = None  # an entry with no clock pairs by run id alone
+            until = _next_prompt_at(plan_dir, prompt) if plan_dir else None
         else:
             # `hs_run` owns the ledger format and its location — the writer's own
             # default, so reader and writer cannot look in two places.
-            run_id = hs_run.latest_run_id(session=session, domain="cook",
-                                          verb="prompt")
+            run_id, since = _prompt_run(session)
         if not run_id:
             # Names Task explicitly: this is still the "did a real
             # Task(subagent_type=...) spawn happen" question, just answered at
@@ -1852,7 +2501,7 @@ def _attest_spawn(role, prompt=None):
         # collapsing it into False turns a strict check into a wrong one, even in
         # block mode.
         seen = spawn_provenance.has_spawn(session=session, run_id=run_id,
-                                          subagent_type=want)
+                                          subagent_type=want, since=since, until=until)
         if seen is None:
             return None, ("the spawn ledger path exists but is not a readable "
                            "file — no evidence either way")
@@ -1882,12 +2531,21 @@ def _record(ns) -> dict:
         warnings = [w for w in (result.get("warnings") or [])
                     if w is not _HARD_CASE_WARNING]
         prompt = _matching_prompt(plan_dir, role, ns.phase) if plan_dir else None
-        if (role == "developer" and prompt is not None
-                and prompt.get("posture_mode") == "in_place"):
-            # The paired prompt told main to build the phase itself: no spawn was
-            # asked for, so there is nothing to attest and nothing to refuse.
+        # With no paired prompt, the posture that prompt would have answered: a plan
+        # built in the main session owes no spawn whether or not anyone asked first.
+        unpaired = (_phase_posture(Path(plan_dir), None, ns.phase, (), ns.ctx.root)[0]
+                    if role == "developer" and plan_dir and prompt is None else None)
+        if role == "developer" and (
+                (prompt is not None and prompt.get("posture_mode") == "in_place")
+                or (unpaired is not None and unpaired.mode == "in_place")):
+            # The phase is built in place: no spawn was asked for, so there is
+            # nothing to attest and nothing to refuse.
             result["spawn_expected"] = False
-            result["warnings"] = warnings
+            result["warnings"] = warnings + ([
+                "no `hs-run cook prompt developer --phase %s` is recorded; the phase's "
+                "posture answers in place (%s), so no spawn is owed"
+                % (ns.phase, unpaired.reason)]
+                if unpaired is not None else [])
             return hs_run_next_command.finalize(result)
         result["spawn_expected"] = True
         if plan_dir and prompt is None:
@@ -1898,7 +2556,7 @@ def _record(ns) -> dict:
                 "evidence either way)"
                 % (role, " --phase %s" % ns.phase if ns.phase else "", plan_dir))
         else:
-            attested, note = _attest_spawn(role, prompt)
+            attested, note = _attest_spawn(role, prompt, plan_dir)
             if (attested is False and plan_dir and prompt is not None
                     and prompt.get("posture_mode") == "subagent"):
                 note += ("; the paired prompt asked for a subagent — if this plan's phases "
@@ -1929,7 +2587,7 @@ def _record(ns) -> dict:
     return hs_run_next_command.finalize(result)
 
 
-RECORD = hs_run.verb(_record, options=("plan", "out", "phase"), optional=("role",),
+RECORD = hs_run.verb(_cook_door(_record), options=("plan", "out", "phase"), optional=("role",),
                     flags=("supersede",),
                     helps={"plan": _PLAN_HELP,
                            "supersede": "retire this role's earlier records for --phase "
@@ -2032,11 +2690,12 @@ def _cmd_record_impl(root, role, *, out=None, phase=None, plan=None) -> dict:
     if why:
         return _unknown_phase(plan_dir, why)
     ledger_problem: "str | None"
+    kept_note: "str | None" = None
     if plan_dir is None:
         ledger_problem = ("record ledger line not written: %s"
                           % _no_plan_message(miss))
     else:
-        ledger_problem = _append_record_log(plan_dir, role, phase, out_path)
+        ledger_problem, kept_note = _append_record_log(plan_dir, role, phase, out_path, root)
     plan_arg = " --plan %s" % plan_dir if plan_dir is not None else ""
     if role == "developer":
         follow_up = "hs-run cook verify%s --phase %s %s" % (
@@ -2052,6 +2711,14 @@ def _cmd_record_impl(root, role, *, out=None, phase=None, plan=None) -> dict:
         follow_up = "hs-run cook next%s" % plan_arg
         tier = EXIT_NEEDS_STEP
         follow_up_cmd = follow_up
+    claim = (_review_claim(plan_dir, root)
+             if role == "code-reviewer" and plan_dir is not None and not ledger_problem
+             else None)
+    unwritten = claim[0] if claim and not claim[1] else None
+    if unwritten:
+        # The recorded review's verdict must be READ from its report to be written:
+        # a judgment, so the step is the model's.
+        follow_up, follow_up_cmd, tier = unwritten, None, EXIT_NEEDS_MODEL
     extra = {"role": role}
     if plan_dir is not None:
         extra["plan"] = str(plan_dir)
@@ -2060,7 +2727,7 @@ def _cmd_record_impl(root, role, *, out=None, phase=None, plan=None) -> dict:
         next_action=follow_up,
         next_command=follow_up_cmd,
         artifacts=[out_path],
-        warnings=[_HARD_CASE_WARNING] + ([ledger_problem] if ledger_problem else []),
+        warnings=[_HARD_CASE_WARNING] + [w for w in (ledger_problem, kept_note) if w],
         exit_code=tier,
         extra=extra,
     ).as_dict()
@@ -2137,12 +2804,22 @@ class ReviewDisposition:
     on_disk_verdict: "str | None" = None
     # Why a review-decision file that IS there could not be read; None when absent.
     on_disk_problem: "str | None" = None
+    # The plan was reopened: no measured waiver stands in for its fresh review.
+    reopened: bool = False
+    # What the recorded reviews still owe when the decision on disk is not theirs:
+    # the latest round's verdict unwritten, or a verify after the review. The
+    # sentence names the exact move, so it replaces the generic one.
+    owed: "str | None" = None
+    # `owed` asks for a new review (not only a verdict or a record): the prompt
+    # command rides along, as for any review still owed.
+    fresh_review: bool = False
 
     def as_dict(self) -> dict:
         return {"cleared": self.cleared, "record": self.record,
                 "waiver": self.waiver, "triggers": list(self.triggers),
                 "why": self.why, "on_disk_verdict": self.on_disk_verdict,
-                "on_disk_problem": self.on_disk_problem}
+                "on_disk_problem": self.on_disk_problem, "reopened": self.reopened,
+                "owed": self.owed}
 
 
 def _review_gate(plan_dir: Path, root) -> "ReviewGate":
@@ -2204,11 +2881,17 @@ def _review_owed(plan_dir: Path, disposition: "ReviewDisposition") -> "tuple[str
     of picking the command out of the sentence."""
     record = ("hs-run cook record code-reviewer --plan %s --out <file>" % plan_dir)
     verdict = disposition.on_disk_verdict
+    if disposition.owed:
+        return disposition.owed, ({"review_prompt_command": _review_prompt_command(plan_dir)}
+                                  if disposition.fresh_review else {})
     if verdict in _CLOSEABLE_VERDICTS:
         return ("plan-level review-decision is on disk (verdict %r) but was never "
                 "recorded: %s, with --out the reviewer's report" % (verdict, record)), {}
     beats = "%s, then %s" % (_review_prompt_command(plan_dir), record)
-    if disposition.on_disk_problem:
+    if disposition.reopened and verdict is None:
+        head = ("the plan was reopened, so it owes a fresh review (the one it closed "
+                "on was moved aside, and no measured waiver stands in): ")
+    elif disposition.on_disk_problem:
         head = ("plan-level review-decision is on disk but cannot be read (%s) — "
                 "repair it, or review again: " % disposition.on_disk_problem)
     elif verdict is not None:
@@ -2248,12 +2931,21 @@ def _review_disposition(plan_dir: Path, root) -> "ReviewDisposition":
         problem = problem if problem not in (None, "missing") else "it carries no verdict"
         return ReviewDisposition(cleared=False, on_disk_problem=problem,
                                  why="review-decision cannot be read: %s" % problem)
+    # A recorded review that owes its verdict is an answer, even with no decision on
+    # disk: no measured waiver stands in for a review that happened.
+    claim = _review_claim(plan_dir, root)
+    if claim and not claim[1]:
+        return ReviewDisposition(cleared=False, on_disk_verdict=verdict, owed=claim[0],
+                                 why=claim[0])
     if verdict is not None and verdict not in _CLOSEABLE_VERDICTS:
         return ReviewDisposition(cleared=False, on_disk_verdict=verdict,
                                  why="review-decision verdict %r cannot close the plan"
                                      % verdict)
     if verdict in _CLOSEABLE_VERDICTS:
         if _has_recorded_role(plan_dir, "code-reviewer"):
+            if claim:
+                return ReviewDisposition(cleared=False, on_disk_verdict=verdict,
+                                         owed=claim[0], why=claim[0], fresh_review=True)
             return ReviewDisposition(cleared=True, record=rec, on_disk_verdict=verdict)
         return ReviewDisposition(
             cleared=False, on_disk_verdict=verdict,
@@ -2262,6 +2954,11 @@ def _review_disposition(plan_dir: Path, root) -> "ReviewDisposition":
                  "artifact on disk is not proof the CLI's own record beat ran"
                  % rec.get("verdict")),
         )
+    if phase_commits_log.reopens(plan_dir):
+        return ReviewDisposition(
+            cleared=False, reopened=True,
+            why=("the plan was reopened: its review-decision was moved aside and a "
+                 "fresh, recorded review is owed — a measured waiver does not apply"))
     gate = _review_gate(plan_dir, root)
     if not gate.required:
         return ReviewDisposition(cleared=True, waiver=gate.why)
@@ -2277,7 +2974,7 @@ def _finalize_projection(plan_dir: Path, root, comp: dict, forced_phase=None) ->
     `status`): the gate is the plan's (`gate_scope`), the count it rests on
     (`summary_numbers`), and — when a passed phase was named — that phase's own
     standing first, so a plan-level gate never reads as that phase's gap."""
-    paused = sorted(str(n) for n in comp.get("paused_phases") or ())
+    paused = sorted((str(n) for n in comp.get("paused_phases") or ()), key=plan_graph.phase_sort_key)
     held = "paused, not counted: %s" % ", ".join(paused) if paused else ""
     numbers = "%d/%d phase(s) passed" % (len(comp["passed_phases"]), comp["n_total"])
     head = "every counted phase passed (%s)" % held if held else "every phase passed"
@@ -2286,8 +2983,15 @@ def _finalize_projection(plan_dir: Path, root, comp: dict, forced_phase=None) ->
     result.setdefault("summary_numbers", "%s; %s" % (numbers, held) if held else numbers)
     if forced_phase is None:
         return result
-    passed = "phase %s already passed (verification-%s.json counts it)" % (
-        forced_phase, forced_phase)
+    if forced_phase in (result.get("phases") or ()):
+        result.update(phase=forced_phase, next_action=(
+            "phase %s was reopened and owes its verify again — %s"
+            % (forced_phase, result["next_action"])))
+        return result
+    passed, records = _passed_sentence(plan_dir, forced_phase)
+    result.update(records)
+    if records.get("snapshot_note"):
+        result["artifacts"] = list(result.get("artifacts") or []) + [records["latest_record"]]
     if result["state"] == "completed":
         action = "%s and the plan is closed — nothing left" % passed
     elif forced_phase in (result.get("missing_grid_phases") or ()):
@@ -2323,6 +3027,19 @@ def _finalize_state(plan_dir: Path, root, head: str) -> dict:
     says so — a run that measured small and low-risk falls THROUGH to the
     grid gate and close, carrying the waiver and its numbers in warnings
     so the skipped gate stays visible instead of silent."""
+    reverify = _reverify_owed(plan_dir)
+    if reverify:
+        return hs_run.StepResult(
+            state="needs_reopen_verify", next_action="%s — %s" % (head, reverify[0]),
+            artifacts=[str(plan_dir)], warnings=[], exit_code=EXIT_NEEDS_MODEL,
+            extra={"phases": reverify[1]}).as_dict()
+    if (defer_suite_carry.resolve_defer_suite_carry(plan_dir)["carried"]
+            and _suite_debt_unpaid(plan_dir)):
+        action, debt_warnings = _debt_repay_message(Path(root))
+        return hs_run.StepResult(
+            state="needs_suite_run", next_action="%s — %s" % (head, action),
+            artifacts=[str(plan_dir)], warnings=debt_warnings,
+            exit_code=EXIT_NEEDS_MODEL).as_dict()
     rec = None
     review_waiver = None
     disposition = _review_disposition(plan_dir, root)
@@ -2463,13 +3180,18 @@ _ABSENT_IN_SCOPE_WARNING = (
     "run reports them missing instead of passing without them; write them, or "
     "fix the declared paths in plan-graph.yaml")
 
+_UNCLAIMED_WARNING = (
+    "phase %s declares test(s) no runner claims by suffix (%s) — they are left out of "
+    "the command: run them by hand, or declare a runner whose test_exts covers them")
+
 _DECLARED_ABSENT_WARNING = (
     "defer_suite carried but phase %s declares at least one test path that "
     "does not exist on disk — create the missing test file(s) or fix the "
     "declared paths in plan-graph.yaml. Advisory only; this does not block")
 
 
-def _phase_scoped_next_action(plan_dir: Path, phase: str, default_next_action: str):
+def _phase_scoped_next_action(plan_dir: Path, phase: str, default_next_action: str,
+                              root: "Path | None" = None):
     """(next_action, extra_warnings) for `needs_implementation` once
     `defer_suite` (phase 2's own carry contract) is folded in — nodes phase
     1's `graph_test_scope.resolve_test_scope` into the ONE state this plan's
@@ -2507,8 +3229,19 @@ def _phase_scoped_next_action(plan_dir: Path, phase: str, default_next_action: s
         # and made the two shapes behave differently for no reason a reader could
         # act on.
         named = sorted(set(scope["files"]) | set(scope["declared"]))
-        cmd = "python3 -m pytest %s -q" % " ".join(shlex.quote(f) for f in named)
+        import test_runners
+        at = root if root is not None else plan_dir.parent.parent
+        try:
+            shown: "Path | str" = plan_dir.resolve().relative_to(Path(at).resolve()).as_posix()
+        except ValueError:
+            shown = plan_dir
+        commands, unclaimed = test_runners.commands(at, named, plan=shown, phase=phase)
+        cmd = "; ".join(commands) or "(no runner claims a declared test — see warnings)"
+        harness = any(c.startswith(test_runners.render(test_runners.HARNESS_VERB)) for c in commands)
         warnings = []
+        if unclaimed:
+            # a path is not a command: joined into the command line it ran as one
+            warnings.append(_UNCLAIMED_WARNING % (phase, ", ".join(unclaimed)))
         if scope["declared"]:
             warnings.append(_ABSENT_IN_SCOPE_WARNING
                             % (phase, ", ".join(sorted(scope["declared"]))))
@@ -2519,7 +3252,9 @@ def _phase_scoped_next_action(plan_dir: Path, phase: str, default_next_action: s
             "--phase %s, hs-run cook record developer --phase %s --out "
             "<file>, hs-run cook verify --phase %s --verdict ... --check ..."
             % (phase, cmd,
-               _ABSENT_EXIT_EXPLANATION if scope["declared"]
+               test_runners.HARNESS_EXIT_NOTE if harness and not any(
+                   not c.startswith(test_runners.render(test_runners.HARNESS_VERB)) for c in commands)
+               else _ABSENT_EXIT_EXPLANATION if scope["declared"]
                else _EXIT5_EXPLANATION,
                phase, phase, phase)
         ), warnings
@@ -2624,7 +3359,7 @@ def _post_artifact_next_action(plan_dir: Path, phase: str, verdict, post_why) ->
 
 # ------------------------------------------------- per-phase commit log
 
-_PHASE_COMMITS_FILE = "phase-commits.jsonl"
+_PHASE_COMMITS_FILE = phase_commits_log.FILE_NAME
 
 
 @_attrs.define(frozen=True, kw_only=True)
@@ -2674,14 +3409,22 @@ class PhaseCommitRecord:
     # bracket's tail shorter than the work actually there. A computed range already
     # ends at HEAD's own line, so it carries none.
     head: "str | None" = _attrs.field(default=None)
+    # The tree this verify read, and the patch-id of each listed commit a review reads
+    # (`review_seen`): what a recorded review is judged against, by content.
+    tree: "str | None" = _attrs.field(default=None)
+    patch_ids: "dict | None" = _attrs.field(default=None)
 
     def as_dict(self) -> dict:
-        out = {"kind": "verify", "phase": self.phase, "sha": list(self.sha),
-               "actor": self.actor, "ts": self.ts}
+        out: dict = {"kind": "verify", "phase": self.phase, "sha": list(self.sha),
+                     "actor": self.actor, "ts": self.ts}
         if self.supersedes:
             out["supersedes"] = self.supersedes
         if self.head:
             out["head"] = self.head
+        if self.tree:
+            out["tree"] = self.tree
+        if self.patch_ids is not None:
+            out["patch_ids"] = dict(self.patch_ids)
         return out
 
 
@@ -2726,8 +3469,9 @@ class PhaseStatusRow:
 
 def _phase_record_files(plan_dir: Path, phase: str) -> dict:
     """{latest_record, snapshot_note} for one phase, each present only when it says
-    something. The snapshot is first-wins: a re-verify lands in phase-latest only,
-    so a reader of verification-<phase>.json alone sees the first run's record."""
+    something. The snapshot is first-wins, replaced only as
+    `verification_snapshot._supersede` allows, so a reader of
+    verification-<phase>.json alone may not see the latest verify."""
     art = plan_dir / "artifacts"
     latest = art / ("phase-latest-%s.json" % phase)
     rec = _phase_snapshot_record(plan_dir, phase)
@@ -2743,8 +3487,10 @@ def _phase_record_files(plan_dir: Path, phase: str) -> dict:
         out["snapshot_note"] = (
             "verification-%s.json holds an earlier record (ts %s, verdict %s) — the "
             "snapshot completion and the hard-stage snapshot sweep read; first-wins, so a "
-            "re-verify replaces it only when it does not count the phase and the new one "
-            "does. The latest verify (ts %s, verdict %s) is %s, which completion reads "
+            "re-verify replaces it only when it does not count the phase, or the new "
+            "one shows the DoD gate strictly more (a passing result file for one more "
+            "type, or no name outside test_types where it had one, dropping none). The "
+            "latest verify (ts %s, verdict %s) is %s, which completion reads "
             "only to un-count a regression. The DoD test-policy check reads "
             "verification.json, the plan's last write"
             % (phase, snap.get("ts"), snap.get("verdict"), rec.get("ts"),
@@ -2753,7 +3499,7 @@ def _phase_record_files(plan_dir: Path, phase: str) -> dict:
 
 
 def _phase_commits_path(plan_dir: Path) -> Path:
-    return plan_dir / "artifacts" / _PHASE_COMMITS_FILE
+    return phase_commits_log.path(plan_dir)
 
 
 def _append_phase_commits_record(plan_dir: Path, record: dict) -> None:
@@ -2772,23 +3518,8 @@ def _append_phase_commits_record(plan_dir: Path, record: dict) -> None:
 
 
 def _read_phase_commits_records(plan_dir: Path) -> list:
-    """Every well-formed line, oldest-first — a corrupt line degrades to
-    "not there" (skipped), never a crash: this is a read path other verbs'
-    happy path does not depend on, so it must never take one down."""
-    path = _phase_commits_path(plan_dir)
-    if not path.is_file():
-        return []
-    import json as _json
-    out = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(_json.loads(line))
-        except ValueError:
-            continue
-    return out
+    """Every well-formed line, oldest-first (`phase_commits_log.read_records`)."""
+    return phase_commits_log.read_records(plan_dir)
 
 
 def _opens(plan_dir: Path, phase: "str | None" = None) -> list:
@@ -2863,7 +3594,50 @@ def _git_head(root: Path) -> "str | None":
     return sha or None
 
 
-def _mark_phase_open(plan_dir: Path, phase: str, root: Path, *, claimed: bool = False) -> None:
+def _declared_branch_home(plan_dir: Path, root: Path) -> "tuple[str, str] | None":
+    """(branch, worktree) when the plan declares a branch another worktree of this repo
+    has checked out and `root`'s HEAD does not hold that branch's tip -- judged by
+    ancestry, as the facts' branch warning is, so a work branch cut from the declared
+    one is its home too. None otherwise, including a branch no worktree holds (nowhere
+    better to point at) and any git that cannot be read."""
+    import subprocess
+    from hs_run_facts import engine as facts_engine
+    parsed = frontmatter_parser.parse_file(Path(plan_dir) / "plan.md")
+    branch = facts_engine.declared_branch(parsed.get("frontmatter"))
+    if not branch:
+        return None
+
+    def git(*argv: str) -> "subprocess.CompletedProcess | None":
+        try:
+            return subprocess.run(["git", *_GIT_SAFE, "-C", str(root), *argv],
+                                  capture_output=True, text=True, env=_git_env())
+        except OSError:
+            return None
+
+    listed = git("worktree", "list", "--porcelain")
+    if listed is None or listed.returncode != 0:
+        return None
+    home, path = None, None
+    for line in listed.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line == "branch refs/heads/%s" % branch:
+            home = path
+    # a worktree whose directory is gone (prunable: a /tmp tree after a reboot) is no home
+    if not home or not Path(home).is_dir() or Path(home).resolve() == Path(root).resolve():
+        return None
+    tip, head = git("rev-parse", "--verify", "--quiet", "--end-of-options",
+                    branch + "^{commit}"), _git_head(root)
+    if tip is None or tip.returncode != 0 or not head:
+        return None
+    held = git("merge-base", "--is-ancestor", tip.stdout.strip(), head)
+    if held is not None and held.returncode == 0:
+        return None
+    return branch, str(Path(home).resolve())
+
+
+def _mark_phase_open(plan_dir: Path, phase: str, root: Path, *,
+                     claimed: bool = False) -> "dict | None":
     """The FIRST time `phase` is projected as `needs_implementation`, stamp
     the CURRENT worktree's own HEAD as that phase's commit-range boundary.
     A repeat call for the SAME phase is a no-op — the mark must never move
@@ -2884,21 +3658,27 @@ def _mark_phase_open(plan_dir: Path, phase: str, root: Path, *, claimed: bool = 
     empty commit list for this phase instead of failing verify.
 
     `claimed` on a tree that already holds an unclaimed mark appends a claim
-    carrying that SAME mark: the boundary stays first-wins."""
+    carrying that SAME mark: the boundary stays first-wins. Returns the record
+    it appended, or None when it wrote nothing."""
     import hook_runtime
+    import harness_checks
+    if harness_checks.marks_removed(plan_dir):
+        return None
     here = str(Path(root).resolve())
     first = _phase_open_record(plan_dir, phase, root)
     if first is not None:
         if not claimed or any(r.get("claimed") and r.get("tree") == here
                               for r in _opens(plan_dir, phase)):
-            return
+            return None
         head = first.get("mark")
     else:
         head = _git_head(root)
-    _append_phase_commits_record(plan_dir, PhaseOpenRecord(
+    record = PhaseOpenRecord(
         phase=phase, mark=head, tree=here, claimed=claimed,
         actor=hook_runtime.resolve_actor(), ts=write_verification._now_iso(),
-    ).as_dict())
+    ).as_dict()
+    _append_phase_commits_record(plan_dir, record)
+    return record
 
 
 def _phase_commits_since_mark(root: Path, mark: str) -> list:
@@ -2992,6 +3772,9 @@ def _record_posture_flags(plan_dir, phase, flags) -> None:
         pass
 
 
+_NOT_IN_HISTORY = "not in HEAD's history"
+
+
 def _off_own_line(root: Path, shas: list) -> list:
     """[(sha, why)] for each of `shas` that is not this branch's own work: a merge
     commit, or a commit off HEAD's first-parent line (it came in through a merge).
@@ -3006,8 +3789,145 @@ def _off_own_line(root: Path, shas: list) -> list:
     if line is None or merges is None:
         return []
     line_set, merge_set = set(line), set(merges)
-    return [(c, "a merge" if c in merge_set else "not on HEAD's first-parent line")
+    return [(c, "a merge" if c in merge_set
+             else "not on HEAD's first-parent line" if _is_ancestor(root, c)
+             else _NOT_IN_HISTORY)
             for c in shas if c in merge_set or c not in line_set]
+
+
+def _own_line_listing(root: Path, mark: "str | None") -> str:
+    """What the refusal's `rev-list` answers, run rather than left to the reader: a
+    bare "lists them" with an empty field beside it read as "none" on a line of 99."""
+    if mark and not _is_ancestor(root, mark):
+        # A rewrite since the phase opened: the range would count the base's commits
+        # as the phase's own.
+        return ("does not list them here: the phase's mark %s is not in HEAD's history "
+                "(rewritten since the phase opened), so the range takes in other work too"
+                % mark[:12])
+    out = _git_stdout(root, "rev-list", "--first-parent", "--no-merges",
+                      "%s..HEAD" % mark) if mark else None
+    if out is None:
+        return "lists them"
+    own = out.split()
+    if not own:
+        return "lists none: the line has no commit of its own since the phase's mark"
+    return "lists %d commit(s), newest first: %s" % (
+        len(own), _listed([c[:9] for c in own], 5, "commit(s)"))
+
+
+def _where_they_are_own(root: Path, plan_dir: Path, phase: "str | None",
+                        off: list, kept: list) -> str:
+    """The refusal's way out for named non-merge commits off this HEAD's first-parent
+    line (`off`, those `kept` among them). One not in HEAD's history is not this
+    tree's to keep: merge it first, and the next refusal reckons with it. One another
+    phase's last verify recorded is that phase's. The rest may be this phase's own,
+    built on another line and merged here. A phase keeps its last verify's list only,
+    so the way out names them all, kept ones too: a verify from a worktree whose HEAD
+    is the newest records them when that one line holds them all, and this tree then
+    keeps them. Which line built the phase the engine cannot tell (a lane merged into
+    the integration branch and the reverse have one shape), so for commits merged here
+    it states the rule and the flags. Commits not in HEAD's history at all go to the ONE
+    live worktree whose first-parent line holds every one of them, when there is one
+    (`_worktree_holding`); otherwise the advice is to merge them here first."""
+    if not phase or not off:
+        return ""
+    def counted(n: int, rest: str) -> str:
+        return "%d %s %s" % (n, "is" if n == 1 else "are", rest)
+
+    said = ""
+    taken: dict = {}
+    for rec in _read_phase_commits_records(plan_dir):
+        if rec.get("kind") == "verify" and rec.get("phase") not in (None, phase):
+            taken[str(rec["phase"])] = set(rec.get("sha") or [])
+    owner = {c: p for p, recorded in sorted(taken.items()) for c in recorded}
+    others = [c for c, why in off
+              if why != _NOT_IN_HISTORY and c not in kept and c in owner]
+    if others:
+        said += ". Not this phase's, by another phase's last verify: %s" % _listed(
+            ["%s is phase %s's" % (c[:9], owner[c]) for c in others], 5, "commit(s)")
+    unmerged = [c for c, why in off if why == _NOT_IN_HISTORY]
+    if unmerged:
+        read = ". HEAD read: %s" % _tree_and_branch(root)
+        holder = _worktree_holding(root, [c for c, _why in off])
+        if holder is not None:
+            # Only that worktree's line holds them: it is where the phase was built,
+            # and merging into a tree it was never built in is not the way out.
+            return said + (". %s; %s (branch %s) holds all of them on its own line: run "
+                           "this verify from %s%s" % (
+                               counted(len(unmerged), _NOT_IN_HISTORY), holder[0],
+                               holder[1], holder[0], read))
+        # A way out for the merged ones now would be replaced by the verify that takes
+        # these after their merge: one verify, once all are here, keeps them all.
+        return said + ". %s: merge %s here first, then run this verify again%s" % (
+            counted(len(unmerged), _NOT_IN_HISTORY), "it" if len(unmerged) == 1 else "them",
+            read)
+    wanted = [c for c, _why in off if c not in others]
+    if not set(wanted) - set(kept):
+        return said
+    out = _git_stdout(root, "merge-base", "--independent", *wanted)
+    newest = out.split() if out is not None else []
+    line = (_git_stdout(root, "rev-list", "--first-parent", newest[0])
+            if len(newest) == 1 else "")
+    if out is None or line is None:
+        return said + (". git could not say whether one line holds all %d of these, so "
+                       "this names no verify that records them" % len(wanted))
+    if not set(wanted) <= set(line.split()):
+        return said + (". A phase keeps the list of its last verify, and no one line holds "
+                       "all %d of these on its first-parent history, so no single verify "
+                       "records them" % len(wanted))
+    return said + (". A phase built in another worktree is verified there, before or after "
+                   "its merge, from a worktree whose HEAD is its newest commit (`git "
+                   "worktree add --detach <dir> %s` makes one): run this verify there with "
+                   "--phase %s --plan %s --sha %s; once it has recorded them, a verify here "
+                   "keeps them as the phase's own"
+                   % (newest[0][:12], shlex.quote(str(phase)),
+                      shlex.quote(str(Path(plan_dir).resolve())),
+                      ",".join(c[:12] for c in wanted)))
+
+
+def _tree_and_branch(root: Path) -> str:
+    """`<tree> (branch <b>)`, or `(detached at <sha>)`: which HEAD a verify read."""
+    branch = (_git_stdout(root, "symbolic-ref", "-q", "--short", "HEAD") or "").strip()
+    if branch:
+        return "%s (branch %s)" % (Path(root).resolve(), branch)
+    head = (_git_stdout(root, "rev-parse", "--short=12", "HEAD") or "?").strip()
+    return "%s (detached at %s)" % (Path(root).resolve(), head)
+
+
+def _worktree_holding(root: Path, shas: list) -> "tuple[str, str] | None":
+    """(path, branch) of the ONE other worktree whose HEAD's first-parent line holds
+    every one of `shas` — the line a verify run there checks them against — else None.
+    A worktree whose dir is gone (`prunable`: deleted without `worktree remove`) is no
+    place to run anything and is skipped."""
+    out = _git_stdout(root, "worktree", "list", "--porcelain")
+    if not out or not shas:
+        return None
+    here = Path(root).resolve()
+    found = []
+    for block in out.strip().split("\n\n"):
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        path, head = fields.get("worktree"), fields.get("HEAD")
+        if (not path or not head or Path(path).resolve() == here
+                or any(line.split(" ", 1)[0] == "prunable" for line in block.splitlines())
+                or not Path(path).is_dir()):
+            continue
+        line = _git_stdout(root, "rev-list", "--first-parent", head)
+        if line is not None and set(shas) <= set(line.split()):
+            found.append((str(Path(path).resolve()),
+                          (fields.get("branch") or "").replace("refs/heads/", "") or "detached"))
+    return found[0] if len(found) == 1 else None
+
+
+def _is_ancestor(root: Path, sha: str) -> bool:
+    """Whether `sha` is in HEAD's history at all — merged in, not merely recorded."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", *_GIT_SAFE, "-C", str(root), "merge-base",
+                            "--is-ancestor", sha, "HEAD"],
+                           capture_output=True, text=True, env=_git_env())
+    except OSError:
+        return False
+    return r.returncode == 0
 
 
 def _made_on_other_branches(root: Path, shas: list) -> "dict[str, list]":
@@ -3095,8 +4015,106 @@ def _resolve_named_commits(root: Path, raw: str) -> "tuple[list, list]":
     return sorted(dict.fromkeys(full), key=depth, reverse=True), []
 
 
+def _phase_commit_set(plan_dir: Path, phase: str, root: Path, *,
+                      named: "list | None" = None) -> "tuple[list, list]":
+    """(shas, warnings): the commits THIS verify covers for `phase`, writing nothing,
+    so the record's blast radius can be scoped by them before the write. A phase with
+    no open mark yet covers none: the mark `_record_phase_commits` sets is HEAD now."""
+    warnings: list = []
+    opened = _phase_open_record(plan_dir, phase, root)
+    elsewhere = [r.get("tree") for r in _opens(plan_dir, phase) if r.get("tree")]
+    mark = _phase_open_mark(plan_dir, phase, root) if opened is not None else None
+    if named is not None:
+        shas = list(named)
+        made = _made_on_other_branches(root, shas)
+        mine = _committed_on_this_branch(root, list(made))
+        made = {c: b for c, b in made.items() if c not in mine}
+        if made:
+            warnings.append(
+                "phase %s: %d named commit(s) also sit on the first-parent line of a branch "
+                "that does not hold HEAD: %s — this phase's own work fast-forwarded "
+                "there needs nothing; if they are that branch's base history, verify "
+                "again without them and the later record replaces this one" % (
+                    phase, len(made), _listed(
+                    ["%s (%s)" % (c[:9], _listed(sorted(made[c]), 3))
+                     for c in shas if c in made], 5, "commit(s)")))
+        return shas, warnings
+    shas = _phase_commits_since_mark(root, mark) if mark else []
+    fix = ("name its commits: hs-run cook verify --plan %s --phase %s ... --sha <c>,<c>"
+           % (plan_dir, phase))
+    held = _held_by_other_branches(root, mark, shas) if mark else {}
+    mine = _committed_on_this_branch(root, list(held))
+    held = {c: b for c, b in held.items() if c not in mine}
+    if held:
+        shas = [c for c in shas if c not in held]
+        warnings.append("phase %s: %d commit(s) since its open mark are already on "
+                        "another branch, so they are that branch's history and were "
+                        "not counted: %s (`git branch --contains <sha>` lists every "
+                        "branch) — if they are this phase's, %s"
+                        % (phase, len(held), _listed(
+                            ["%s (%s)" % (c[:9], _listed(sorted(held[c]), 3))
+                             for c in sorted(held)], 5, "commit(s)"), fix))
+    here = str(Path(root).resolve())
+    if opened is None and elsewhere:
+        warnings.append("phase %s's open mark was taken in %s, not in %s which this "
+                        "verify reads — it set one here at HEAD now, so its record names "
+                        "no commit made before this call; %s"
+                        % (phase, ", ".join(dict.fromkeys(elsewhere)), here, fix))
+    elif opened is None:
+        since = _since_prerequisites(plan_dir, phase, root)
+        warnings.append("phase %s had no open mark — this verify set it at HEAD now, so "
+                        "its record names no commit made before this call; %s%s"
+                        % (phase, fix, "" if since is None else
+                           "; the commits since phase %s's last verify, if they are this "
+                           "phase's: hs-run cook verify --plan %s --phase %s ... --sha %s"
+                           % (since[0], plan_dir, phase, ",".join(c[:12] for c in since[1]))))
+    return shas, warnings
+
+
+def _on_own_line(root: Path, sha: str) -> "str | None":
+    """`sha` (full) when it is on HEAD's first-parent line, else the oldest commit on
+    that line that has it — the merge that brought it in, whatever the merged branch
+    did after `sha`. `<off-line sha>..HEAD --first-parent` also lists this branch's own
+    commits from before that merge."""
+    full = _git_stdout(root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % sha)
+    line = _git_stdout(root, "rev-list", "--first-parent", "HEAD")
+    if not full or line is None:
+        return None
+    full, commits = full.strip(), line.split()
+    if full in commits:
+        return full
+    holding = set((_git_stdout(root, "rev-list", "--ancestry-path", "%s..HEAD" % full)
+                   or "").split())
+    return next((c for c in reversed(commits) if c in holding), None)
+
+
+def _since_prerequisites(plan_dir: Path, phase: str, root: Path) -> "tuple[str, list] | None":
+    """(prerequisite, [sha newest-first]): the commits on this branch's first-parent
+    line after the newest commit a prerequisite of `phase` last recorded — the work a
+    phase built while its prerequisite still waited for its verify, when no `next`
+    ever projected it. None when there is no such prerequisite or nothing since."""
+    graph = plan_graph.parse_phase_graph(plan_dir)
+    preds = sorted(src for src, dsts in plan_graph.build_adj(graph).items() if phase in dsts)
+    best = None
+    for pred in preds:
+        recs = [r for r in _read_phase_commits_records(plan_dir)
+                if r.get("kind") == "verify" and r.get("phase") == pred]
+        anchor = (recs[-1].get("sha") or [None])[0] if recs else None
+        anchor = anchor or _phase_open_mark(plan_dir, pred, root)
+        if not anchor or not _is_ancestor(root, anchor):
+            continue
+        anchor = _on_own_line(root, anchor)
+        if anchor is None:
+            continue
+        since = _phase_commits_since_mark(root, anchor)
+        if best is None or len(since) < len(best[1]):
+            best = (pred, since)
+    return best if best and best[1] else None
+
+
 def _record_phase_commits(plan_dir: Path, phase: str, root: Path, *,
-                          named: "list | None" = None) -> list:
+                          named: "list | None" = None,
+                          computed: "tuple[list, list] | None" = None) -> list:
     """Append THIS verify call's own `{phase, sha[], actor, ts}` to the
     append-only phase-commits log — called once per successful
     `cook verify`, regardless of whether this is the plan's last phase or
@@ -3117,53 +4135,12 @@ def _record_phase_commits(plan_dir: Path, phase: str, root: Path, *,
     by this very call (work committed before it is not counted), it was taken in
     another tree than the one this verify reads, or commits since it sit on another
     branch. A commit this branch's own reflog records as made here stays this phase's
-    either way: a branch cut later from this line holds it too."""
-    warnings: list = []
-    opened = _phase_open_record(plan_dir, phase, root)
-    elsewhere = [r.get("tree") for r in _opens(plan_dir, phase) if r.get("tree")]
-    if opened is None:
+    either way: a branch cut later from this line holds it too. `computed` is
+    `_phase_commit_set`'s answer taken before the write, reused so the record and the
+    blast radius name one set."""
+    shas, warnings = computed or _phase_commit_set(plan_dir, phase, root, named=named)
+    if _phase_open_record(plan_dir, phase, root) is None:
         _mark_phase_open(plan_dir, phase, root)
-    mark = _phase_open_mark(plan_dir, phase, root)
-    if named is not None:
-        shas = list(named)
-        made = _made_on_other_branches(root, shas)
-        mine = _committed_on_this_branch(root, list(made))
-        made = {c: b for c, b in made.items() if c not in mine}
-        if made:
-            warnings.append(
-                "phase %s: %d named commit(s) also sit on the first-parent line of a branch "
-                "that does not hold HEAD: %s — this phase's own work fast-forwarded "
-                "there needs nothing; if they are that branch's base history, verify "
-                "again without them and the later record replaces this one" % (
-                    phase, len(made), _listed(
-                    ["%s (%s)" % (c[:9], _listed(sorted(made[c]), 3))
-                     for c in shas if c in made], 5, "commit(s)")))
-    else:
-        shas = _phase_commits_since_mark(root, mark) if mark else []
-        fix = ("name its commits: hs-run cook verify --plan %s --phase %s ... --sha <c>,<c>"
-               % (plan_dir, phase))
-        held = _held_by_other_branches(root, mark, shas) if mark else {}
-        mine = _committed_on_this_branch(root, list(held))
-        held = {c: b for c, b in held.items() if c not in mine}
-        if held:
-            shas = [c for c in shas if c not in held]
-            warnings.append("phase %s: %d commit(s) since its open mark are already on "
-                            "another branch, so they are that branch's history and were "
-                            "not counted: %s (`git branch --contains <sha>` lists every "
-                            "branch) — if they are this phase's, %s"
-                            % (phase, len(held), _listed(
-                                ["%s (%s)" % (c[:9], _listed(sorted(held[c]), 3))
-                                 for c in sorted(held)], 5, "commit(s)"), fix))
-        here = str(Path(root).resolve())
-        if opened is None and elsewhere:
-            warnings.append("phase %s's open mark was taken in %s, not in %s which this "
-                            "verify reads — it set one here at HEAD now, so its record names "
-                            "no commit made before this call; %s"
-                            % (phase, ", ".join(dict.fromkeys(elsewhere)), here, fix))
-        elif opened is None:
-            warnings.append("phase %s had no open mark — this verify set it at HEAD now, so "
-                            "its record names no commit made before this call; %s"
-                            % (phase, fix))
     import hook_runtime
     before = [r for r in _read_phase_commits_records(plan_dir)
               if r.get("kind") == "verify" and r.get("phase") == phase]
@@ -3172,6 +4149,8 @@ def _record_phase_commits(plan_dir: Path, phase: str, root: Path, *,
         ts=write_verification._now_iso(),
         supersedes=str(before[-1].get("ts") or "") or None if before else None,
         head=_git_head(root) if named is not None else None,
+        tree=str(root),
+        patch_ids=review_seen.patch_ids(root, shas),
     ).as_dict())
     return warnings
 
@@ -3394,7 +4373,7 @@ def _next(ns) -> dict:
     return hs_run_next_command.finalize(result)
 
 
-NEXT = hs_run.verb(_next, options=("plan", "phase", "fact-subjects"),
+NEXT = hs_run.verb(_cook_door(_next), options=("plan", "phase", "fact-subjects"),
                    helps={"plan": _PLAN_HELP, "fact-subjects": hs_run.FACT_SUBJECTS_HELP})
 
 
@@ -3512,7 +4491,7 @@ def _cmd_next_impl(root, *, plan=None, phase=None) -> dict:
     _attach_fact_subjects(plan_dir, result.get("phase"), result)
     repo_rules.attach(plan_dir, result)
     result.setdefault("pending", _pending_for_debt(plan_dir, root))
-    return _with_check_name_warnings(plan_dir, result)
+    return _with_check_name_warnings(plan_dir, _with_waived_edges(plan_dir, result, root))
 
 
 def _check_name_warnings(plan_dir: Path) -> list:
@@ -3548,11 +4527,72 @@ def _check_name_warnings(plan_dir: Path) -> list:
         return []
 
 
+def _declared_phase_status(plan_dir: Path) -> list:
+    """The warning for the phase files that still declare a frontmatter `status:`, or
+    none. Nothing writes it after scaffold and nothing reads it: a phase's state is
+    derived from its verification records, so a declared one only goes stale."""
+    files = sorted(set((plan_dir / "phases").glob("phase-*.md")) | set(plan_dir.glob("phase-*.md")),
+                   key=lambda f: (plan_graph.phase_sort_key(f.name), str(f)))
+    stale = []
+    for f in files:
+        parsed = frontmatter_parser.parse_file(f)
+        if parsed.get("ok") and "status" in (parsed.get("frontmatter") or {}):
+            stale.append(f.relative_to(plan_dir).as_posix())
+    if not stale:
+        return []
+    return ["%d phase file(s) declare a frontmatter `status:` that no harness step "
+            "writes or reads, so it goes stale: %s — a phase's state is derived from "
+            "its verification-<phase>.json (the `phases` rows here); delete the line"
+            % (len(stale), _listed(stale, 5, "file(s)"))]
+
+
 def _with_check_name_warnings(plan_dir: Path, result: dict) -> dict:
     extra = _check_name_warnings(plan_dir)
     if extra:
         result["warnings"] = list(result.get("warnings") or []) + extra
     return result
+
+
+def _with_cross_plan_waits(graph: dict, plan_dir: Path, root) -> dict:
+    """`graph` holding each phase whose sibling-plan prerequisite has not passed — the
+    other plan's passed set read by the same counter that answers for this one."""
+    def passed_of(d):
+        return derive_plan_completion.completion_state(d, root=root)["passed_phases"]
+    return plan_graph.with_waits(graph, plan_graph.unmet_cross_plan(graph, plan_dir, passed_of))
+
+
+def _with_waived_edges(plan_dir: Path, result: dict, root) -> dict:
+    """`result` naming each waived cross-plan edge whose other phase is still owed."""
+    graph = plan_graph.parse_phase_graph(plan_dir)
+    if graph.get("error"):
+        return result
+    said = plan_graph.waived_open(graph, plan_dir, lambda d: derive_plan_completion.completion_state(
+        d, root=root)["passed_phases"])
+    if said:
+        result["warnings"] = list(result.get("warnings") or []) + said
+    return result
+
+
+def _cross_plan_next(plan_dir: Path, waits: list) -> str:
+    """The command that moves each prerequisite `<plan>/<phase>` along."""
+    return "; ".join("hs-run cook next --plan %s --phase %s"
+                     % (Path(plan_dir).parent / w.rpartition("/")[0], w.rpartition("/")[2])
+                     for w in waits)
+
+
+def _phase_waiting(plan_dir: Path, phase: str, graph: dict, numbers: str) -> dict:
+    """A phase named by `--phase` that waits on a sibling plan's phase: the wait is the
+    answer, and the move is in the other plan."""
+    waits = plan_graph.waits_on(graph, phase)
+    return hs_run.StepResult(
+        state="phase_waiting",
+        next_action="%s waits on %s, not passed yet — cook that first: %s"
+                    % (phase, ", ".join(waits), _cross_plan_next(plan_dir, waits)),
+        artifacts=[str(plan_dir / "plan-graph.yaml")],
+        warnings=[],
+        exit_code=EXIT_NEEDS_MODEL,
+        extra={"phase": phase, "waits_on": waits, "summary_numbers": numbers},
+    ).as_dict()
 
 
 def _ready_phases(graph: dict, passed) -> list:
@@ -3576,6 +4616,7 @@ def _name_ready_alongside(plan_dir: Path, result: dict, root) -> dict:
     graph = plan_graph.parse_phase_graph(plan_dir)
     if graph.get("error"):
         return result
+    graph = _with_cross_plan_waits(graph, plan_dir, root)
     passed = derive_plan_completion.completion_state(plan_dir, root=root)["passed_phases"]
     others = [n for n in _ready_phases(graph, passed) if n != result["phase"]]
     if not others:
@@ -3614,17 +4655,31 @@ def _phase_paused(plan_dir: Path, phase: str, graph: dict, numbers: str) -> dict
     ).as_dict()
 
 
+def _passed_sentence(plan_dir: Path, phase: str) -> "tuple[str, dict]":
+    """("phase X already passed ...", {latest_record, snapshot_note}). The snapshot
+    counts the phase; when a later verify holds a different record, the sentence says
+    where it is, so a reader of the snapshot alone does not take it for the latest."""
+    records = _phase_record_files(plan_dir, phase)
+    said = "phase %s already passed (verification-%s.json counts it)" % (phase, phase)
+    if records.get("snapshot_note"):
+        said += "; its latest verify is %s, not that snapshot: %s" % (
+            Path(records["latest_record"]).name, records["snapshot_note"])
+    return said, (records if records.get("snapshot_note") else {})
+
+
 def _phase_passed(plan_dir: Path, phase: str, graph: dict, comp: dict, numbers: str) -> dict:
     ready = [n for n in _ready_phases(graph, set(comp["passed_phases"]) | {phase})]
+    passed, records = _passed_sentence(plan_dir, phase)
     return hs_run.StepResult(
         state="phase_passed",
-        next_action=("phase %s already passed (verification-%s.json counts it) — %s"
-                     % (phase, phase, "ready next: %s — hs-run cook next --plan %s "
+        next_action=("%s — %s"
+                     % (passed, "ready next: %s — hs-run cook next --plan %s "
                         "--phase <id>" % (", ".join(ready), plan_dir)
                         if ready else "no other phase is ready yet")),
-        artifacts=[str(plan_dir / "artifacts" / ("verification-%s.json" % phase))],
+        artifacts=[str(plan_dir / "artifacts" / ("verification-%s.json" % phase))]
+        + ([records["latest_record"]] if records else []),
         warnings=[], exit_code=EXIT_DONE,
-        extra={"phase": phase, "ready": ready, "summary_numbers": numbers},
+        extra={"phase": phase, "ready": ready, "summary_numbers": numbers, **records},
     ).as_dict()
 
 
@@ -3689,6 +4744,7 @@ def _cmd_next_for_plan(plan_dir: Path, forced_phase, root) -> dict:
             exit_code=EXIT_BROKEN,
         ).as_dict()
 
+    graph = _with_cross_plan_waits(graph, plan_dir, root)
     # A named `--phase` is checked against the graph whatever the plan's progress:
     # on a finished plan an unknown one used to fall through to `needs_close`,
     # answering ordinary work to a target that is not there.
@@ -3715,30 +4771,54 @@ def _cmd_next_for_plan(plan_dir: Path, forced_phase, root) -> dict:
     if forced_phase is not None and plan_graph.held_by(graph, forced_phase):
         return _phase_paused(plan_dir, forced_phase, graph, "%d/%d phase(s) passed" % (
             len(comp["passed_phases"]), comp["n_total"]))
+    if (forced_phase is not None and forced_phase not in comp["passed_phases"]
+            and plan_graph.waits_on(graph, forced_phase)):
+        return _phase_waiting(plan_dir, forced_phase, graph, "%d/%d phase(s) passed" % (
+            len(comp["passed_phases"]), comp["n_total"]))
     if not comp["complete"]:
         order = _phase_order(graph)
         owed = [n for n in order if n not in comp["passed_phases"]]
-        # An unforced projection hands this tree a phase no other tree claimed;
-        # with only claimed ones left it still names one, and takes no mark.
-        free = [n for n in owed if not _claimed_elsewhere(plan_dir, n, root)]
-        phase = forced_phase or next(iter(free or owed), None)
+        # An unforced projection hands this tree its OWN claim first (a successor it
+        # claimed while the prerequisite waits elsewhere), then a READY phase no other
+        # tree claimed (a phase whose prerequisite another tree is still cooking is not
+        # free); with none left it still names one, and takes no mark.
+        here = str(Path(root).resolve())
+        mine = [n for n in owed if any(r.get("claimed") and r.get("tree") == here
+                                       for r in _opens(plan_dir, n))]
+        free = [n for n in _ready_phases(graph, comp["passed_phases"])
+                if not _claimed_elsewhere(plan_dir, n, root)]
+        phase = forced_phase or next(iter(mine or free or owed), None)
         cooked_elsewhere = ([] if forced_phase is not None or phase is None
                             else _claimed_elsewhere(plan_dir, phase, root))
+        # A phase this tree claimed too is its own: no second mark, no invitation to
+        # claim it — only who else holds it.
+        shared = cooked_elsewhere if phase in mine else []
+        if shared:
+            cooked_elsewhere = []
         blocked = plan_graph.phase_holds(graph)["blocked"]
         if phase is None and blocked:
             # Not done (a blocked phase stays in the denominator) and nothing
-            # runnable: every remaining phase needs a paused one. The move is a
-            # human's — lift the pause, or drop an edge the phase does not need.
+            # runnable: every remaining phase needs a paused one, or a sibling
+            # plan's phase not passed yet. A pause is a human's to lift; a wait
+            # moves when the other plan's phase passes.
+            waits = sorted({w for p in blocked for w in plan_graph.waits_on(graph, p)})
+            moves = []
+            if any(plan_graph.held_by(graph, p) for p in blocked):
+                moves.append("Lift the pause (clear `paused:` in plan-graph.yaml once its "
+                             "reason no longer holds), or remove the edge from a phase that "
+                             "does not need it")
+            if waits:
+                moves.append("Cook the other plan's phase first: %s"
+                             % _cross_plan_next(plan_dir, waits))
             return hs_run.StepResult(
                 state="phases_blocked",
-                next_action="no runnable phase left — %s. Lift the pause (clear "
-                            "`paused:` in plan-graph.yaml once its reason no longer "
-                            "holds), or remove the edge from a phase that does not "
-                            "need it" % "; ".join(blocked[p] for p in sorted(blocked)),
+                next_action="no runnable phase left — %s. %s" % (
+                    "; ".join(blocked[p] for p in sorted(blocked, key=plan_graph.phase_sort_key)),
+                    ". ".join(moves)),
                 artifacts=[str(plan_dir / "plan-graph.yaml")],
                 warnings=[],
                 exit_code=EXIT_NEEDS_MODEL,
-                extra={"blocked_phases": sorted(blocked),
+                extra={"blocked_phases": sorted(blocked, key=plan_graph.phase_sort_key),
                        "summary_numbers": "%d/%d phase(s) passed"
                        % (len(comp["passed_phases"]), comp["n_total"])},
             ).as_dict()
@@ -3803,6 +4883,9 @@ def _cmd_next_for_plan(plan_dir: Path, forced_phase, root) -> dict:
                 extra={"phase": phase, "verdict": verdict, "summary_numbers": numbers},
             ).as_dict()
         if substate == "needs_verification":
+            routed, check_warnings = _declared_check_step(plan_dir, phase, root, numbers)
+            if routed is not None:
+                return routed
             return hs_run.StepResult(
                 state="needs_verification",
                 next_action=(
@@ -3814,7 +4897,7 @@ def _cmd_next_for_plan(plan_dir: Path, forced_phase, root) -> dict:
                 # carries placeholders and would fail verbatim at the shell.
                 next_command=None,
                 artifacts=[str(_record_log_path(plan_dir))],
-                warnings=[w for w in (_stale_build_warning(plan_dir, phase),) if w],
+                warnings=[w for w in (_stale_build_warning(plan_dir, phase),) if w] + check_warnings,
                 exit_code=EXIT_NEEDS_MODEL,
                 extra={"phase": phase, "summary_numbers": numbers},
             ).as_dict()
@@ -3836,8 +4919,10 @@ def _cmd_next_for_plan(plan_dir: Path, forced_phase, root) -> dict:
             # build, stamp its own commit-range boundary — a no-op on every
             # later call for the same phase (`_mark_phase_open`'s own
             # first-wins contract).
-            if not cooked_elsewhere:
-                _mark_phase_open(plan_dir, phase, root, claimed=forced_phase is not None)
+            opened = None
+            elsewhere = None if forced_phase is not None else _declared_branch_home(plan_dir, root)
+            if not cooked_elsewhere and elsewhere is None:
+                opened = _mark_phase_open(plan_dir, phase, root, claimed=forced_phase is not None)
             default_next_action = (
                 "phase %s has no verification recorded — build it "
                 "red->green, then: hs-run cook prompt developer "
@@ -3845,7 +4930,31 @@ def _cmd_next_for_plan(plan_dir: Path, forced_phase, root) -> dict:
                 "--out <file>, hs-run cook verify --plan %s --phase %s %s"
                 % (phase, phase, phase, plan_dir, phase, _VERIFY_PLACEHOLDERS))
             next_action, extra_warnings = _phase_scoped_next_action(
-                plan_dir, phase, default_next_action)
+                plan_dir, phase, default_next_action, root)
+            if opened is not None:
+                # The one write a `next` makes, said where a caller reading the plan
+                # sees it: a session using `next` as a read stamped a plan another
+                # session was cooking and was never told.
+                extra_warnings = list(extra_warnings) + [
+                    "this call %s phase %s in %s at %s (artifacts/phase-commits.jsonl); "
+                    "to read the plan without writing: hs-run cook status --plan %s"
+                    % ("claimed" if opened.get("claimed") else "opened", phase,
+                       opened["tree"], (opened.get("mark") or "no commit")[:12], plan_dir)]
+            if shared:
+                extra_warnings = list(extra_warnings) + [
+                    "phase %s is also claimed by %s" % (phase, ", ".join(shared))]
+            import harness_checks
+            gone = harness_checks.marks_removed(plan_dir) if opened is None else []
+            if gone:
+                extra_warnings = list(extra_warnings) + [
+                    harness_checks.marks_removed_reason(plan_dir, gone, phase)]
+            if elsewhere is not None and not cooked_elsewhere:
+                extra_warnings = list(extra_warnings) + [
+                    "the plan's branch %s is checked out in %s and this tree's HEAD does not "
+                    "hold its tip — no mark taken here; cook it there: cd %s && hs-run cook "
+                    "next --plan %s (to cook it in this tree too: hs-run cook next --plan %s "
+                    "--phase %s)" % (elsewhere[0], elsewhere[1], shlex.quote(elsewhere[1]),
+                                     plan_dir, plan_dir, phase)]
             if cooked_elsewhere:
                 extra_warnings = list(extra_warnings) + [
                     "phase %s is claimed by %s and no unclaimed phase is owed — no mark "
@@ -3881,7 +4990,7 @@ def _status(ns) -> dict:
     return hs_run_next_command.finalize(_cmd_status_impl(ns.ctx.root, plan=ns.plan))
 
 
-STATUS = hs_run.verb(_status, options=("plan",), helps={"plan": _PLAN_HELP})
+STATUS = hs_run.verb(_cook_door(_status, report_only=True), options=("plan",), helps={"plan": _PLAN_HELP})
 
 
 def _cmd_status_impl(root, *, plan=None) -> dict:
@@ -3925,7 +5034,11 @@ def _cmd_status_impl(root, *, plan=None) -> dict:
             artifacts=[],
             warnings=[],
         ).as_dict()
-    return _with_check_name_warnings(plan_dir, _status_for_plan(plan_dir, root))
+    result = _with_check_name_warnings(plan_dir, _status_for_plan(plan_dir, root))
+    stale = _declared_phase_status(plan_dir)
+    if stale:
+        result["warnings"] = list(result.get("warnings") or []) + stale
+    return result
 
 
 def _status_for_plan(plan_dir: Path, root: Path) -> dict:

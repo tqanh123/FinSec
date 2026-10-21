@@ -687,7 +687,7 @@ def write_approval(plan_dir, verdict, rationale, author=None,
                          "an approval with an empty author"}
 
     # project_root(), NOT root(): this value is only ever handed to plans-plane helpers —
-    # fs_guard.assert_under(target, "plans", root=root) below and plan_status.flip_status's
+    # fs_guard.assert_under_plan_tree(target, plan_dir) below and plan_status.flip_status's
     # own containment splice. Both resolve the PROJECT's plans/, so the hint has to name
     # the project. It is the same ruling `:448` follows, and the same variable-carries-one-
     # job check: nothing here reads an engine resource off this root, so migrating it
@@ -741,7 +741,7 @@ def write_approval(plan_dir, verdict, rationale, author=None,
     existing_primary = _existing_primary(plan_dir)
     target = existing_primary if existing_primary is not None else art / "plan-approval.yaml"
     try:
-        fs_guard.assert_under(target, "plans", root=root)
+        fs_guard.assert_under_plan_tree(target, plan_dir)
     except fs_guard.FenceError as e:
         # Match write_approval's contract: every failure returns a structured
         # error, never an uncaught crash.
@@ -779,7 +779,7 @@ def write_approval(plan_dir, verdict, rationale, author=None,
     loose = unhashed_links(plan_dir) if verdict == "APPROVED" else []
     if loose:
         dirs = _reference_dir_entries(plan_dir)[0]
-        where = dirs[0] + "/" if dirs else "a reference dir"
+        where = dirs[0][0] + "/" if dirs else "a reference dir"
         shown = ", ".join(loose[:8]) + (" and %d more" % (len(loose) - 8)
                                         if len(loose) > 8 else "")
         out["warnings"] = [
@@ -826,10 +826,9 @@ def write_size_decision(plan_dir, decision) -> dict:
         return {"ok": False,
                 "error": "decision must be one of %s (got %r)"
                          % (_SIZE_DECISION_VALUES, decision)}
-    root = harness_paths.project_root()
     target = plan_dir / "artifacts" / _SIZE_DECISION_RECEIPT
     try:
-        fs_guard.assert_under(target, "plans", root=root)
+        fs_guard.assert_under_plan_tree(target, plan_dir)
     except fs_guard.FenceError as e:
         return {"ok": False, "error": str(e)}
     rec = _read_size_receipt(target)

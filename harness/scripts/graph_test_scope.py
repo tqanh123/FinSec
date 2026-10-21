@@ -3,15 +3,15 @@
 
 Pure function `resolve_test_scope(plan_dir, node_id)`: reads `files_to_create`
 + `files_to_modify` for `node_id` out of `plan-graph.yaml`, filters through the
-SAME `_TEST_PATH_RE` change_class_derivation already owns (no second
-matcher), and cross-checks each match against disk. Never raises: every broken
+SAME test-path predicate change_class_derivation owns (`test_path_predicate`, no
+second matcher), and cross-checks each match against disk. Never raises: every broken
 input (missing/malformed sidecar, unknown node, wrong-typed `subtasks`)
 degrades to a named `status` branch instead.
 
 Six statuses:
   resolved         >=1 declared test path exists on disk
   declared_absent  >=1 declared test path matched, but NONE exist on disk
-  no_test_paths    files_to_* declared, but nothing in it matches _TEST_PATH_RE
+  no_test_paths    files_to_* declared, but none of it is a test path
   malformed_declaration
                     files_to_* IS present but wrong-typed (a scalar where a
                     list belongs), so nothing could be read out of it — kept
@@ -42,7 +42,7 @@ import plan_graph  # noqa: E402
 import scope_match  # noqa: E402 — the one path-glob matcher; a files_to_*
                      # entry is a glob (scope_match semantics), not only a
                      # literal path
-from change_class_derivation import _TEST_PATH_RE  # noqa: E402
+from change_class_derivation import test_path_predicate  # noqa: E402
 
 STATUSES = ("resolved", "declared_absent", "no_test_paths", "nothing_declared",
             "malformed_declaration", "unknown_node", "no_graph")
@@ -77,7 +77,7 @@ def _fs_candidate_paths(root: Path) -> frozenset:
     this reads disk directly with the same exclusions the git-backed pool
     gets for free: no descending into a nested checkout (a directory holding
     its own `.git`, e.g. a linked worktree or a submodule), and byte-compile
-    cache dirs pruned outright (their contents can never match `_TEST_PATH_RE`
+    cache dirs pruned outright (their contents can never be a test path
     anyway, but skipping the dir keeps a large `__pycache__` off the walk)."""
     import os
     out = []
@@ -103,14 +103,14 @@ def _glob_matches_on_disk(root: Path, entry: str) -> list:
     `include_untracked=True`: a test-first file is written and read BEFORE
     `git add`, so a `--cached`-only pool drops it and silently recommends
     pytest over the old tests alone. A candidate is filtered through
-    `_TEST_PATH_RE` — the SAME regex `resolve_test_scope` already used to
+    `test_path_predicate` — the SAME predicate `resolve_test_scope` already used to
     decide `entry` itself was worth expanding — rather than a `.py`-only
     check, so a committed TS/Go/Java test glob resolves instead of reading
     `declared_absent`. A root git has no opinion about at all (not a git
     repo, not merely an empty one) falls back to a plain filesystem walk with
     the same exclusions — see `_fs_candidate_paths`.
 
-    `_TEST_PATH_RE`'s first alternative matches ANY path under a `tests/`-named
+    The naming heuristics match ANY path under a `tests/`-named
     directory, byte-compile cache included — a `harness/tests/rops/` directory
     declaration would otherwise credit its own `__pycache__/*.pyc` siblings as
     resolved test files, so those are dropped explicitly rather than relying
@@ -119,8 +119,9 @@ def _glob_matches_on_disk(root: Path, entry: str) -> list:
     candidates = plan_graph._git_tracked_paths(root, include_untracked=True)
     if not candidates and not plan_graph._is_git_repo(root):
         candidates = _fs_candidate_paths(root)
+    is_test = test_path_predicate(root)
     return sorted(p for p in candidates
-                  if _TEST_PATH_RE.search(p) and rx.match(p)
+                  if rx.match(p) and is_test(p)
                   and not p.endswith(".pyc")
                   and "__pycache__" not in p.split("/"))
 
@@ -159,11 +160,12 @@ def resolve_test_scope(plan_dir, node_id: str) -> dict:
             return _result("malformed_declaration")
         return _result("nothing_declared")
 
-    test_paths = sorted(p for p in declared if _TEST_PATH_RE.search(p))
+    root = _root_for(plan_dir)
+    is_test = test_path_predicate(root)
+    test_paths = sorted(p for p in declared if is_test(p))
     if not test_paths:
         return _result("no_test_paths")
 
-    root = _root_for(plan_dir)
     on_disk, absent = [], []
     for p in test_paths:
         # A declared entry is a path glob (`scope_match` semantics), not only

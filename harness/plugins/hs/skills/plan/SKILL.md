@@ -171,6 +171,10 @@ regresses to `approval_invalid` on its own. `plan_approval.py --plan <dir> --sta
 nothing: whether the approval still holds and which files moved since (exit 0 holds, 1 not). A
 write prints a summary; `--json` prints the whole record.
 
+A **split** plan is never cooked: each child plan names it with frontmatter `parent_plan: <dir>`
+and takes over its phase files, and the parent reads `split` once that is done; the `split`
+states route the rest (edges between children, the parent's shared material).
+
 **Context isolation before cook**: after approval, recommend `/clear` to isolate planning
 context, then the cook command. **Do not compose that command yourself** — the `approved`
 envelope's `next_action` already carries it, flags and all, derived from the plan's own

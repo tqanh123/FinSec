@@ -108,6 +108,9 @@ python3 "${HARNESS_BIN_ROOT:-.}"/harness/plugins/hs/skills/drawio/scripts/autola
 Each keeps only **intra-project** edges (third-party/stdlib imports are ignored), shortens node labels (drops the shared package/module/directory prefix; ids stay fully qualified), and shares the same flags: `--direction TB|LR` (default `TB`), `--group`, `--no-reduce`.
 
 - **Python** (`pyimports.py`): if the directory is itself a package (`__init__.py` present), module names are package-qualified so the project's own absolute imports resolve; nested subpackages (`pkg.sub.mod`) are handled.
+  Pointed at a declared `import_roots` entry of a project with a `codemap.yaml`, it (and `pyclasses.py`) reads the shared codegraph instead, measuring the tree now.
+  `--snap REF [--snap-store DIR]` reads a stored snapshot instead (REF from `hs-code graph snapshot`), which skips the whole-repo measurement.
+  It is refused, with the reason, unless it is HEAD's or when the snapshot does not cover the directory; a dirty tree is warned about.
 - **JS/TS** (`jsimports.py`): resolution is path-based (tries the source extensions and directory `index` files); `node_modules` and bare specifiers are skipped. Scanning is regex-based, not a full parser.
 - **Go** (`goimports.py`): reads the `module` path from `go.mod`; each directory of `.go` files is one package; `*_test.go` and `vendor/` are skipped.
 - **Rust** (`rustimports.py`): each `.rs` file is a module (`mod.rs`/`main.rs`/`lib.rs` name the enclosing module); edges come from `use` paths rooted at `crate::`/`super::`/`self::` (brace groups expanded). `std`/external crates and `target/` are skipped. Regex-based — inline `mod { … }` blocks aren't split out, and 2015-edition bare intra-crate paths aren't resolved.

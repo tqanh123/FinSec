@@ -182,6 +182,8 @@ def _render(r: dict) -> str:
 def _isolation_bisect(args: argparse.Namespace) -> int:
     root, opts = args.ctx.root, args.opts
     root = Path(root).resolve()
+    import test_runners
+    test_runners.require(root, "python", "pytest", tool="isolation-bisect")
     extra = list(args.pytest_arg)
     try:
         cands = ([ln.strip() for ln in args.candidates.read_text(encoding="utf-8").splitlines()

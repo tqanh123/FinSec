@@ -15,14 +15,14 @@ domains:
     check-ledger: {module: codegraph_port_ledger_verbs, entry: CHECK_LEDGER, help: "run the ledger laws against a batch and report findings"}
     port-batch: {module: codegraph_port_batch_verbs, entry: PORT_BATCH, help: "write ported/born-new ledger lines for every symbol of one landed dist"}
     assign: {module: codegraph_port_batch_verbs, entry: ASSIGN, help: "resolve or cross-check the dist assignment for a batch's frozen snapshot"}
-    carry-forward: {module: codegraph_port_judge_verbs, entry: CARRY_FORWARD, help: "carry fingerprint-equal ledger rows from a previous snapshot onto the batch's freeze"}
+    carry-forward: {module: codegraph_port_judge_verbs, entry: CARRY_FORWARD, help: "carry fingerprint-equal ledger rows from a previous snapshot onto the batch's freeze", languages: [python]}
     snapshot: {module: codegraph_port_snapshot_verbs, entry: SNAPSHOT, help: "build a named snapshot of the source or target tree, pinned by hash"}
-    add-module: {module: codegraph_port_tree_verbs, entry: ADD_MODULE, help: "land one or more upstream files into the target repo with imports rewritten"}
-    build: {module: codegraph_port_build_verbs, entry: BUILD, help: "build one dist tree from its spec into the target repo"}
-    judge-nodes: {module: codegraph_port_judge_verbs, entry: JUDGE_NODES, help: "settle changed or new-in-target nodes carry-forward left, auto-porting body-equal matches"}
-    judge-removed: {module: codegraph_port_judge_verbs, entry: JUDGE_REMOVED, help: "settle nodes carry-forward left gone, auto-dropping ones removed upstream"}
+    add-module: {module: codegraph_port_tree_verbs, entry: ADD_MODULE, help: "land one or more upstream files into the target repo with imports rewritten", languages: [python]}
+    build: {module: codegraph_port_build_verbs, entry: BUILD, help: "build one dist tree from its spec into the target repo", languages: [python]}
+    judge-nodes: {module: codegraph_port_judge_verbs, entry: JUDGE_NODES, help: "settle changed or new-in-target nodes carry-forward left, auto-porting body-equal matches", languages: [python]}
+    judge-removed: {module: codegraph_port_judge_verbs, entry: JUDGE_REMOVED, help: "settle nodes carry-forward left gone, auto-dropping ones removed upstream", languages: [python]}
     rehome: {module: codegraph_port_rehome_verbs, entry: REHOME, help: "bulk-update ledger destinations for symbols moved home inside the already-ported tree"}
-    tests: {module: codegraph_port_tests_verbs, entry: TESTS, help: "plan moving and rewriting a source's tests into the target repo"}
+    tests: {module: codegraph_port_tests_verbs, entry: TESTS, help: "plan moving and rewriting a source's tests into the target repo", languages: [python]}
     tests-land: {module: codegraph_port_tests_land_verb, entry: TESTS_LAND, help: "land test files into their dist's test home with owners and ledger rows"}
     status: {module: codegraph_port_status_verbs, entry: STATUS, help: "report ledger counts, todo buckets and law findings for the batch"}
     suggest: {module: codegraph_port_status_verbs, entry: SUGGEST, help: "suggest ported destinations for old nodes by matching body hash in a new snapshot"}
@@ -32,7 +32,7 @@ domains:
     catch-up: {module: codegraph_port_catchup_verbs, entry: CATCH_UP, help: "open a new batch that follows a predecessor's source to a newer commit"}
     drift-scan: {module: codegraph_port_drift_verbs, entry: DRIFT_SCAN, help: "report what the source added, changed, deleted and renamed between two pins"}
     drift-hunks: {module: codegraph_port_drift_verbs, entry: DRIFT_HUNKS, help: "check or record dispositions for every drift hunk of a batch"}
-    drift-merge: {module: codegraph_port_drift_merge_verbs, entry: DRIFT_MERGE, help: "merge a catch-up batch's source drift into the target files that already hold it"}
+    drift-merge: {module: codegraph_port_drift_merge_verbs, entry: DRIFT_MERGE, help: "merge a catch-up batch's source drift into the target files that already hold it", languages: [python]}
     drift-place: {module: codegraph_port_drift_verbs, entry: DRIFT_PLACE, help: "check that applied drift dispositions land at a valid target destination"}
     drift-rej: {module: codegraph_port_drift_verbs, entry: DRIFT_REJ, help: "list or clean up leftover .rej files from a drift merge"}
     source: {module: codegraph_port_source_verbs, entry: SOURCE, help: "check out a batch's source at its pinned commit, read-only"}

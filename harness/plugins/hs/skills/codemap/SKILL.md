@@ -35,6 +35,10 @@ Every step below runs `hs-code` (`"${HARNESS_BIN_ROOT:-.}"/harness/bin/hs-code`,
 | `unattended` | the runtime says nobody is at the terminal | stop; never set it up unasked |
 | `unsupported` | no file the map can read (`reason` names the suffixes) | stop; say so plainly |
 
+A TypeScript/JavaScript repo is read but never offered yet: it reports `unsupported` until
+it declares `languages: {typescript: {engine: tree-sitter|typescript}}` in a hand-written
+`codemap.yaml` (keys: `docs/harness/codemap-reference.md` §4); an offered map for it is later work.
+
 Each `initializers` row is one domain's own setup: `graph` (the map) runs here; a row
 with a `route` (port → `/hs:port`) belongs to that skill and is only reported.
 

@@ -209,9 +209,26 @@ def _plan_author() -> str:
         return ""
 
 
+def _numbered(phases: list, first: int = 1, plan_dir: "Path | None" = None) -> list:
+    """`(number, file name, name)` per phase. The number in the file name is padded
+    to the widest one, so a listing sorted as text (ls, a glob) is in phase order too;
+    a phase file already in `plan_dir` for the same number and name keeps its name, so
+    a rerun that widens the numbers writes no second copy of it."""
+    if first < 0:
+        raise ValueError("--first must be 0 or more, got %d" % first)
+    width = len(str(first + len(phases) - 1))
+    have: "dict[tuple[int, str], str]" = {}
+    for f in (plan_dir / "phases").glob("phase-*.md") if plan_dir else ():
+        num, _sep, rest = f.name[len("phase-"):].partition("-")
+        if num.isdigit():
+            have.setdefault((int(num), rest[:-len(".md")]), f.name)
+    return [(i, have.get((i, name)) or "phase-%0*d-%s.md" % (width, i, name), name)
+            for i, name in enumerate(phases, first)]
+
+
 def _plan_text(root: Path, plan_id: str, slug: str, title: str, mode: str,
                tdd: bool, phases: list, branch: str, created: str,
-               defer_suite: bool = False, decisions=()) -> str:
+               defer_suite: bool = False, decisions=(), first: int = 1) -> str:
     """The stamped plan.md text for these inputs — shared by the writer
     (scaffold_plan) and the CLI --print path so neither drifts from the other.
 
@@ -221,13 +238,12 @@ def _plan_text(root: Path, plan_id: str, slug: str, title: str, mode: str,
     invariant `_PINNED_FM_KEYS` depends on (a template placeholder always
     renders something). So the line is spliced in here, post-render,
     only when the flag is on."""
-    phases_yaml = "\n".join(
-        "  - phases/phase-%d-%s.md" % (i, name)
-        for i, name in enumerate(phases, 1))
+    numbered = _numbered(phases, first, Path(root) / "plans" / ("%s-%s" % (plan_id, slug)))
+    phases_yaml = "\n".join("  - phases/%s" % fname for _i, fname, _n in numbered)
     phases_table = "\n".join(
         ["| # | Theme | Phụ thuộc | Cỡ |", "|---|---|---|---|"]
         + ["| %d | %s | TBD | TBD |" % (i, _title_case(name))
-           for i, name in enumerate(phases, 1)])
+           for i, _fname, name in numbered])
     text = render(_read_template("plan-template.md"), {
         "ID": "%s-%s" % (plan_id, slug), "TITLE": _yaml_dq(title),
         "MODE": mode,
@@ -255,14 +271,15 @@ def _report_text(root: Path, report_id: str, slug: str, rtype: str, title: str,
 def scaffold_plan(root, plan_id: str, slug: str, title: str, mode: str = "hard",
                   tdd: bool = True, phases=None, branch: str = "TBD",
                   created: str = "TBD", force: bool = False,
-                  defer_suite: bool = False, decisions=()) -> Path:
+                  defer_suite: bool = False, decisions=(), first: int = 1) -> Path:
     """Create ``<root>/plans/<plan_id>-<slug>/`` with plan.md + one phase file
-    per phase. Returns the plan directory. Refuses to clobber an existing
-    plan.md without ``force``."""
+    per phase, numbered from ``first``. Returns the plan directory. Refuses to
+    clobber an existing plan.md without ``force``; a phase file already there is
+    kept as it is, so a rerun that adds a phase writes only the new one."""
     validate_slug(slug)
     validate_ident(plan_id)
     phases = list(phases) if phases else ["main"]
-    # Each name becomes phases/phase-N-<name>.md, so it is a path component
+    # Each name becomes phases/phase-<N>-<name>.md, so it is a path component
     # too. main() already checked these; checking here as well means the
     # library API is contained on its own rather than via its caller.
     for name in phases:
@@ -281,14 +298,14 @@ def scaffold_plan(root, plan_id: str, slug: str, title: str, mode: str = "hard",
     # plan it never finished writing.
     plan_body = _plan_text(root, plan_id, slug, title, mode, tdd, phases,
                            branch, created, defer_suite=defer_suite,
-                           decisions=decisions)
+                           decisions=decisions, first=first)
     phase_tpl = _read_template("phase-template.md")
     phase_bodies = [
-        (i, name, _stamp(_require_filled(render(phase_tpl, {
+        (fname, _stamp(_require_filled(render(phase_tpl, {
             "NUM": str(i), "PHASE_TITLE": _yaml_dq(_title_case(name)),
             "PLAN_ID": "%s-%s" % (plan_id, slug), "CREATED": created,
         }), "phase-template.md")))
-        for i, name in enumerate(phases, 1)]
+        for i, fname, name in _numbered(phases, first, plan_dir)]
 
     plan_dir.mkdir(parents=True, exist_ok=True)
     plan_md.write_text(plan_body, encoding="utf-8")
@@ -299,9 +316,9 @@ def scaffold_plan(root, plan_id: str, slug: str, title: str, mode: str = "hard",
     # the PHASES_YAML frontmatter above point here — keep the three in lockstep.
     phases_dir = plan_dir / "phases"
     phases_dir.mkdir(parents=True, exist_ok=True)
-    for i, name, body in phase_bodies:
-        (phases_dir / ("phase-%d-%s.md" % (i, name))).write_text(body,
-                                                                 encoding="utf-8")
+    for fname, body in phase_bodies:
+        if not (phases_dir / fname).exists():  # a rerun adds phases; it never blanks one
+            (phases_dir / fname).write_text(body, encoding="utf-8")
     return plan_dir
 
 
@@ -343,6 +360,9 @@ def main(argv=None) -> int:
     p.add_argument("--no-tdd", dest="tdd", action="store_false")
     p.add_argument("--phases", default="main",
                    help="comma-separated phase names (default: main)")
+    p.add_argument("--first", type=int, default=1, metavar="N",
+                   help="number of the first phase, 0 or more (default: 1); file "
+                        "numbers are zero-padded to the widest one")
     p.add_argument("--id", dest="ident", default=None, metavar="YYMMDD-HHMM",
                    help="plan id stem, timestamp only (default: now). The dir "
                         "becomes plans/<id>-<slug>/ — do NOT append the slug.")
@@ -385,13 +405,14 @@ def main(argv=None) -> int:
                 sys.stdout.write(_plan_text(
                     Path(args.root), ident, args.slug, args.title, args.mode,
                     args.tdd, phases or ["main"], args.branch, created,
-                    defer_suite=args.defer_suite, decisions=decisions))
+                    defer_suite=args.defer_suite, decisions=decisions,
+                    first=args.first))
                 return 0
             d = scaffold_plan(
                 root=args.root, plan_id=ident, slug=args.slug, title=args.title,
                 mode=args.mode, tdd=args.tdd, phases=phases, branch=args.branch,
                 created=created, force=args.force, defer_suite=args.defer_suite,
-                decisions=decisions)
+                decisions=decisions, first=args.first)
             sys.stderr.write("scaffold: wrote %s\n" % d)
             return 0
 

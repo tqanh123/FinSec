@@ -135,6 +135,12 @@ def mcp_candidate_path(tool_input):
 #: The graph snapshot store under the default data root: machine-written, never
 #: committed. Named once because the Bash floor words its refusal off it.
 SNAPSHOT_STORE = ".harness/codegraph/snapshots/**"
+#: The harness check ledger: one line per harness-run check (`hs-code check run` /
+#: `test run`), the line the DoD gate reads as proof. See harness_checks.py.
+CHECK_LEDGER = 'plans/*/artifacts/harness-checks-*.jsonl'
+#: The open marks of a plan's phases: the base its check and coverage policy is held
+#: to (policy_floor) -- a rewritten mark is a looser base chosen by hand.
+PHASE_MARKS = 'plans/*/artifacts/phase-commits.jsonl'
 
 # Repo-root-relative globs (fnmatch). Constant by design. The full guarded set
 # (both zones) — kept as one tuple so bash_write_guard reuses the identical set
@@ -198,6 +204,10 @@ GUARD_LIST = (
     "harness/install/hooks-registration.yaml",
     "plans/*/artifacts/plan-approval.json",
     "plans/*/artifacts/plan-approval.yaml",
+    # the harness check ledger: the DoD gate reads its newest line as the proof a
+    # declared check passed, so a hand-written line reads like a run.
+    CHECK_LEDGER,
+    PHASE_MARKS,
     # the graph snapshot store (data root, default `.harness/`). A review state that
     # declares `facts:` refuses with `facts_stale` until a snapshot of the current tree
     # exists; an agent blocked there can "pass" it by editing one snapshot's
@@ -215,6 +225,8 @@ _PROJECT_LANE = (
     "docs/harness/cull-ledger.jsonl",
     "plans/*/artifacts/plan-approval.json",
     "plans/*/artifacts/plan-approval.yaml",
+    CHECK_LEDGER,
+    PHASE_MARKS,
     SNAPSHOT_STORE,
 )
 # Bin-lane: everything else — the shared binary's own gate files, matched
@@ -529,6 +541,10 @@ _SANCTIONED_WRITER = {
         "plan_approval.py --plan … --verdict APPROVED|REJECTED --rationale …",
     "plans/*/artifacts/plan-approval.yaml":
         "plan_approval.py --plan … --verdict APPROVED|REJECTED --rationale …",
+    # appended one run at a time by the harness running the check itself
+    CHECK_LEDGER: "hs-code check run <id> --plan … --phase … (a test runner: hs-code test run)",
+    # a phase's open mark is written when `cook next` opens it, a verify when it is judged
+    PHASE_MARKS: "hs-run cook next (opens a phase) / hs-run cook verify",
     # never rewritten in place: the writer adds a NEW snapshot of the current tree
     SNAPSHOT_STORE: "hs-code --apply graph snapshot",
 }

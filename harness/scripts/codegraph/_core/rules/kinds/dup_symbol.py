@@ -124,4 +124,4 @@ class DupSymbolCheck:
         return RuleResult(self.rule_id, "error", tuple(violations))
 
 
-register_kind("dup_symbol")(DupSymbolCheck)
+register_kind("dup_symbol", languages=("python",))(DupSymbolCheck)

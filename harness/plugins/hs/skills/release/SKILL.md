@@ -20,7 +20,7 @@ The engine is idempotent — a re-run probes "already done for this version?" an
 
 ## The 3 steps (hard order, the engine enforces it)
 
-Before step 1, `preflight()` hard-gates the cut. Besides green local CI (harness scope) + skill structure + skill cross-refs + clean tree + gh auth, it also **refuses the cut while the Decision Register has unreconciled drift** (new DECs / flips since the last reconcile marker).
+Before step 1, `preflight()` hard-gates the cut. Besides a clean tree + green CI + skill structure + skill cross-refs + gh auth, it also **refuses the cut while the Decision Register has unreconciled drift** (new DECs / flips since the last reconcile marker).
 Clear it by running the `@decision-reconciler` agent, then `python3 "${HARNESS_BIN_ROOT:-.}"/harness/scripts/decision_reconcile.py --mark`, and re-run. It further
 **refuses the cut while structural docs fail** — it runs the `hs:docs-standardize` gate (`docs_gate.py --fresh`) so a missing-frontmatter / broken-graph doc under `docs/` aborts before publish. Release VERIFIES doc structure; it never regenerates content — refresh stale docs as a separate reviewed commit, then cut. Both gates are release-local (owner-only) — they never touch a normal
 ship/deploy.
@@ -35,6 +35,12 @@ ship/deploy.
    `gh release create`: `.github/workflows/release.yml` (softprops/action-gh-release)
    is the sole publisher, triggered by the tag step 2 already pushed. Creating the
    release here would make that workflow step fail on conflict.
+
+**Where the CI runs** (`release/release.yaml` `ci.where`, or `--ci remote|local`): by default every job
+the repo's `ci_local.sh` dispatches runs on the host `.rops.env` names, one `hs-rops` cell each on the
+release lane, and only `ci_local.sh --local-only` runs here. A host not configured or not answering STOPS
+the cut — read the stop line out to the operator; run it here only when they say so (`--ci local`). The
+dry-run checklist's `CI (preflight)` line says which it will be. Details: `references/preflight.md`.
 
 ## How to run
 

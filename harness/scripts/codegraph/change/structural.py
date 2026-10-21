@@ -77,8 +77,8 @@ def structural_changes(ctx: Any, changes: "Iterable[Change]",
             tests.append(c.path)
             continue
         module = ctx.module_at(c.path)
-        if module is None or not c.path.endswith(".py"):
-            unread.append(Unread(c.path, "no declared root owns it" if c.path.endswith(".py")
+        if module is None or not ctx.owns(c.path):
+            unread.append(Unread(c.path, "no declared root owns it" if ctx.owns(c.path)
                                  else "not a module the import graph reads"))
             continue
         if c.old is None:
@@ -126,7 +126,7 @@ def add_arguments(sp: argparse.ArgumentParser) -> None:
 
 def run(args: argparse.Namespace, repo: Path, opts: Any) -> Verdict:
     from codegraph._core.descriptor import DescriptorError, load
-    from codegraph._core.snapshot.pipeline import import_context
+    from codegraph._core.snapshot.pipeline import SnapshotError, SnapshotRefused, import_context
     from codegraph._core.testfiles import build_test_layout
 
     try:
@@ -138,9 +138,14 @@ def run(args: argparse.Namespace, repo: Path, opts: Any) -> Verdict:
         run_git(repo, "rev-parse", "--verify", "--quiet", "%s^{commit}" % args.base)
     except GitError:
         return Verdict.broken("structural: %r is not a revision of %s" % (args.base, repo))
-    ctx = import_context(repo, descriptor)
-    reasons, unread, tests = structural_changes(ctx, worktree_changes(repo, args.base, args.files),
-                                                build_test_layout(repo, descriptor).in_test_tree)
+    try:
+        ctx = import_context(repo, descriptor)
+        reasons, unread, tests = structural_changes(ctx, worktree_changes(repo, args.base, args.files),
+                                                    build_test_layout(repo, descriptor).in_test_tree)
+    except SnapshotRefused as e:
+        return Verdict.refused("structural: %s" % e)
+    except SnapshotError as e:
+        return Verdict.broken("structural: %s" % e)
     data = {"base": args.base, "files": len(args.files), "reasons": reasons,
             "unread": [u.as_dict() for u in unread], "tests": tests}
     if getattr(opts, "json", False):

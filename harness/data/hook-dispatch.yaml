@@ -81,6 +81,7 @@ groups:
     - {name: decision_capture_nudge, module: decision_capture_nudge, entry: handle_post_tool_use, class: nudge}
     - {name: standards_drift_nudge, module: standards_drift_nudge, entry: handle_post_tool_use, class: nudge}
     - {name: glossary_capture_nudge, module: glossary_capture_nudge, entry: handle_post_tool_use, class: nudge}
+    - {name: yaml_comment_cut_nudge, module: yaml_comment_cut_nudge, entry: core, class: nudge}
     - {name: agent_behavior_linter, module: agent_behavior_linter, entry: handle_post_tool_use, class: nudge}
     - {name: stamp_artifact, module: stamp_artifact, entry: core, class: telemetry}
     - {name: phase_progress_writer, module: phase_progress_writer, entry: core, class: telemetry}

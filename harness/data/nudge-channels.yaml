@@ -47,6 +47,7 @@ channels:
   standards_drift_nudge:  {model: true, user: false}
   ledger_red_watch:       {model: true, user: true}
   memory_index_watch:     {model: true, user: true}
+  yaml_comment_cut_nudge: {model: true, user: true}  # a value a ` #` cut short in a just-written YAML file
   agent_behavior_linter:  {model: true, user: false}  # advice on the agent's own tool use; reported once per new finding
   backlog_capture_nudge:  {model: true, user: false}
   goal_cycle_nudge:       {model: true, user: false}

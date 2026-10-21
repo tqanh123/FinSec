@@ -17,6 +17,9 @@ open->close itself, gated so it cannot fire early:
      dir is a copied/forged artifact; no-op rather than close the wrong plan.
   4. status — completed/cancelled left alone; pending/approved opened first;
      in_progress closed directly.
+  5. reopen — a plan `hs-run cook open --reason` took back from completed is never
+     closed here: its phases still count, and an evidence-only close would skip
+     the re-verify and the fresh review the reopen owes. `cook close` closes it.
 
 Never raises: any unexpected error degrades to a benign no-op Result. A status
 flip emits a trace event (plan_auto_finalize) and the caller surfaces one line.
@@ -29,8 +32,10 @@ if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
 
 import plan_status  # noqa: E402
+import phase_commits_log  # noqa: E402
 import derive_plan_completion  # noqa: E402
 import artifact_check  # noqa: E402
+import plan_family  # noqa: E402
 from plan_status import Result  # noqa: E402
 from close_plan import close_plan  # noqa: E402
 
@@ -65,6 +70,9 @@ def _finalize(plan_dir, root) -> Result:
     if isinstance(spliced, Result):
         return spliced
     current = plan_status.normalize_status(spliced[3])
+    split = plan_family.never_cooked(plan_dir)
+    if split:
+        return Result(True, False, "no-op: %s" % split)
 
     # (2) evidence gate — the only "done" signal.
     state = derive_plan_completion.completion_state(plan_dir, root=root)
@@ -83,6 +91,9 @@ def _finalize(plan_dir, root) -> Result:
     # (4) status flip.
     if current in _TERMINAL:
         return Result(True, False, "no-op: already %s" % current)
+    # (5) a reopened plan closes through `cook close` alone.
+    if phase_commits_log.reopens(plan_dir):
+        return Result(True, False, "no-op: reopened — hs-run cook close closes it")
     if current in _STARTABLE:
         # Write in_progress directly rather than delegating to open_plan: its
         # flip_status compares the RAW on-disk token (no legacy fold — see

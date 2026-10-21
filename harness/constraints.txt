@@ -114,6 +114,13 @@
 # broken requirements. cffi and pycparser were unpinned transitive arrivals until
 # now (no earlier requirement pulled them); pinning them with cryptography keeps
 # the lockfile whole for the first dependency this file has that owns them.
+#
+# tree-sitter==0.26.0 + tree-sitter-typescript==0.23.2 — added 2026-10-18 when
+# harness/requirements.txt declared both OPTIONAL for the typescript language pack's
+# tree-sitter engine. Provenance per this file's own law, on the homelab lane's venv
+# (installed from requirements.txt + this file): `pip show` reads 0.26.0 and 0.23.2,
+# both `Requires:` empty (no transitive pins owed), `pip check` "No broken requirements
+# found.". The grammar pin is exact on purpose: every TS symbol hash names it.
 
 allpairspy==2.5.1
 antlr4-python3-runtime==4.9.3
@@ -180,4 +187,6 @@ ruff==0.15.21
 setproctitle==1.3.7
 tenacity==9.1.4
 textual==8.2.8
+tree-sitter-typescript==0.23.2
+tree-sitter==0.26.0
 typing-extensions==4.15.0

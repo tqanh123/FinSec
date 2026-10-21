@@ -1,8 +1,8 @@
 {
   "channel": "stable",
-  "generated_at": "2026-10-09",
-  "harness_version": "7.2.0",
-  "kit_digest": "b781464c093117e53472545a4fec86d1822a4b362882586b92487e3350bdb212",
-  "manifest_files_count": 1764,
+  "generated_at": "2026-10-21",
+  "harness_version": "7.3.0",
+  "kit_digest": "f3739cf6b09e75b96349a5aa5ecd988a782e74601df0468415e63ac82a833331",
+  "manifest_files_count": 1834,
   "schema_version": "1.0"
 }

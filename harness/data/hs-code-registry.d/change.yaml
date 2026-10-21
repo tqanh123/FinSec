@@ -14,10 +14,10 @@
 domains:
   change:
     # api-diff/snapshot-diff/hotspots/report: one package module per verb.
-    api-diff: {module: codegraph.change.api_diff, entry: API_DIFF, help: "diff two API surfaces by name and signature, flag breaking changes, suggest a bump"}
+    api-diff: {module: codegraph.change.api_diff, entry: API_DIFF, help: "diff two API surfaces by name and signature, flag breaking changes, suggest a bump", languages: [python]}
     snapshot-diff: {module: codegraph.change.snapshot_diff, entry: SNAPSHOT_DIFF, help: "diff two snapshots into added, removed, changed and moved symbols"}
     hotspots: {module: codegraph.change.hotspots, entry: HOTSPOTS, help: "rank files by git churn times measured size, flag ones a diff touches"}
     report: {module: codegraph.change.report, entry: REPORT, help: "render one measured snapshot as a json payload and an html dashboard"}
     structural: {module: codegraph.change.structural, entry: STRUCTURAL, help: "check whether a diff changes this tree's import graph, not just file bodies"}
-    impact: {module: codegraph.change.verbs, entry: IMPACT, help: "measure a symbol's blast radius between two trees or snapshots via callers"}
+    impact: {module: codegraph.change.verbs, entry: IMPACT, help: "measure a symbol's blast radius between two trees or snapshots via callers", languages: [python]}
     test: {module: codegraph.change.verbs, entry: TEST, help: "pick the tests a change can break by walking the snapshot's import graph"}

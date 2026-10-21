@@ -44,6 +44,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import attrs
 
+from codegraph._core.lang.ids import lookup_keys
 from codegraph._core.testfiles import build_test_layout
 from codegraph.check.tree import CheckError, add_pin_args, measure, pin_of
 from hs_family.cli import Command
@@ -164,9 +165,8 @@ def _importers(idx: dict, layout: Any) -> Dict[str, Set[str]]:
                 continue
             for key in ("imports_module_level", "imports_function_local"):
                 for tgt in m.get(key) or ():
-                    parts = tgt.split("::", 1)[0].split(".")
-                    for i in range(len(parts), 0, -1):
-                        out.setdefault(".".join(parts[:i]), set()).add(m["module"])
+                    for k in lookup_keys(tgt, m.get("lang")):
+                        out.setdefault(k, set()).add(m["module"])
     return out
 
 

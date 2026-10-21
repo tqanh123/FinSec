@@ -124,7 +124,204 @@ def parse_phase_graph(plan_dir) -> dict:
             for end in ("from", "to"):
                 if e.get(end) is not None:
                     e[end] = str(e[end])
+    for key in (_CROSS, _WAITS):
+        if key in data:
+            return {"error": "%s: `%s:` is reserved — a cross-plan edge is written in "
+                             "`edges:` as {from: <plan>/<phase>, to: <phase>}" % (_SIDECAR, key)}
+    return _split_cross_plan(data)
+
+
+# A phase of a SIBLING plan named in `edges:` — `{from: <plan dir name>/<phase>, to:
+# <phase>}`: that phase must pass before this plan's `to` may start. Only the plan
+# that waits writes it, so each such edge lives in one file. Read apart from the
+# plan's own edges at parse time: every in-plan algorithm (cycles, batches, clusters,
+# conflicts) sees this plan's phases only, and the hold is applied by the caller that
+# can read the other plan's progress (`with_waits`).
+_CROSS = "_cross_plan"
+# {phase: [<plan>/<phase>, ...]} — the cross-plan prerequisites not yet passed, set
+# by `with_waits`. `phase_holds` reads it, so every door that asks what is runnable
+# (the batch, `cook next`, ready-alongside) holds a waiting phase the same way.
+_WAITS = "_waits"
+
+
+# `waived: {decision, reason}` on a cross-plan edge: a ruling that the edge is met
+# before the other plan's phase passed. The phase is handed out; the other phase is
+# still owed by its own plan.
+_WAIVER_KEYS = ("decision", "reason")
+
+
+def _waiver_problem(src: str, dst: str, waived) -> "str | None":
+    if (isinstance(waived, dict) and set(waived) == set(_WAIVER_KEYS)
+            and all(isinstance(waived[k], str) and waived[k].strip() for k in _WAIVER_KEYS)):
+        return None
+    return ("%s: edge %s -> %s: `waived:` is {decision: <the ruling's id>, reason: <why "
+            "the edge is met>}, both non-empty, nothing else; got %r" % (_SIDECAR, src, dst, waived))
+
+
+def _split_cross_plan(data: dict) -> dict:
+    local: list = []
+    cross: list = []
+    for e in data["edges"]:
+        src = e.get("from") if isinstance(e, dict) else None
+        dst = e.get("to") if isinstance(e, dict) else None
+        if isinstance(e, dict) and "waived" in e and not (src is not None and "/" in src):
+            return {"error": "%s: edge %s -> %s: `waived:` is written on a cross-plan edge "
+                             "only ({from: <plan>/<phase>, ...}); an edge inside this plan "
+                             "is met when its phase passes" % (_SIDECAR, src, dst)}
+        if dst is not None and "/" in dst:
+            return {"error": "%s: edge to %r names another plan's phase — a cross-plan "
+                             "edge is written in the plan that waits, as {from: <this "
+                             "plan>/<phase>, to: <its phase>}" % (_SIDECAR, dst)}
+        if src is not None and "/" in src:
+            if dst is None:
+                return {"error": "%s: cross-plan edge from %r has no `to:`" % (_SIDECAR, src)}
+            plan, _, phase = src.rpartition("/")
+            edge = {"plan": plan, "phase": phase, "to": dst}
+            if any(c["plan"] == plan and c["phase"] == phase and c["to"] == dst for c in cross):
+                return {"error": "%s: cross-plan edge %s -> %s is written twice -- once, with "
+                                 "its `waived:` if it has one" % (_SIDECAR, src, dst)}
+            if "waived" in e:
+                problem = _waiver_problem(src, dst, e["waived"])
+                if problem:
+                    return {"error": problem}
+                edge["waived"] = {k: e["waived"][k].strip() for k in _WAIVER_KEYS}
+            cross.append(edge)
+            continue
+        local.append(e)
+    data["edges"] = local
+    data[_CROSS] = cross
     return data
+
+
+def cross_plan_edges(graph: dict) -> list:
+    """[{plan, phase, to}] — this plan's phases that wait on a sibling plan's phase."""
+    return list(graph.get(_CROSS) or [])
+
+
+def _sibling(plan_dir, plan: str) -> "Path | None":
+    """The sibling plan dir `plan` names, or None when it is not a plain relative
+    name under this plan's own plans dir."""
+    p = Path(plan)
+    if not plan or p.is_absolute() or ".." in p.parts or "\\" in plan:
+        return None
+    return Path(plan_dir).parent / p
+
+
+def find_cross_plan_problems(graph: dict, plan_dir) -> list:
+    """One sentence per cross-plan edge that cannot hold: a plan that is not there, a
+    phase it does not have, a `to` this plan does not have, the plan itself, and any
+    cycle the edges close through other plans."""
+    out = []
+    here = Path(plan_dir).resolve()
+    own = _all_nodes(graph)
+    for e in cross_plan_edges(graph):
+        name = "%s/%s" % (e["plan"], e["phase"])
+        d = _sibling(plan_dir, e["plan"])
+        if d is None:
+            out.append("cross-plan edge %s -> %s: %r is not a plan dir name beside this "
+                       "plan" % (name, e["to"], e["plan"]))
+            continue
+        if e["to"] not in own:
+            out.append("cross-plan edge %s -> %s: %s is not a phase of this plan"
+                       % (name, e["to"], e["to"]))
+        if d.resolve() == here:
+            out.append("cross-plan edge %s -> %s names this plan itself — write it as "
+                       "{from: %s, to: %s}" % (name, e["to"], e["phase"], e["to"]))
+            continue
+        if not (d / "plan.md").is_file():
+            out.append("cross-plan edge %s -> %s names no plan under %s"
+                       % (name, e["to"], Path(plan_dir).parent))
+            continue
+        other = parse_phase_graph(d)
+        if other.get("error"):
+            out.append("cross-plan edge %s -> %s: %s's graph cannot be read (%s)"
+                       % (name, e["to"], e["plan"], other["error"]))
+        elif e["phase"] not in _all_nodes(other):
+            out.append("cross-plan edge %s -> %s: %s is not a phase of %s (known: %s)"
+                       % (name, e["to"], e["phase"], e["plan"], ", ".join(
+                           sorted(_all_nodes(other), key=phase_sort_key)) or "none"))
+    for cycle in _cross_plan_cycles(graph, plan_dir):
+        out.append("cross-plan cycle: %s — no phase on it can ever start" % " -> ".join(cycle))
+    return out
+
+
+def _cross_plan_cycles(graph: dict, plan_dir) -> list:
+    """Cycles through two plans or more in the union of this plan and every plan its
+    cross-plan edges reach, nodes spelled `<plan>/<phase>`."""
+    base = Path(plan_dir).parent
+    start = Path(plan_dir).name
+    adj: dict = {}
+    seen, todo = set(), [(start, graph)]
+    while todo:
+        name, g = todo.pop()
+        if name in seen or g.get("error"):
+            continue
+        seen.add(name)
+        for n, dsts in build_adj(g).items():
+            adj.setdefault("%s/%s" % (name, n), []).extend("%s/%s" % (name, d) for d in dsts)
+        for e in cross_plan_edges(g):
+            d = _sibling(base / name, e["plan"])
+            if e.get("waived") or d is None or not (d / "plan.md").is_file():
+                continue   # a waived edge holds nothing, so it closes no cycle
+            other = d.relative_to(base).as_posix()
+            adj.setdefault("%s/%s" % (other, e["phase"]), []).append("%s/%s" % (name, e["to"]))
+            adj.setdefault("%s/%s" % (name, e["to"]), [])
+            if other not in seen:
+                todo.append((other, parse_phase_graph(d)))
+    # A cycle inside one plan is `find_cycles`' finding there; only one that runs
+    # through two plans or more is this check's.
+    return [c for c in graph_core.find_dep_cycles(adj)
+            if len({n.rpartition("/")[0] for n in c}) > 1]
+
+
+def unmet_cross_plan(graph: dict, plan_dir, passed_of) -> dict:
+    """{phase: [<plan>/<phase>, ...]} for each cross-plan prerequisite not passed.
+    `passed_of(plan_dir)` is the other plan's passed-phase set; a plan that is not
+    there has passed nothing, so its edge holds rather than lapses."""
+    out: dict = {}
+    for e in cross_plan_edges(graph):
+        if e.get("waived"):
+            continue
+        d = _sibling(plan_dir, e["plan"])
+        passed = passed_of(d) if d is not None and (d / "plan.md").is_file() else set()
+        if e["phase"] not in passed:
+            out.setdefault(e["to"], []).append("%s/%s" % (e["plan"], e["phase"]))
+    return out
+
+
+def waived_open(graph: dict, plan_dir, passed_of) -> list:
+    """One sentence per waived cross-plan edge whose other phase has not passed: the
+    waiting phase runs on a ruling, and the phase it needed is still owed."""
+    out = []
+    for e in cross_plan_edges(graph):
+        w = e.get("waived")
+        if not w:
+            continue
+        d = _sibling(plan_dir, e["plan"])
+        if d is None or not (d / "plan.md").is_file():
+            continue   # no plan owes it: `find_cross_plan_problems` names the edge
+        if e["phase"] not in passed_of(d):
+            out.append("cross-plan edge %s/%s -> %s is waived by %s (%s); %s/%s has not passed "
+                       "and is still owed by its own plan"
+                       % (e["plan"], e["phase"], e["to"], w["decision"], w["reason"], e["plan"], e["phase"]))
+    return out
+
+
+def with_waits(graph: dict, waits: dict) -> dict:
+    """A copy of `graph` holding each phase of `waits` until its prerequisites pass."""
+    out = dict(graph)
+    out[_WAITS] = {k: list(v) for k, v in (waits or {}).items()}
+    return out
+
+
+def waits_on(graph: dict, phase: str) -> list:
+    """The cross-plan prerequisites holding `phase`: its own, and those of every
+    phase upstream of it in this plan; [] when none holds it."""
+    waits = graph.get(_WAITS) or {}
+    adj = build_adj(graph)
+    held = [w for p in sorted(waits, key=phase_sort_key)
+            if p == phase or phase in graph_core._closure(adj, p) for w in waits[p]]
+    return sorted(set(held))
 
 
 # ---------------------------------------------------------------- adjacency ---
@@ -154,6 +351,18 @@ def _ordinal(phase_id: str, pattern: "re.Pattern[str]" = _ORDINAL_ID) -> "int | 
     return int(m.group(1)) if m else None
 
 
+_DIGITS = re.compile(r"([0-9]+)")
+
+
+def phase_sort_key(name) -> tuple:
+    """Order phase ids (and phase file names) by the numbers in them: 2 before 10,
+    `phase-9-x` before `phase-10-y`. re.split alternates text and digit runs, so each
+    position compares like with like; the text itself breaks a tie between 2 and 02."""
+    text = str(name)
+    parts = _DIGITS.split(text)
+    return tuple(int(p) if i % 2 else p for i, p in enumerate(parts)), text
+
+
 def resolve_phase_id(graph: dict, token: str) -> "tuple[str | None, list]":
     """The node a `--phase` token names: `(token, [])` when it IS a node, else
     `(node, [node])` when exactly one node is another spelling of it, else
@@ -172,7 +381,7 @@ def resolve_phase_id(graph: dict, token: str) -> "tuple[str | None, list]":
                   [n for n in nodes if _ordinal(n, _SLUGGED_NODE) == number]]
     for tier in tiers:
         if tier:
-            cands = sorted(tier)
+            cands = sorted(tier, key=phase_sort_key)
             return (cands[0] if len(cands) == 1 else None), cands
     return None, []
 
@@ -186,7 +395,7 @@ def phase_spelling_hint(graph: dict, token: str) -> str:
     if cands:
         return " — %r could name %s; pass one exactly, e.g. --phase %s" % (
             token, " or ".join(cands), cands[0])
-    nodes = sorted(_all_nodes(graph))
+    nodes = sorted(_all_nodes(graph), key=phase_sort_key)
     return " — pass one exactly, e.g. --phase %s" % nodes[0] if nodes else ""
 
 
@@ -292,10 +501,17 @@ def phase_holds(graph: dict) -> dict:
     """
     blocked = _paused_ancestors(graph)
     paused = paused_phases(graph)
-    notes = {}
+    pieces: dict = {}
     for d, ancestors in blocked.items():
-        notes[d] = "%s waits on %s" % (d, "; ".join(
-            "paused %s: %s" % (p, _pause_reason(graph, p)) for p in sorted(ancestors)))
+        pieces[d] = ["paused %s: %s" % (p, _pause_reason(graph, p))
+                     for p in sorted(ancestors, key=phase_sort_key)]
+    # A phase waiting on a sibling plan cannot start either, nor can anything after
+    # it here: blocked, never paused — it is real work the plan still owes.
+    for d in sorted(_all_nodes(graph) - paused, key=phase_sort_key):
+        pending = waits_on(graph, d)
+        if pending:
+            pieces.setdefault(d, []).extend("%s to pass" % w for w in pending)
+    notes = {d: "%s waits on %s" % (d, "; ".join(p)) for d, p in pieces.items()}
     return {"paused": paused, "blocked": notes}
 
 
@@ -304,7 +520,7 @@ def _paused_ancestors(graph: dict) -> dict:
     paused = paused_phases(graph)
     adj = build_adj(graph)
     blocked: dict = {}
-    for p in sorted(paused):
+    for p in sorted(paused, key=phase_sort_key):
         for d in graph_core._closure(adj, p):
             if d not in paused:
                 blocked.setdefault(d, []).append(p)
@@ -316,7 +532,7 @@ def held_by(graph: dict, phase: str) -> list:
     upstream of it; [] when nothing holds it."""
     if is_paused(graph, phase):
         return [phase]
-    return sorted(_paused_ancestors(graph).get(phase, []))
+    return sorted(_paused_ancestors(graph).get(phase, []), key=phase_sort_key)
 
 
 def pause_fields(graph: dict, phase: str) -> dict:
@@ -485,7 +701,7 @@ def find_phase_file_list_mismatches(graph: dict, plan_dir) -> list:
     `files_to_*` does not declare, and the reverse. Advisory: the prose is free text,
     so only concrete backticked paths are compared — globs and directories are not."""
     out = []
-    for node in sorted(_all_nodes(graph)):
+    for node in sorted(_all_nodes(graph), key=phase_sort_key):
         doc = phase_file(graph, node, plan_dir)
         if doc is None:
             continue
@@ -514,7 +730,7 @@ def find_phase_file_problems(graph: dict, plan_dir) -> list:
     dir, or names nothing on disk. An undeclared `file:` is not a problem — the key
     is optional; a declared one that points nowhere is a false statement in the plan."""
     out = []
-    for node in sorted(_all_nodes(graph)):
+    for node in sorted(_all_nodes(graph), key=phase_sort_key):
         st = _subtask(graph, node)
         if "file" not in st:
             continue
@@ -527,8 +743,8 @@ def find_phase_file_problems(graph: dict, plan_dir) -> list:
 # `merger_owned` has a real reader outside this module — hs_run_git.py's declared-
 # scope check treats a staged path in this list as exempt from the outside-declared
 # block. Listed here so lint_no_status does not tell an author to delete it.
-_TOPLEVEL_KEYS = frozenset({"edges", "subtasks", "status", "merger_owned"})
-_EDGE_KEYS = frozenset({"from", "to", "status"})
+_TOPLEVEL_KEYS = frozenset({"edges", "subtasks", "status", "merger_owned", _CROSS, _WAITS})
+_EDGE_KEYS = frozenset({"from", "to", "status", "waived"})
 
 
 # ------------------------------------------------------- artifact obligation ---
@@ -568,8 +784,8 @@ def find_missing_post(graph: dict) -> list:
     `post` key, and a malformed `post` (not a non-empty list-of-str). The `_main` gate
     turns a non-empty result into a hard exit-2 refusal; the node_artifacts default
     still backstops the runtime so this is an authoring gate, not a runtime crash."""
-    return sorted(n for n in _all_nodes(graph)
-                  if not _str_list(_subtask(graph, n).get("post")))
+    return sorted((n for n in _all_nodes(graph)
+                   if not _str_list(_subtask(graph, n).get("post"))), key=phase_sort_key)
 
 
 _SNAPSHOT_POST = re.compile(r"^verification-(.+)\.json$")
@@ -582,7 +798,7 @@ def find_post_problems(graph: dict) -> list:
     --phase <node>` writes `verification-<node>.json`, so the entry waits on
     a file no verify of this node writes."""
     out = []
-    for node in sorted(_all_nodes(graph)):
+    for node in sorted(_all_nodes(graph), key=phase_sort_key):
         for name in _str_list(_subtask(graph, node).get("post")) or []:
             if name.startswith("artifacts/") or name.startswith("artifacts\\"):
                 out.append("%s: post %r — drop the 'artifacts/' prefix, entries already "
@@ -666,7 +882,8 @@ def find_ordering_hazards(graph: dict) -> list:
 # --------------------------------------------------------------- parallelism ---
 
 def _kahn_levels(adj: dict) -> list:
-    """Topological levels (Kahn) of an adjacency map; each level sorted. A cycle
+    """Topological levels (Kahn) of an adjacency map; each level in `phase_sort_key`
+    order. A cycle
     stops the derivation (named on stderr) — `find_cycles` owns the finding."""
     indeg = defaultdict(int)
     for src, dsts in adj.items():
@@ -676,10 +893,10 @@ def _kahn_levels(adj: dict) -> list:
     remaining = dict(indeg)
     levels = []
     while remaining:
-        level = sorted(n for n, d in remaining.items() if d == 0)
+        level = sorted((n for n, d in remaining.items() if d == 0), key=phase_sort_key)
         if not level:  # a cycle remains — stop deriving batches
             print("plan-graph: cycle detected — %d nodes unreachable: %s" %
-                  (len(remaining), ", ".join(sorted(remaining))),
+                  (len(remaining), ", ".join(sorted(remaining, key=phase_sort_key))),
                   file=sys.stderr)
             break
         levels.append(level)
@@ -693,7 +910,7 @@ def _kahn_levels(adj: dict) -> list:
 
 def find_parallel_batches(graph: dict) -> list:
     """Topological levels (Kahn). Each level is an antichain — a batch that may run
-    in parallel. Returns levels as sorted name lists.
+    in parallel. Returns levels as name lists in `phase_sort_key` order.
 
     Paused phases AND every phase blocked behind one (`phase_holds`) are left out.
     No edge is rewired: the held set is closed under "downstream of", so every
@@ -757,7 +974,7 @@ def independent_clusters(graph: dict) -> list:
     """
     collectors = collector_phases(graph)
     adj = build_adj(graph)
-    nodes = sorted(_all_nodes(graph) - collectors)
+    nodes = sorted(_all_nodes(graph) - collectors, key=phase_sort_key)
     undirected: dict = defaultdict(set)
     for src, dsts in adj.items():
         if src in collectors:
@@ -775,8 +992,8 @@ def independent_clusters(graph: dict) -> list:
             continue
         comp = ({n} | graph_core._closure(undirected, n)) & node_set
         seen |= comp
-        clusters.append(sorted(comp))
-    return sorted(clusters, key=lambda c: c[0])
+        clusters.append(sorted(comp, key=phase_sort_key))
+    return sorted(clusters, key=lambda c: phase_sort_key(c[0]))
 
 
 def longest_chain(graph: dict) -> int:
@@ -823,7 +1040,7 @@ def graph_size_facts(graph: dict) -> dict:
         "phases": len(_all_nodes(graph)),
         "independent_clusters": len(independent_clusters(graph)),
         "longest_chain": longest_chain(graph),
-        "collector_phases": sorted(collector_phases(graph)),
+        "collector_phases": sorted(collector_phases(graph), key=phase_sort_key),
     }
 
 
@@ -849,7 +1066,7 @@ def unordered_phase_pairs(graph: dict) -> list:
     """
     paused = paused_phases(graph)
     adj = build_adj(graph)
-    nodes = sorted(_all_nodes(graph) - paused)
+    nodes = sorted(_all_nodes(graph) - paused, key=phase_sort_key)
     reach = {n: graph_core._closure(adj, n) for n in nodes}
     out = []
     for i in range(len(nodes)):
@@ -1239,7 +1456,7 @@ def advisory_findings(graph: dict, plan_dir, units=None) -> dict:
         units, scan_warning = resolve_snapshot_units(root)
     lines = ["cycle: %s" % " -> ".join(c) for c in find_cycles(graph)]
     lines += ["ordering-hazard: %s" % h["msg"] for h in find_ordering_hazards(graph)]
-    lines += ["blocked: %s" % note for _p, note in sorted(phase_holds(graph)["blocked"].items())]
+    lines += ["blocked: %s" % note for _p, note in sorted(phase_holds(graph)["blocked"].items(), key=lambda kv: phase_sort_key(kv[0]))]
     lines += ["parallel-conflict: %s" % c["msg"] for c in find_parallel_conflicts(graph, root=root)]
     lines += ["merger-owned: %s" % c["msg"] for c in find_merger_owned_overlaps(graph, root=root)]
     lines += ["import-edge-conflict: %s" % c["msg"] for c in find_import_edge_conflicts(graph, units)]
@@ -1339,7 +1556,12 @@ def _main(argv=None) -> int:
     bad_post = find_post_problems(graph)
     for line in bad_post:
         print("bad-post: %s" % line)
-    return 2 if missing or bad_post or (args.require and phase_file_problems) else 0
+    # A cross-plan edge that cannot hold is the same kind of contract break as a
+    # missing `post`: the phase it gates would wait forever, or never wait at all.
+    cross = find_cross_plan_problems(graph, args.plan_dir)
+    for line in cross:
+        print("cross-plan: %s" % line)
+    return 2 if missing or bad_post or cross or (args.require and phase_file_problems) else 0
 
 
 if __name__ == "__main__":

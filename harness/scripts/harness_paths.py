@@ -342,29 +342,43 @@ def _project_from_cwd() -> Optional[Path]:
     return None
 
 
+def data_root_and_reason() -> "tuple[Path, Optional[str]]":
+    """data_root() with its reason: (data home, None), or (_UNRESOLVED, why) naming the
+    tier that refused and the value to set. The one walk of the strict precedence, so a
+    refusal cannot blame a tier the resolver never took (HARNESS_DATA_ROOT=<project>
+    read as "CLAUDE_PROJECT_DIR unset"). STRICT ONLY, like data_root(): no switch turns
+    a cwd walk on — that lives in tool_data_root_and_reason() alone."""
+    raw = os.environ.get("HARNESS_DATA_ROOT")
+    proj = os.environ.get("CLAUDE_PROJECT_DIR")
+    if raw:
+        why = data_root_env_problem()
+        return (Path(raw).resolve(), None) if why is None else (_UNRESOLVED, why)
+    if proj:
+        anchor = Path(proj).resolve()
+        host = worktree_host_root(anchor)  # linked worktree -> host (F2)
+        cand = (host if host is not None else anchor) / DATA_HOME_NAME
+        if _valid_project_dir(cand):
+            return cand, None
+        return _UNRESOLVED, "CLAUDE_PROJECT_DIR=%s puts the project at the filesystem root" % proj
+    # Self-host (dogfood): ONLY when HARNESS_BIN_ROOT is UNSET. A global bin is
+    # itself a git checkout, so this must NOT key off a `.git` walk-up (F2).
+    if not os.environ.get("HARNESS_BIN_ROOT"):
+        anchor = bin_root()
+        host = worktree_host_root(anchor)  # self-host in a worktree -> host (R4/T8)
+        return (host if host is not None else anchor) / DATA_HOME_NAME, None
+    # Global layout with no resolvable project → fail-closed, never CWD.
+    return _UNRESOLVED, ("neither HARNESS_DATA_ROOT nor CLAUDE_PROJECT_DIR is set under "
+                         "the global bin HARNESS_BIN_ROOT=%s — set HARNESS_DATA_ROOT="
+                         "<project>/%s" % (os.environ["HARNESS_BIN_ROOT"], DATA_HOME_NAME))
+
+
 def data_root() -> Path:
     """The per-project data home `.harness/`. STRICT ONLY — never walks CWD; see
     module docstring for the exact precedence and the fail-closed contract. A
     guard/hook always calls this bare. A tool that needs the CWD walk-up uses
     the named tool_data_root() instead (never a boolean opt-in here — see
     module docstring for why)."""
-    raw = os.environ.get("HARNESS_DATA_ROOT")
-    if raw:
-        return _UNRESOLVED if data_root_env_problem() else Path(raw).resolve()
-    proj = os.environ.get("CLAUDE_PROJECT_DIR")
-    if proj:
-        anchor = Path(proj).resolve()
-        host = worktree_host_root(anchor)  # linked worktree -> host (F2)
-        cand = (host if host is not None else anchor) / DATA_HOME_NAME
-        return cand if _valid_project_dir(cand) else _UNRESOLVED
-    # Self-host (dogfood): ONLY when HARNESS_BIN_ROOT is UNSET. A global bin is
-    # itself a git checkout, so this must NOT key off a `.git` walk-up (F2).
-    if not os.environ.get("HARNESS_BIN_ROOT"):
-        anchor = bin_root()
-        host = worktree_host_root(anchor)  # self-host in a worktree -> host (R4/T8)
-        return (host if host is not None else anchor) / DATA_HOME_NAME
-    # Global layout with no resolvable project → fail-closed, never CWD.
-    return _UNRESOLVED
+    return data_root_and_reason()[0]
 
 
 def data_root_for(root) -> Path:
@@ -382,23 +396,31 @@ def data_root_for(root) -> Path:
     return project / DATA_HOME_NAME
 
 
+def tool_data_root_and_reason() -> "tuple[Path, Optional[str]]":
+    """TOOL-context resolver with its reason: the strict tiers first; only when they
+    come back unresolved AND under a global layout (HARNESS_BIN_ROOT set) does a
+    Bash-tool script walk up from CWD to its own project's `.harness/` instead of
+    failing closed — and a walk that finds none adds the cwd to the reason. It runs
+    with cwd == the project and only ever resolves that project's own state, so it
+    cannot widen a guard lane. A guard/hook must NEVER call this — it always calls
+    data_root() bare and stays fail-closed (F2); this is exactly the boundary the
+    absence-guard on harness/hooks/ + fs_guard.py enforces, by this name's prefix."""
+    dr, why = data_root_and_reason()
+    if why is None or not os.environ.get("HARNESS_BIN_ROOT"):
+        return dr, why
+    found = _project_from_cwd()
+    if found is not None:
+        return found, None
+    try:
+        cwd = str(Path.cwd())
+    except OSError:
+        cwd = "<unreadable>"
+    return dr, "%s; no initialized project (a %s/) encloses cwd %s" % (why, DATA_HOME_NAME, cwd)
+
+
 def tool_data_root() -> Path:
-    """TOOL-context resolver: the strict tiers first (DRY — calls data_root(),
-    never re-inlines them); only when that comes back unresolved AND under a
-    global layout (HARNESS_BIN_ROOT set) does a Bash-tool script walk up from
-    CWD to its own project's `.harness/` instead of failing closed. It runs
-    with cwd == the project and only ever resolves that project's own state,
-    so it cannot widen a guard lane. A guard/hook must NEVER call this — it
-    always calls data_root() bare and stays fail-closed (F2); this is exactly
-    the boundary the absence-guard on harness/hooks/ + fs_guard.py enforces."""
-    dr = data_root()
-    if not data_root_unresolved(dr):
-        return dr
-    if os.environ.get("HARNESS_BIN_ROOT"):
-        found = _project_from_cwd()
-        if found is not None:
-            return found
-    return dr  # still unresolved — the fail-closed marker, never CWD
+    """tool_data_root_and_reason() without its reason."""
+    return tool_data_root_and_reason()[0]
 
 
 def data_root_unresolved(p: Path) -> bool:

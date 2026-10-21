@@ -34,8 +34,9 @@ CLI:
         [--meta tree=di --meta tags='[a, b]'] [--meta-json '{"scope": {...}}']
     decision_register.py --root <dir> --list   # active records as JSON
     decision_register.py --root <dir> --render-md   # re-render decisions.md from the YAML SSOT
-    decision_register.py --root <dir> --amend DEC-n [--title ...] [--rationale ...]
-        # reword a live ruling, locked; the replaced text -> docs/decision-revisions.jsonl
+    decision_register.py --root <dir> --amend DEC-n [--title ...] [--rationale ...] \\
+        [--affects ...] [--executed-by ...]
+        # reword or re-anchor a live ruling, locked; the replaced text -> docs/decision-revisions.jsonl
 
 `meta` is the record's own metadata (a mapping; any YAML value): written only when
 non-empty, round-tripped through every later write, shown by --list and rendered
@@ -1004,19 +1005,20 @@ def scan_counts(root) -> Optional[Tuple[int, int]]:
     return len(records), superseded
 
 
+def ids_in_text(text: str, *, yaml_ssot: bool) -> List[str]:
+    """Every DEC id the register text holds -- `decisions.yaml` (`yaml_ssot`) or the
+    legacy `decisions.md` -- without parsing it: a reader holding the text of another
+    commit (`git show`) asks the same question the live register answers."""
+    return (_scan_yaml_id_lines(text) if yaml_ssot else scan_record_ids(text)) + _HEADING_ID_RE.findall(text)
+
+
 def _scan_all_ids(root) -> List[str]:
-    if _uses_yaml(root):
-        try:
-            text = _yaml_path(root).read_text(encoding="utf-8")
-        except (FileNotFoundError, OSError, UnicodeDecodeError):
-            return []
-        return _scan_yaml_id_lines(text) + _HEADING_ID_RE.findall(text)
-    path = _decisions_path(root)
+    yaml_ssot = _uses_yaml(root)
     try:
-        text = path.read_text(encoding="utf-8")
+        text = (_yaml_path(root) if yaml_ssot else _decisions_path(root)).read_text(encoding="utf-8")
     except (FileNotFoundError, OSError, UnicodeDecodeError):
         return []
-    return scan_record_ids(text) + _HEADING_ID_RE.findall(text)
+    return ids_in_text(text, yaml_ssot=yaml_ssot)
 
 
 def render_md(records: List[Dict[str, Any]]) -> str:
@@ -1264,21 +1266,26 @@ def _trail_path(root) -> Path:
     return Path(root) / "docs" / "decision-revisions.jsonl"
 
 
-_AMENDABLE = ("title", "rationale")
+# Wording and where the ruling is carried out — never status, lineage (supersedes) or
+# attribution (actor, ts): the anchors move with the code after the ruling is made.
+_AMENDABLE = ("title", "rationale", "affects", "executed_by")
+_AMEND_FLAGS = " / ".join("--" + f.replace("_", "-") for f in _AMENDABLE)
 
 
 def amend_decision(root, dec_id: str, title: Optional[str] = None,
-                   rationale: Optional[str] = None) -> Dict[str, Any]:
-    """Rewrite a live ruling's title and/or rationale — wording, never status,
-    lineage or attribution: the record keeps the actor + ts of who ruled. Inside
+                   rationale: Optional[str] = None, affects: Optional[str] = None,
+                   executed_by: Optional[str] = None) -> Dict[str, Any]:
+    """Rewrite a live ruling's title, rationale, affects and/or executed_by — wording
+    and anchors, never status, lineage or attribution: the record keeps the actor + ts
+    of who ruled. Inside
     the register lock, the text replaced is appended to the trail (the reviser's
     actor + ts) BEFORE the SSOT is rewritten, so a crash between the two leaves a
     trail line the SSOT does not match yet, never a rewrite with no trail. A
     superseded ruling is history: refused, record a new one."""
-    change = {k: re.sub(r"[\r\n]+", " ", v).strip()
-              for k, v in (("title", title), ("rationale", rationale)) if v is not None}
+    given = dict(zip(_AMENDABLE, (title, rationale, affects, executed_by)))
+    change = {k: re.sub(r"[\r\n]+", " ", v).strip() for k, v in given.items() if v is not None}
     if not change:
-        raise DecisionError("--amend needs --title and/or --rationale")
+        raise DecisionError("--amend needs at least one of %s" % _AMEND_FLAGS)
     empty = [k for k, v in change.items() if not v]
     if empty:
         raise DecisionError("--amend cannot empty the %s" % " or ".join(empty))
@@ -1300,12 +1307,15 @@ def amend_decision(root, dec_id: str, title: Optional[str] = None,
                 "record a new ruling instead" % dec_id)
         before = {k: rec.get(k, "") for k in change if rec.get(k, "") != change[k]}
         if not before:
-            raise DecisionError("--amend changed nothing for %s — pass a --title or "
-                                "--rationale that differs" % dec_id)
+            raise DecisionError("--amend changed nothing for %s — pass a %s that differs"
+                                % (dec_id, _AMEND_FLAGS))
         after = {k: change[k] for k in before}
-        if bare_refs(" ".join(after.values())):
+        # The fields append checks for a citation, no more: executed_by is a code
+        # anchor (`path:symbol`), and a symbol may read like an id.
+        cites = [v for k, v in after.items() if k in ("title", "rationale", "affects")]
+        if bare_refs(" ".join(cites)):
             stored = {r["id"] for r in parse_decisions(root)}
-            cited = [ref for v in after.values() for ref in unresolved_bare_refs(v, stored)]
+            cited = [ref for v in cites for ref in unresolved_bare_refs(v, stored)]
             if cited:
                 raise DecisionError(_bare_citation_message(cited, stored, legacy_map(root)))
         trail = _trail_path(root)
@@ -1648,7 +1658,8 @@ def main() -> int:
                            "parent's records with its own by title and date, and store "
                            "each old id as `legacy_id` on the ruling it became")
     mode.add_argument("--amend", metavar="DEC-n",
-                      help="rewrite a live ruling's --title and/or --rationale, locked; "
+                      help="rewrite a live ruling's --title, --rationale, --affects and/or "
+                           "--executed-by, locked; "
                            "the replaced text goes to docs/decision-revisions.jsonl and "
                            "docs/decisions.md is re-rendered")
     mode.add_argument("--render-md", action="store_true",
@@ -1693,8 +1704,10 @@ def main() -> int:
             print(json.dumps(map_legacy_ids(root, args.map_legacy_ids), ensure_ascii=False))
             return 0
         if args.amend:
+            # `--affects`/`--executed-by` default to "" for --append: empty here is "not given".
             result = amend_decision(root, args.amend, title=args.title,
-                                    rationale=args.rationale)
+                                    rationale=args.rationale, affects=args.affects or None,
+                                    executed_by=args.executed_by or None)
             rc = report_post_write(result, "decisions",
                                    run_post_write(root, "decisions", "amend"))
             print(json.dumps(result, ensure_ascii=False))

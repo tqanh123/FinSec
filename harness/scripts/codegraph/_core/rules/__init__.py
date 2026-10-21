@@ -21,6 +21,7 @@ from .kinds import pkg_door as _pkg_door                 # noqa: F401,E402
 from .kinds import packaging as _packaging               # noqa: F401,E402
 from .kinds import landfall as _landfall                 # noqa: F401,E402
 from .kinds import stale_rename as _stale_rename         # noqa: F401,E402
+from .kinds import package_boundary as _package_boundary  # noqa: F401,E402
 
 __all__ = ["RuleContext", "RuleCheck", "RuleResult", "RulesEngine", "RulesError",
            "SEVERITIES", "Violation", "kind_names", "register_kind", "require_params"]

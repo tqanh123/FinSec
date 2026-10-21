@@ -54,5 +54,5 @@ class SameTierEdgeCheck:
                           (f"undecided ends skipped: {undecided}",))
 
 
-register_kind("same_tier_edge")(
+register_kind("same_tier_edge", languages="*")(
     require_params("tiers")(SameTierEdgeCheck))

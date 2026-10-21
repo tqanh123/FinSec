@@ -7,7 +7,7 @@ import sys
 import time
 
 from rops.ropslib import hosts, tree
-from rops.verbs.lane import ROPS_ENV_FILTER
+from rops.verbs.lane import ROPS_ENV_FILTER, anchored_keeps, pushed_excludes
 
 
 
@@ -29,13 +29,16 @@ def _confirm(question: str, *, auto: bool) -> bool:
 def _dirty(repo) -> list[str]:
     r = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
                        text=True, capture_output=True)
-    return [l for l in r.stdout.splitlines() if l.strip()]
+    return [line for line in r.stdout.splitlines() if line.strip()]
 
 
 def _rsync(cfg, src: str, dst: str, *, delete: bool, back: bool = False) -> int:
-    excludes: list[str] = []
-    for e in cfg.csv("ROPS_RSYNC_EXCLUDES"):
-        excludes += ["--exclude", e]
+    # Pushed as a lane pushes (`lane.pushed_excludes`: a kept name plain, the rest
+    # perishable); pulled back, a plain exclude: what the local side excludes in a
+    # directory the remote lacks stays home.
+    patterns = cfg.csv("ROPS_RSYNC_EXCLUDES")
+    excludes: list[str] = ([x for e in patterns for x in ("--exclude", e)] if back
+                           else pushed_excludes(cfg, patterns + anchored_keeps(cfg, patterns)))
     # A linked worktree's `.git` is a FILE (`gitdir: …/.git/worktrees/<name>`), and the
     # `.git/` exclude (trailing slash = directory) does not match it. Measured 260906
     # (dev6): syncing over a `hs-rops lane` checkout replaced the lane's own `.git` pointer

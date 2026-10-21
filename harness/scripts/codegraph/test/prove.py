@@ -102,7 +102,7 @@ def prove_one(repo: Path, spec: ProveSpec, *, timeout: int = DEFAULT_TIMEOUT) ->
                     f"({count} occurrences) -- narrow it so the mutation is "
                     f"unambiguous")
             try:
-                base_code, base_tail = run_declared(work, spec.tests, timeout=timeout)
+                base_code, base_tail = run_declared(work, spec.tests, root=repo, timeout=timeout)
             except DeclaredCommandError as e:
                 return ProveOutcome(spec, "error", str(e))
             if base_code != 0:
@@ -110,7 +110,7 @@ def prove_one(repo: Path, spec: ProveSpec, *, timeout: int = DEFAULT_TIMEOUT) ->
                     spec, "error",
                     f"baseline (unmutated) already red, exit {base_code}: {base_tail}")
             target.write_text(original.replace(spec.old, spec.new, 1), encoding="utf-8")
-            code, tail = run_declared(work, spec.tests, timeout=timeout)
+            code, tail = run_declared(work, spec.tests, root=repo, timeout=timeout)
             if code in (-1, -2):
                 # the named tests never went red; the run did not finish
                 return ProveOutcome(spec, "error", f"mutated run did not complete: {tail}")

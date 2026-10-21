@@ -34,15 +34,21 @@ multi-line call the regex does not match) still appears with an EMPTY
 already proved the edge exists, so an unmatched scan is a blind spot in the
 LINE, never in the fact of the call itself.
 
-`unresolved` = `{qualname: [{"file", "lines", "receivers"}]}`, for a METHOD
-subject only: every `<receiver>.<name>` use across the snapshot's measured
-files, strings and comments blanked first, a receiver on an earlier line
-included. The snapshot never resolves a call through an object whose type it
-does not know, so without this a method called only that way read as having
-no caller. These are name matches, not type-checked, so they never enter
-`value`; at most `_UNRESOLVED_FILES` files are listed per subject, each with
-its `uses` count and at most `_UNRESOLVED_LINES` lines, and the warning carries
-the full count. An import statement is no use.
+For a METHOD subject, every `<receiver>.<name>` use across the snapshot's
+measured files (strings and comments blanked first, a receiver on an earlier
+line included) is read too: the snapshot never resolves a call through an
+object whose type it does not know, so without this a method called only that
+way read as having no caller. A use whose receiver's class the file itself
+states, named through what the file imports or defines, is decided by that
+class (`receiver_types`): one reaching the subject joins `value` under the def
+holding it, with the `receivers` that showed it. The rest are `unresolved` =
+`{qualname: [{"file", "uses", "lines", "receivers"[, "reaches"]}]}`: name matches,
+undecided ones first, then one entry per file and class for a use whose receiver is
+exactly another class (`Other()`) reaching its own method, carrying the class it
+`reaches`. That is a label, never a deletion: a module elsewhere can rebind the
+method. At most `_UNRESOLVED_FILES` entries are listed per subject, each with its
+`uses` count and at most `_UNRESOLVED_LINES` lines, and the warning carries the full
+counts. An import statement is no use.
 """
 from __future__ import annotations
 
@@ -51,13 +57,18 @@ import re
 from pathlib import Path
 
 import codegraph_change_reader
+from hs_run_facts import receiver_types
 
 _BASIS = (
     "one-hop caller-symbol edges from the snapshot's own `callers` index "
     "(`codegraph_change_reader.callers_index`) -- a lower bound: a call "
     "through an instance, getattr, dict dispatch and callbacks do not resolve "
-    "into a ref (for a method, its `.name` uses by name are listed under "
-    "`unresolved` instead), "
+    "into a ref (for a method, a `.name` use whose receiver's class the file "
+    "states -- `Cls()`, `self`, `x: Cls`, `x = Cls()`, the class named through the "
+    "file's own imports -- is decided by that class's MRO: reaching the subject it is "
+    "listed with its `receivers`; every other `.name` use is listed under `unresolved`, "
+    "one on a receiver that is exactly another class (`Other()`) labelled with the class "
+    "it `reaches`), "
     "a call through a module loaded by path (`importlib.util."
     "spec_from_file_location` + `exec_module`) is no import edge and is never "
     "listed, "
@@ -202,6 +213,40 @@ def _measured_paths(idx: dict) -> "set[str]":
     return {m["path"] for m in codegraph_change_reader._modules(idx) if m.get("path")}
 
 
+def _receiver(code: str, end: int) -> str:
+    """The receiver whose text ends just before `end`, a call or an index named by
+    what it calls or indexes with its arguments dropped: `super()`, `stores[]`,
+    `get()[]`, and `()` for a bare parenthesised expression. `code` is blanked of
+    strings and comments, so every bracket counted is code."""
+    i, suffix = end - 1, ""
+    while i >= 0 and code[i] in ")]":
+        close = code[i]
+        opener, depth = "(" if close == ")" else "[", 0
+        while i >= 0:
+            if code[i] in ")]":
+                depth += 1
+            elif code[i] in "([":
+                depth -= 1
+                if depth == 0:
+                    break
+            i -= 1
+        if i < 0 or code[i] != opener:
+            return close  # unbalanced: say what was seen, never guess
+        suffix = opener + close + suffix
+        i -= 1
+        while i >= 0:  # a name stands on the same logical line as its bracket
+            if code[i] in " \t":
+                i -= 1
+            elif code[i] == "\n" and i > 0 and code[i - 1] == "\\":
+                i -= 2
+            else:
+                break
+    name_end = i + 1
+    while i >= 0 and (code[i].isalnum() or code[i] == "_"):
+        i -= 1
+    return code[i + 1:name_end] + suffix
+
+
 def _attribute_uses(root: Path, paths, methods: "dict[str, str]",
                     cache: "dict | None" = None) -> "dict[str, list[dict]]":
     """For each method qualname -> its bare name: every `<receiver>.<name>` use in
@@ -230,11 +275,23 @@ def _attribute_uses(root: Path, paths, methods: "dict[str, str]",
             receivers = set()
             for m in pat.finditer(code):
                 hits[bisect.bisect_left(breaks, m.start(2)) + 1] = None
-                receivers.add(m.group(1))
+                receivers.add(_receiver(code, m.end(1)))
             if hits:
                 out[q].append({"file": path, "lines": sorted(hits),
                                "receivers": sorted(receivers)[:_UNRESOLVED_RECEIVERS]})
     return out
+
+
+def _credit(entries: list, path: str, line: int, found_at: list) -> None:
+    """Add a use resolved by its receiver's class to `entries`, under the def holding it."""
+    caller = found_at[0][3]
+    receivers = sorted({r for _v, _c, r, _w in found_at})
+    for e in entries:
+        if e["caller"] == caller:
+            e["lines"] = sorted(set(e["lines"]) | {line})
+            e["receivers"] = sorted(set(e.get("receivers") or ()) | set(receivers))
+            return
+    entries.append({"caller": caller, "file": path, "lines": [line], "receivers": receivers})
 
 
 def _qualify(subject: str, defined: dict, modules: "set[str]",
@@ -255,21 +312,35 @@ def _qualify(subject: str, defined: dict, modules: "set[str]",
     return (hits[0], []) if len(hits) == 1 else (None, sorted(hits))
 
 
+def _other_language(idx: dict, subjects: "list[str]") -> "dict[str, str]":
+    """subject -> the language of its module, for a subject naming a module of a
+    language other than Python (callers are read from Python references only)."""
+    langs = {m["module"]: m["lang"] for ms in (idx.get("units") or {}).values() for m in ms
+             if m.get("lang")}
+    return {s: langs[s.partition("::")[0]] for s in subjects if s.partition("::")[0] in langs}
+
+
 def provide(ctx: dict) -> dict:
     idx = ctx["snapshot"]
     root = Path(ctx["root"])
-    subjects = sorted(set(ctx.get("subjects") or ()))
+    asked = sorted(set(ctx.get("subjects") or ()))
+    foreign = _other_language(idx, asked)
+    if foreign and len(foreign) == len(asked):
+        return {"unavailable": True,
+                "reason": "language_unsupported: code.callers reads python only; %s"
+                          % ", ".join("%s is %s" % kv for kv in sorted(foreign.items()))}
+    subjects = [s for s in asked if s not in foreign]
 
     defined = codegraph_change_reader.qualified_index(idx)
     callers, _outside, _ambiguous = codegraph_change_reader.callers_index(idx)
     modules = {info["module"] for info in defined.values()}
     by_bare: "dict[str, list[str]]" = {}
-    for q in defined:
-        by_bare.setdefault(q.partition("::")[2], []).append(q)
+    for qual in defined:
+        by_bare.setdefault(qual.partition("::")[2], []).append(qual)
 
     value: "dict[str, list[dict]]" = {}
     cache: "dict[str, str | None]" = {}
-    not_in_snapshot = []
+    not_in_snapshot: "list[str]" = []
     notes: "list[str]" = []
     for subject in subjects:
         q, shared = _qualify(subject, defined, modules, by_bare)
@@ -295,29 +366,84 @@ def provide(ctx: dict) -> dict:
     unresolved: "dict[str, list[dict]]" = {}
     if methods:
         uses = _attribute_uses(root, _measured_paths(idx), methods, cache)
+        table = receiver_types.ClassTable(idx, root)
         for q, found in uses.items():
             seen = {(e["file"], n) for e in value[q] for n in e["lines"]}
-            kept = []
+            kept: "list[dict]" = []
+            elsewhere: "list[dict]" = []
+            cut: "dict[int, int]" = {}  # id(entry) -> how many lines it had
+            typed = 0
+            other: "dict[str, int]" = {}
             for u in found:
                 left = [n for n in u["lines"] if (u["file"], n) not in seen]
-                if left:
-                    kept.append(dict(u, uses=len(left), lines=left[:_UNRESOLVED_LINES]))
-            unresolved[q] = kept[:_UNRESOLVED_FILES]
+                if not left:
+                    continue
+                said = receiver_types.classify_file(table, u["file"], None, q)
+                open_lines = []
+                reach: "dict[str, list]" = {}
+                for n in left:
+                    found_at = said.get(n) or [(None, None, None, None)]
+                    verdicts = {v for v, _c, _r, _w in found_at}
+                    if verdicts == {"this"}:
+                        typed += len(found_at)
+                        _credit(value[q], u["file"], n, found_at)
+                    elif verdicts == {"other"}:
+                        for _v, cls, r, _w in found_at:
+                            other[cls] = other.get(cls, 0) + 1
+                            reach.setdefault(cls, []).append((n, r))
+                    else:
+                        open_lines.append(n)
+                if open_lines:
+                    kept.append(dict(u, uses=len(open_lines),
+                                     lines=open_lines[:_UNRESOLVED_LINES]))
+                    cut[id(kept[-1])] = len(open_lines)
+                # A label, never a deletion: a module elsewhere can rebind the method.
+                for cls, at in sorted(reach.items()):
+                    lines = sorted({n for n, _r in at})
+                    elsewhere.append({"file": u["file"], "uses": len(at), "reaches": cls,
+                                      "lines": lines[:_UNRESOLVED_LINES],
+                                      "receivers": sorted({r for _n, r in at})[
+                                          :_UNRESOLVED_RECEIVERS]})
+                    cut[id(elsewhere[-1])] = len(lines)
+            unresolved[q] = (kept + elsewhere)[:_UNRESOLVED_FILES]
             n_uses = sum(u["uses"] for u in kept)
             bare = methods[q]
             listed = ("listed under `unresolved`" if len(kept) <= _UNRESOLVED_FILES else
                       "the first %d files listed under `unresolved`" % _UNRESOLVED_FILES)
-            notes.append(
-                "%s: %d resolved caller(s); %d attribute use(s) of `.%s` in %d file(s), "
-                "%s (receiver types not checked)"
-                % (q, len(value[q]), n_uses, bare, len(kept), listed) if n_uses else
-                "%s: %d resolved caller(s), and no `.%s` use in the measured files either"
-                % (q, len(value[q]), bare))
+            note = ("%s: %d resolved caller(s)" % (q, len(value[q]))
+                    + (" (%d use(s) by a receiver of its class)" % typed if typed else ""))
+            if other:
+                note += ("; %d use(s) on a receiver that is exactly another class, listed "
+                         "after them under `unresolved` with what each `reaches`: %s") % (
+                    sum(other.values()), ", ".join(
+                        "%s (%d)" % (c, k) for c, k in sorted(other.items(),
+                                                              key=lambda kv: (-kv[1], kv[0]))))
+            if n_uses:
+                note += "; %d attribute use(s) of `.%s` in %d file(s), %s (receiver types " \
+                        "not evident)" % (n_uses, bare, len(kept), listed)
+            elif typed or other:
+                note += "; no other `.%s` use in the measured files" % bare
+            else:
+                note += ", and no `.%s` use in the measured files either" % bare
+            if other and len(kept) + len(elsewhere) > _UNRESOLVED_FILES:
+                note += "; `unresolved` lists the first %d of %d entries, undecided ones " \
+                        "first" % (_UNRESOLVED_FILES, len(kept) + len(elsewhere))
+            short = [(len(u["lines"]), cut[id(u)]) for u in unresolved[q]
+                     if cut[id(u)] > len(u["lines"])]
+            if short:
+                note += "; %d entries list %d of their %d lines" % (
+                    len(short), sum(a for a, _b in short), sum(b for _a, b in short))
+            notes.append(note)
 
     basis = "%s. Index: %d target(s), %d caller edge(s)" % (
         _BASIS, len(callers), sum(len(v) for v in callers.values()))
+    if foreign:
+        notes.append("language_unsupported (python only): %s"
+                     % ", ".join("%s is %s" % kv for kv in sorted(foreign.items())))
     warning = _WARNING + ("; subjects: " + "; ".join(notes) if notes else "")
     out = {"value": value, "basis": basis, "warning": warning}
+    if foreign:
+        out["language_unsupported"] = sorted(foreign)
     if not_in_snapshot:
         out["not_in_snapshot"] = not_in_snapshot
     if unresolved:

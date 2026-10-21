@@ -257,8 +257,8 @@ def _importers(args: argparse.Namespace) -> "int | Outcome":
                                                           exact=args.exact))
 
     def _call(eng: QueryEngine, base: Path) -> QueryResult:
-        roots = load(root / "codemap.yaml", root).descriptor.import_roots
-        return eng.importers_using(args.module, args.symbol, root, roots)
+        desc = load(root / "codemap.yaml", root).descriptor
+        return eng.importers_using(args.module, args.symbol, root, desc.import_roots, desc)
     return _run_query(root, opts, args.snap, args.out, "importers", _call)
 
 
@@ -374,6 +374,13 @@ def _listed(label: str, d: dict, key: str, total: int, top: int) -> "list[str]":
     return L
 
 
+def _unavailable(rows: "list[dict[str, str]]", data: dict, L: "list[str]") -> None:
+    if rows:
+        data["function_level_unavailable"] = rows
+        L.append(f"  functions not read ({len(rows)} file(s)): "
+                 + ", ".join(r["path"] for r in rows))
+
+
 def _tests(args: argparse.Namespace) -> "int | Outcome":
     """`tests [--level unit|function] [--top N] [UNIT]` — which test file
     (unit level) or test function (function level) touches `UNIT`; with no
@@ -405,6 +412,7 @@ def _tests(args: argparse.Namespace) -> "int | Outcome":
                      f"  units with no direct test ({len(d['units_without_direct_test'])}): "
                      f"{', '.join(d['units_without_direct_test']) or '—'}"]
                 L += _listed("blind", d, "blind_func_ids", d["blind_funcs"], top)
+                _unavailable(tmap.function_level_unavailable(), d, L)
             else:
                 d = testmap.unit_stats(tmap, all_units)
                 L = [f"{d['total_test_files']} test file(s)",
@@ -432,6 +440,7 @@ def _tests(args: argparse.Namespace) -> "int | Outcome":
             if len(fn_ids) > top:
                 L.append(f"  … {len(fn_ids) - top} more (--top to see them)")
             data = {"unit": key, "level": "function", "functions": fn_ids, "files": files}
+            _unavailable(tmap.function_level_unavailable(key), data, L)
             return QueryResult(0 if fn_ids else 1, "\n".join(L), data)
 
         owned, shared = testmap.owned_and_shared(tmap, key)

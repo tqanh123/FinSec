@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -190,13 +191,105 @@ _ANCHOR_TIMEOUT_S = 120
 ANCHOR_TIMEOUT_MAX_S = 14400
 
 
+_OUTPUT_DIR = "manual-test-output"
+# How many kept outputs stay beside the sink, newest first, and how much of each
+# stream one keeps: the end of a run is where its failure is, so a cut drops the start.
+_OUTPUT_KEEP = 50
+_OUTPUT_STREAM_MAX = 1_000_000
+_TAIL_LINES = 20
+_TAIL_CHARS = 4000
+
+
+# Redaction sees the kept part plus this much before it, past the longest span a
+# pattern takes (a private-key block, 16 KiB), never the whole stream. A label
+# separated from its value by more than this is out of reach: the case guarded is
+# a secret printed by accident, and nothing prints a label, 16 KiB of blanks, then
+# its value by accident.
+_REDACT_MARGIN = 16384
+
+
+def _clean(text):
+    """`text` redacted, its last `_OUTPUT_STREAM_MAX` chars kept. Matches are found
+    on the kept part plus the margin before it, and the cut is made in the raw
+    text's coordinates: a secret that begins in the margin is replaced whole where
+    it reaches the kept part, and no replacement can pull margin text back in."""
+    import secret_patterns
+    text = text or ""
+    start = max(len(text) - _OUTPUT_STREAM_MAX, 0)
+    lo = max(start - _REDACT_MARGIN, 0)
+    window, at = text[lo:], start - lo
+    parts = []
+    for s, e, name in secret_patterns.spans(window):
+        if e <= at:
+            continue
+        parts.append(window[at:max(s, at)])
+        parts.append("[redacted:%s]" % name)
+        at = e
+    parts.append(window[at:])
+    red = "".join(parts)
+    return "[earlier output cut]\n" + red if start else red
+
+
+def _tail(output):
+    """The last lines of `output` (already `_clean`) for a terminal, bounded in
+    chars as well — one line can be megabytes."""
+    tail = "\n".join(output.rstrip("\n").splitlines()[-_TAIL_LINES:])
+    return "[...]" + tail[-_TAIL_CHARS:] if len(tail) > _TAIL_CHARS else tail
+
+
+def _keep_output(out_dir, anchor_id, text, keep=_OUTPUT_KEEP):
+    """Write `text` (owner-only) to a new file in `out_dir` and drop all but the
+    newest `keep`. The name leads with a nanosecond clock so names sort in write
+    order — mtimes are too coarse to order two runs milliseconds apart — and the
+    file just written is never the one dropped, whatever the clock did."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / ("%019d-%s.log" % (time.time_ns(), anchor_id))
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    others = [q for q in sorted(out_dir.glob("*.log")) if q != path]
+    for old in others[:max(len(others) - keep + 1, 0)]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return path
+
+
+def _keep_run(command, exit_code, stdout, stderr):
+    """Keep one run's command and `_clean` output beside the sink. Returns
+    (path, path relative to the telemetry dir), or (None, None) — fail-open like
+    the sink, and never a directory where no project resolves."""
+    import harness_paths
+    import telemetry_paths
+    try:
+        if telemetry_paths.disabled() or harness_paths.writable_state_dir() is None:
+            return None, None
+        tdir = telemetry_paths.telemetry_dir()
+        text = "command: %s\nexit_code: %s\n--- stdout ---\n%s\n--- stderr ---\n%s" % (
+            _clean(command), exit_code, stdout, stderr)
+        kept = _keep_output(tdir / _OUTPUT_DIR, anchor_id_for(command), text)
+        return kept, kept.relative_to(tdir).as_posix()
+    except Exception:
+        return None, None
+
+
 def run_and_anchor(command, session=None, timeout=_ANCHOR_TIMEOUT_S):
     """Self-execute `command`, hash the REAL captured output, and append a
-    cli-sourced anchor. Returns (anchor_id, exit_code), or (None, None) when the
-    command could not be spawned. A timeout raises `subprocess.TimeoutExpired`
-    after the process group is killed — a run cut short is not anchored, and the
-    caller says it timed out rather than that it never ran. A command that runs
-    and exits non-zero DID run: it is anchored, with its exit code recorded.
+    cli-sourced anchor. Returns (anchor_id, exit_code, kept, output), or
+    (None, None, None, None) when the command could not be spawned. A timeout
+    raises `subprocess.TimeoutExpired` after the process group is killed — a run
+    cut short is not anchored, and the caller says it timed out rather than that
+    it never ran; what it printed is still kept, named on the exception as `kept`.
+    A command that runs and exits non-zero DID run: it is anchored, with its exit
+    code recorded.
+
+    The hash alone cannot say why a run failed, so the command, its exit code,
+    stdout and stderr are kept (redacted) in a file beside the sink, named on the
+    record as `output_file` (relative to the telemetry dir) and returned as `kept`;
+    None when telemetry is off or nothing can be written. `output` is the same
+    redacted stdout and stderr, for the caller to show through `_tail`.
 
     `errors="replace"` keeps a probe that emits non-UTF-8 bytes (a binary curl
     body, an openssl dump) fail-SOFT: the command ran, so its output is captured
@@ -208,16 +301,22 @@ def run_and_anchor(command, session=None, timeout=_ANCHOR_TIMEOUT_S):
             ["bash", "-c", command],
             capture_output=True, text=True, timeout=timeout, errors="replace",
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        exc.kept = _keep_run(command, "timed out after %s s" % timeout,
+                             _clean(exc.output), _clean(exc.stderr))[0]
         raise
     except (OSError, subprocess.SubprocessError):
-        return None, None
+        return None, None, None, None
     output = proc.stdout if proc.stdout else proc.stderr
     rec = build_anchor(command, output, session=session, source="cli")
     rec["exit_code"] = proc.returncode
+    out, err = _clean(proc.stdout), _clean(proc.stderr)
+    kept, rel = _keep_run(command, proc.returncode, out, err)
+    if rel:
+        rec["output_file"] = rel
     import telemetry_paths
     telemetry_paths.append_event(ANCHOR_SINK, rec)
-    return rec["anchor_id"], proc.returncode
+    return rec["anchor_id"], proc.returncode, kept, out + err
 
 
 def _build_argparser() -> argparse.ArgumentParser:
@@ -240,6 +339,13 @@ def _build_argparser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = _build_argparser().parse_args(argv)
     if args.anchor:
+        for stream in (sys.stdout, sys.stderr):
+            reconfigure = getattr(stream, "reconfigure", None)
+            try:  # a path the terminal cannot encode must not lose an anchor already written
+                if reconfigure:
+                    reconfigure(errors="backslashreplace")
+            except ValueError:
+                pass
         if not args.cmd:
             print("--anchor requires --cmd", file=sys.stderr)
             return 2
@@ -248,17 +354,24 @@ def main(argv=None) -> int:
                   % (ANCHOR_TIMEOUT_MAX_S, args.timeout), file=sys.stderr)
             return 2
         try:
-            anchor_id, exit_code = run_and_anchor(args.cmd, session=args.session,
+            anchor_id, exit_code, kept, output = run_and_anchor(args.cmd, session=args.session,
                                                   timeout=args.timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            kept = getattr(exc, "kept", None)
             print("command timed out after %d s and was killed — no anchor written; "
-                  "raise --timeout (max %d)" % (args.timeout, ANCHOR_TIMEOUT_MAX_S),
+                  "raise --timeout (max %d)%s" % (
+                      args.timeout, ANCHOR_TIMEOUT_MAX_S,
+                      "; its output so far: %s" % kept if kept else ""),
                   file=sys.stderr)
             return 1
         if anchor_id is None:
             print("command could not be executed — no anchor written", file=sys.stderr)
             return 1
-        print("anchor_id=%s exit_code=%s" % (anchor_id, exit_code))
+        if exit_code:
+            print("command exited %s; last %d lines of its output:\n%s"
+                  % (exit_code, _TAIL_LINES, _tail(output)), file=sys.stderr)
+        print("anchor_id=%s exit_code=%s%s" % (anchor_id, exit_code,
+                                               " output=%s" % kept if kept else ""))
         return 0
     _build_argparser().print_help()
     return 0

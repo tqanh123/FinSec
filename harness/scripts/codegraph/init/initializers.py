@@ -68,21 +68,43 @@ def _invoke(command, ctx, opts, argv=()) -> tuple:
 
 
 def graph_run(ctx, opts) -> dict:
-    """codemap.yaml, then the first snapshot — one step, so the next facts read
-    finds a map it can use instead of a stale-snapshot stop."""
+    """codemap.yaml, the tools its engine runs, then the first snapshot — one step, so
+    the next facts read finds a map it can use instead of a stale-snapshot stop.
+
+    A codemap this run wrote is removed again when a later step fails (it would
+    otherwise read as adopted for good); one that was there before is never touched."""
+    from codegraph._core.lang.typescript.node import install
     root = ctx.root
+    path = root / "codemap.yaml"
     row: dict = {}
-    if not (root / "codemap.yaml").is_file():
+    wrote = None
+    if not path.is_file():
         rc, data = _invoke(GRAPH_INIT, ctx, opts)
         row["descriptor"] = data
         if rc != 0:
             row["exit_code"] = rc
             return row
+        wrote = path.read_bytes() if path.is_file() else None
     if not opts.apply:
-        row.update(exit_code=0, would=["graph init --apply", "graph snapshot --apply"])
+        row.update(exit_code=0, would=["graph init --apply", "lang-tools (if its engine needs one)",
+                                       "graph snapshot --apply"])
         return row
+    if not install.status(root).get("ready"):
+        tools = install.run(ctx, opts)
+        row["lang_tools"] = tools
+        if int(tools.get("exit_code", 0)) != 0:
+            row["exit_code"] = int(tools["exit_code"])
+            return _unwind(row, path, wrote)
     rc, data = _invoke(SNAPSHOT, ctx, opts)
     row.update(exit_code=rc, snapshot=data)
+    return _unwind(row, path, wrote) if rc != 0 else row
+
+
+def _unwind(row: dict, path: Path, wrote) -> dict:
+    """Remove `path` when it still holds exactly the bytes this run wrote."""
+    if wrote is not None and path.is_file() and path.read_bytes() == wrote:
+        path.unlink()
+        row["removed"] = str(path)
     return row
 
 

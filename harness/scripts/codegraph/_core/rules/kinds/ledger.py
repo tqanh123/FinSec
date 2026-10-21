@@ -118,4 +118,4 @@ class LedgerCheck:
                                    "drift_lost": scan.drift_lost})
 
 
-register_kind("ledger")(require_params("batch")(LedgerCheck))
+register_kind("ledger", languages="*")(require_params("batch")(LedgerCheck))

@@ -55,10 +55,11 @@ WHAT IT CANNOT SEE
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .git import GitError, resolve_ref, run_git
 from .graph.model import Graph
+from .lang.python import resolver as _python
 from .rules.base import RuleContext, RuleResult, RulesEngine, Violation
 
 #: Rule kinds whose verdict depends on the tree BEYOND the module being judged.
@@ -96,24 +97,9 @@ def changed_files(repo: Path, base: str, head: str = "HEAD") -> list[str]:
     return sorted(p for p in out.split("\0") if p.strip())
 
 
-def touched_modules(files: Iterable[str]) -> set[str]:
-    """Dotted module names for the changed `.py` files.
-
-    `a/b/c.py` -> `a.b.c`; `a/b/__init__.py` -> BOTH `a.b` and `a.b.__init__`
-    (an index may key either). Deliberately generous: over-inclusion keeps the
-    verdict, and never losing a violation is the whole point here.
-    """
-    mods: set[str] = set()
-    for f in files:
-        p = Path(f)
-        if p.suffix != ".py":
-            continue
-        parts = list(p.with_suffix("").parts)
-        if parts and parts[-1] == "__init__":
-            mods.add(".".join(parts[:-1]))
-        if parts:
-            mods.add(".".join(parts))
-    return mods
+# `touched_modules` MOVED to the Python pack's resolver (`lang.python.resolver`):
+# naming a changed file is the pack's question. Rebound to the same object.
+touched_modules = _python.touched_modules
 
 
 def _flat_modules(idx: dict) -> dict[str, dict]:

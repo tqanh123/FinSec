@@ -245,4 +245,4 @@ class LandfallCheck:
         return RuleResult(self.rule_id, "error", tuple(v), tuple(notes))
 
 
-register_kind("landfall")(require_params("dist")(LandfallCheck))
+register_kind("landfall", languages=("python",))(require_params("dist")(LandfallCheck))

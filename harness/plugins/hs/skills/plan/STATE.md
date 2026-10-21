@@ -12,6 +12,8 @@ The CLI hands these rule and reference paths over at the moment the step begins 
 
 | state | what it means | routes |
 |---|---|---|
+| `split` | Terminal for this plan. The human chose to split it: it holds no phase and is never cooked; each child plan naming it as `parent_plan` is reviewed, approved and cooked on its own. | `references/plan-split.md` |
+| `split_pending` | The human chose to split this plan, and the split is not finished: no child plan names it as `parent_plan` yet, or it still holds phase files a child should own. It is never cooked itself. | `references/plan-split.md` |
 | `needs_model_attestation` | Everything disk-provable is proven. What remains is not: the red-team disposition, the validate interview, the consistency sweep. Do them for real, then run the approval command the envelope prints. | `references/validate-gate.md`, `references/verification-roles.md` |
 | `grid_needs_axes` | `--grid` is on and no axis receipt exists. Spawn `@grid-axis-selector`; it reads THIS plan's prose and writes the receipt. The step exists because a grid built on canned axis values lands mostly-N/A. | `references/grid-when.md` |
 | `grid_needs_fill` | Axis receipt present, no fill source. Spawn `@grid-filler`; it writes cell content to a JSON file rather than editing the grid. | `references/grid-preregistration.md` |

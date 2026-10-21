@@ -78,7 +78,7 @@ import hs_family.base_drift as base_drift  # noqa: E402
 from hs_family import gate_registry  # noqa: E402
 
 from codegraph._core.descriptor import DescriptorError, load  # noqa: E402
-from codegraph._core.descriptor.model import KERNEL_SCHEMA_VERSION, ProjectDescriptor  # noqa: E402
+from codegraph._core.descriptor.model import DESCRIPTOR_SCHEMA_VERSION, ProjectDescriptor  # noqa: E402
 from codegraph._core.git import GitError, changed_since  # noqa: E402
 from codegraph._core.snapshot.pipeline import SnapshotError  # noqa: E402
 from codegraph._core.snapshot.store import load_dir  # noqa: E402
@@ -110,7 +110,7 @@ def _load_descriptor(root: Path) -> ProjectDescriptor:
     descriptor_path = root / "codemap.yaml"
     if descriptor_path.is_file():
         return load(descriptor_path, root).descriptor
-    return ProjectDescriptor(schema_version=KERNEL_SCHEMA_VERSION,
+    return ProjectDescriptor(schema_version=DESCRIPTOR_SCHEMA_VERSION,
                              project=root.name, auto_discover=True)
 
 
@@ -142,7 +142,7 @@ def _resolve_idx(root: Path, descriptor: ProjectDescriptor) -> "tuple[dict | Non
 
     try:
         outcome = write_current(root, base, descriptor, apply=True, mode="port")
-    except SnapshotError as e:
+    except (SnapshotError, GitError) as e:
         return None, ("could not measure a snapshot (%s) — falling back to the "
                       "self-select channel only" % e)
     if outcome.reused:
@@ -248,7 +248,12 @@ def main(argv=None) -> int:
               "import graph; run the full suite before merge.)", file=sys.stderr)
 
     if as_pytest and tests:
-        print("python3 -m pytest -q " + " ".join(tests))
+        import test_runners
+        commands, unclaimed = test_runners.commands(root_path, tests)
+        for cmd in commands:
+            print(cmd)
+        if unclaimed:
+            print("(no language pack runner claims: %s)" % " ".join(unclaimed), file=sys.stderr)
     else:
         for t in tests:
             print(t)

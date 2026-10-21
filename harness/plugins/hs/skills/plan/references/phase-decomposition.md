@@ -30,8 +30,9 @@ Slug name: kebab-case, describing scope (e.g. `260615-1200-auth-refactor`).
 **MANDATORY — stamp this skeleton with `scaffold.py`; do NOT hand-author the plan dir.** A hand-typed layout drifts from what the gates read: `plan_approval` hashes phase files at `phases/phase-*.md` (and legacy `phase-*.md` at root), so a phase file placed anywhere else is silently OUT of the approval hash — a phase edit then slips past drift detection.
 Run:
 `python3 "${HARNESS_BIN_ROOT:-.}"/harness/scripts/scaffold.py plan --slug <slug> --title "<title>" --phases a,b,c` creates the dir, plan.md, and one `phases/phase-N-<name>.md` file each —
-already carrying the correct `harness_version`/`kit_digest`/`schema_version` stamp (reused from `artifact_stamp`, so a new plan never ships a stale digest). Add a later phase the same way (rerun with the full `--phases` list and
-`--force`, or copy an existing `phases/phase-*.md`); never invent a new phase-file location. Then fill the TBD sections with the real decomposition below; `scaffold.py report --type <t> --slug <slug> --title "<title>"` does the same for a report.
+already carrying the correct `harness_version`/`kit_digest`/`schema_version` stamp (reused from `artifact_stamp`, so a new plan never ships a stale digest).
+`--first 0` numbers the first phase 0; every file number is zero-padded to the width of the last one (`phase-01` … `phase-12`). The harness orders phases by number either way (2 before 10), so never rename files by hand to fix the order. Add a later phase by copying an existing `phases/phase-*.md` and listing it in plan.md `phases:` and `plan-graph.yaml`.
+A rerun with the full `--phases` list and `--force` keeps every phase file already there and writes only the new ones, but rewrites plan.md from the template, so use it only before plan.md is filled. Never invent a new phase-file location. Then fill the TBD sections with the real decomposition below; `scaffold.py report --type <t> --slug <slug> --title "<title>"` does the same for a report.
 
 ### Reuse an existing discovery-brief folder — do NOT mint a sibling
 
@@ -108,6 +109,8 @@ applies_rules: [STD-...]
 - **Success Criteria** — measurable checkboxes (not subjective).
 - **Risk Assessment** — likelihood x impact; mitigation for High items.
 
+A phase file declares no `status:`. A phase's state is derived from its `verification-<phase>.json`, and `hs-run cook status` reads it in its `phases` rows.
+
 ## Decomposition rules
 
 1. **Each phase is self-contained**: no runtime dependency on a parallel phase.
@@ -131,7 +134,9 @@ subtasks:
     post: [verification-P3.json]   # end-of-phase artifact obligation
 ```
 
-Each node **MUST** declare `post:` — the artifacts that phase must emit before it counts as done. Emit `[verification-<node>.json]` for every node; a review phase adds `review-decision.json` (e.g. `post: [verification-<node>.json, review-decision.json]`). `derive_plan_completion` reads `post` as the single source of truth for completion, and the ship/deploy gate blocks while any node's `post` is
+Each node **MUST** declare `post:` — the artifacts that phase must emit before it counts as done. Emit `[verification-<node>.json]` for every node; a review phase adds `review-decision.json` (e.g. `post: [verification-<node>.json, review-decision.json]`;
+it is read the way the gate reads the artifact, so the `review-decision.yaml` the writer produces satisfies it).
+`derive_plan_completion` reads `post` as the single source of truth for completion, and the ship/deploy gate blocks while any node's `post` is
 missing. This is **enforced**: `plan_graph.py` HARD-fails (exit 2, both advisory and `--require` modes) on a node with a missing/malformed `post` — a structural contract violation, not an advisory. A sidecar that omits `post` will NOT pass the validate-step graph check or the cook preflight; declare it explicitly on every node (do not rely on a default). Do NOT add a `pre:` key — it is
 deferred (the schema tolerates it, nothing reads it).
 

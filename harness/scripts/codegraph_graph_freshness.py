@@ -26,7 +26,7 @@ from typing import Any
 
 from ambiguous_input import Ambiguous, NotFound
 from codegraph._core.descriptor import root_paths
-from codegraph._core.snapshot.freshness import check_freshness
+from codegraph._core.snapshot.freshness import check_freshness, snapshot_scope
 from codegraph._core.snapshot.pipeline import SnapshotError, take_snapshot
 from codegraph._core.snapshot.store import (SnapshotMissing, load_dir, resolve_current,
                                             resolve_snapshot)
@@ -62,7 +62,8 @@ def checked_idx(root: Path, opts: Any, snap_dir: Path, descriptor: Any,
     snap_commit = str(idx.get("commit") or "")
     error, warning = check_freshness(
         root, snap_commit, allow_stale=getattr(opts, "allow_stale", False),
-        label=f"snapshot {snap_dir.name}", roots=root_paths(descriptor), store=store)
+        label=f"snapshot {snap_dir.name}", roots=snapshot_scope(root_paths(descriptor), idx),
+        store=store)
     if error is not None:
         raise SnapshotResolveError(f"{verb}: {error}")
     _warn(opts, warning, warnings)

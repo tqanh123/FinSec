@@ -16,7 +16,12 @@ the tree or the descriptor.
             whose exemplar value another dist also holds (a membership such
             as `release_group`; a value only the exemplar holds is its
             identity), and `version` is the one that group shares, else
-            `0.1.0` with the spread in `warnings`. The module
+            `0.1.0` with the spread in `warnings`. A tier whose dists split on
+            such a membership (two `release_group`s, `dev_only` on some) has no
+            one answer for the new dist: it refuses, naming each group, until
+            `--set KEY=VALUE` says which -- the pool is then the dists holding
+            the values given, and each value is written whether or not one
+            holds it. Everything carried is listed in `warnings`. The module
             path follows the exemplar's own name->module shape: its first `k`
             name tokens are package dirs, the rest one `_`-joined leaf
             (`a-b-store-pg` -> `a/b/store_pg`, k=2), learned per exemplar.
@@ -113,7 +118,8 @@ def prose_warning(exemplar_name: str, prose: "list[str]") -> str:
 
 
 def infer_dist_plan(repo: Path, descriptor: Any, name: str, *, tier: str = "",
-                    question: str = "", module: "str | None" = None) -> "dict[str, Any]":
+                    question: str = "", module: "str | None" = None,
+                    assign: "dict[str, Any] | None" = None) -> "dict[str, Any]":
     """The inferred dist with its parts kept apart: `files`, `warnings` (the
     exemplar's own prose files NOT among them), `exemplar` (repo-relative),
     `exemplar_name`, `prose` (those file names), `dist_dir` and `module` (dotted)."""
@@ -129,6 +135,18 @@ def infer_dist_plan(repo: Path, descriptor: Any, name: str, *, tier: str = "",
         return ((doc.get("tool") or {}).get(ns) or {}).get("tier") if ns else None
 
     pool = [(d, doc) for d, doc in dists if not tier or tier_of(doc) == tier]
+    assign = dict(assign or {})
+    notes: "list[str]" = []
+    for key, val in assign.items():
+        held = [t for t in pool if _ns_table(t[1], ns).get(key) == val]
+        if held:
+            pool = held
+        else:
+            notes.append(f"[tool.{ns}] {key} = {_toml_value(val)}: no dist of "
+                         f"{f'tier {tier}' if tier else 'the workspace'} holds it -- written as given")
+    split = _split(pool, dists, ns, {"tier", *assign})
+    if split:
+        raise ScaffoldError(split)
     tokens = name.split("-")
 
     def kin(d: Path) -> int:
@@ -156,7 +174,7 @@ def infer_dist_plan(repo: Path, descriptor: Any, name: str, *, tier: str = "",
     rel_ex = ex.relative_to(repo).as_posix()
     warnings = [f"no scaffold.templates declared: template read off {rel_ex}"
                 + f" ({f'tier {tier}' if tier else 'no --tier'}: the {len(pool)} candidate(s) "
-                  "ranked by shared leading name tokens, then name)"]
+                  "ranked by shared leading name tokens, then name)", *notes]
 
     if module:
         parts = module.split(".")
@@ -172,9 +190,11 @@ def infer_dist_plan(repo: Path, descriptor: Any, name: str, *, tier: str = "",
 
     base = f"{ex.parent.relative_to(repo).as_posix()}/{name}"
     src_rel = f"{base}/src" if src != ex else base
+    carried: "dict[str, Any]" = {"from": rel_ex}
     files: "list[tuple[str, str]]" = [(f"{base}/pyproject.toml",
                                        _pyproject(name, doc, ns, tier, question, ex, ex_parts, warnings,
-                                                  [(d, o) for d, o in dists if d != ex]))]
+                                                  [(d, o) for d, o in dists if d != ex],
+                                                  assign, carried))]
     for i in range(1, len(parts)):
         ns_init = src.joinpath(*ex_parts[:i], "__init__.py")
         if ns_init.is_file():
@@ -187,12 +207,41 @@ def infer_dist_plan(repo: Path, descriptor: Any, name: str, *, tier: str = "",
     if not question:
         warnings.append("no --question: the door docstring is a TODO")
     return {"files": files, "warnings": warnings, "exemplar": rel_ex, "exemplar_name": ex.name,
-            "prose": prose, "dist_dir": base, "module": ".".join(parts)}
+            "prose": prose, "dist_dir": base, "module": ".".join(parts), "carried": carried}
 
 
 def _ns_table(doc: dict, ns: str) -> dict:
     t = ((doc.get("tool") or {}).get(ns) or {}) if ns else {}
     return t if isinstance(t, dict) else {}
+
+
+def _split(pool: "list[tuple[Path, dict]]", dists: "list[tuple[Path, dict]]", ns: str,
+           given: "set[str]") -> "str | None":
+    """The refusal when `pool` disagrees on a `[tool.<ns>]` membership nobody gave: a
+    key whose values (absent counted) differ across the pool, one of them held by two
+    or more dists of the workspace -- a value only one dist holds is its identity."""
+    if not ns:
+        return None
+    held: "dict[tuple[str, str], int]" = {}
+    for _, o in dists:
+        for k, v in _ns_table(o, ns).items():
+            held[(k, _toml_value(v))] = held.get((k, _toml_value(v)), 0) + 1
+    keys = sorted({k for _, o in pool for k in _ns_table(o, ns)} - given)
+    out = []
+    for k in keys:
+        groups: "dict[str, list[str]]" = {}
+        for d, o in pool:
+            t = _ns_table(o, ns)
+            groups.setdefault(_toml_value(t[k]) if k in t else "(absent)", []).append(d.name)
+        if len(groups) > 1 and any(held.get((k, v), 0) > 1 for v in groups if v != "(absent)"):
+            out.append(f"[tool.{ns}] {k}: " + "; ".join(
+                f"{v} ({len(n)}: {', '.join(n[:3])}{', ...' if len(n) > 3 else ''})"
+                for v, n in sorted(groups.items())))
+    if not out:
+        return None
+    flags = " ".join(f"--set {line.split(']', 1)[1].split(':', 1)[0].strip()}=<value>" for line in out)
+    return (f"the {len(pool)} candidate dist(s) split into groups the new dist could join -- "
+            + " | ".join(out) + f" -- say which with --set (one value may settle the others): {flags}")
 
 
 def _group(ex_doc: dict, others: "list[tuple[Path, dict]]", ns: str,
@@ -237,7 +286,8 @@ def _group(ex_doc: dict, others: "list[tuple[Path, dict]]", ns: str,
 
 def _pyproject(name: str, doc: dict, ns: str, tier: str, question: str, ex: Path,
                ex_parts: "list[str]", warnings: "list[str]",
-               others: "list[tuple[Path, dict]]") -> str:
+               others: "list[tuple[Path, dict]]", assign: "dict[str, Any] | None" = None,
+               carried: "dict[str, Any] | None" = None) -> str:
     proj = doc.get("project") or {}
     carried_ns, version = _group(doc, others, ns, warnings)
     head: dict = {"name": name, "version": version or "0.1.0", "description": question}
@@ -256,12 +306,18 @@ def _pyproject(name: str, doc: dict, ns: str, tier: str, question: str, ex: Path
             dropped.append(f"[tool.{key}]")
             continue
         _toml_tables(f"tool.{key}", table, out)
+    ns_out: dict = {}
     if ns:
-        ns_out = ({"tier": tier} if tier else {}) | carried_ns
+        ns_out = ({"tier": tier} if tier else {}) | carried_ns | dict(assign or {})
         if not tier:
             warnings.append(f"no --tier: [tool.{ns}] tier not written")
         if ns_out:
             _toml_tables(f"tool.{ns}", ns_out, out)
+    if carried is not None:
+        carried.update({"version": head["version"], f"tool.{ns}": ns_out} if ns else
+                       {"version": head["version"]})
+    warnings.append(f"carried from {ex.name}: version = {_toml_value(head['version'])}"
+                    + "".join(f", [tool.{ns}] {k} = {_toml_value(v)}" for k, v in ns_out.items()))
     if dropped:
         warnings.append(f"not carried from {ex.name}: {'; '.join(dropped)}")
     return "\n".join(out) + "\n"

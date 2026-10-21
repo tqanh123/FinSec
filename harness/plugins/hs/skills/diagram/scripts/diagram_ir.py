@@ -161,7 +161,7 @@ def _check_meta(errors: list, meta: Any) -> None:
 # ----------------------------------------------------------------- per-type
 
 _ARCH_ROLES = ("frontend", "backend", "database", "cache", "queue", "storage",
-               "gateway", "auth", "external", "worker")
+               "gateway", "auth", "external", "worker", "person", "system")
 _BOUNDARY_ROLES = ("cloud", "vpc", "cluster", "trust-boundary", "private-network",
                     "external-zone")
 _CONN_KINDS = ("sync", "async", "stream", "fallback", "bi-directional")
@@ -181,6 +181,8 @@ def _validate_architecture(errors: list, data: dict) -> None:
         _check_text(errors, c.get("label"), base + ".label")
         _check_enum(errors, c.get("role"), base + ".role", _ARCH_ROLES, "role")
         _check_int_range(errors, c.get("layer"), base + ".layer", 0, 10, "layer")
+        _check_text(errors, c.get("technology"), base + ".technology", required=False)
+        _check_text(errors, c.get("description"), base + ".description", required=False)
 
     boundaries = _check_array(errors, data.get("boundaries"), "$.boundaries",
                                required=False, max_items=250, label="boundaries")

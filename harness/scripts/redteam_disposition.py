@@ -21,6 +21,18 @@ is named, never guessed at: two prose conclusions in two languages are two
 parsers waiting to disagree. So is a heading that is almost the form (another level,
 `Redteam`, `dispositions`): its line is quoted, never read as "no table".
 
+A plan disposes of other reviews the same way (`## Critique disposition (r2)`): every
+`## <lens> disposition` table is read for its cites, checked and rewritten like a red-team
+one, but only a red-team table answers a red-team REVISE. A heading that mentions a
+disposition, has a table in its scope and is not read is named with its line, so a table
+left out is said. Front matter, code blocks and HTML blocks are not the plan's text: a
+CommonMark parser finds them as CommonMark closes them, in a section body and a
+pointed-to file too, and the cites and their rewrite skip them; a disposition table
+inside one is named. The gate reads the parser's tables AND the plain line reading it
+held before, and holds wherever that reading held: an empty cell either finds holds the
+plan, a finding is answered only by a row both find, and a red-team heading only inside
+a block holds it with its line named.
+
 What stays unchecked, and is said so: whether an accepted finding actually
 reached the phase files.
 """
@@ -33,8 +45,16 @@ from pathlib import Path
 HEADING = "## Red-team disposition"
 
 _VERDICT = re.compile(r"^verdict:\s*(PASS|REVISE)\s*$", re.IGNORECASE | re.MULTILINE)
-_HEADING = re.compile(r"^##\s+red-team disposition\b(.*)$", re.IGNORECASE)
-_NEAR = re.compile(r"^#{1,6}\s*red[\s_-]*team[\s_-]*dispositions?", re.IGNORECASE)
+_RED_TEAM = "red-team"
+_HEADING = re.compile(r"^##\s+(\S.*?)\s+disposition\b(.*)$", re.IGNORECASE)
+_RED_TEAM_ISH = re.compile(r"red[\s_\-\u2010-\u2015]*team", re.IGNORECASE)
+_MENTION = re.compile(r"(?<![a-z])dispositions?", re.IGNORECASE)
+_NEAR = re.compile(r"^#{1,6}\s*red[\s_\-\u2010-\u2015]*team[\s_\-\u2010-\u2015]*dispositions?",
+                   re.IGNORECASE)
+_PLAIN = re.compile(r"^##\s+red-team disposition\b(.*)$", re.IGNORECASE)
+_HIDES = {"fence": "a code block", "code_block": "a code block",
+          "html_block": "an HTML block or comment"}
+_MARK = "\x00"  # one run of hidden lines in a section body: ends a table, not the section
 _PERSONA = re.compile(r"^from-code-reviewer-to-planner-red-team-(.+)-plan-review-report$")
 _SEPARATOR = re.compile(r"^\|?[\s:|-]+\|?$")
 
@@ -114,50 +134,186 @@ class Section:
     suffix: str
     rows: list
     read: list = field(default_factory=list)  # reference files its body came from
+    lens: str = _RED_TEAM
+    shadow: int = 0  # table lines a block hides in its body
+    shadow_in: tuple = ()  # what hides them
+    cut: "int | None" = None  # plain reading: the 0-based `#` line that ended the section
+
+    @property
+    def red_team(self) -> bool:
+        return self.lens.lower() == _RED_TEAM
 
 
-def sections(plan_md: Path) -> "tuple[list, list]":
-    """(every disposition section, every near-miss heading as (line, text))."""
+def _heading(line: str) -> "tuple[str, str] | None":
+    """(lens, suffix) of a `## <lens> disposition` heading, else None. A lens that is
+    almost `red-team` is not read as some other review's: it is a near miss."""
+    m = _HEADING.match(line.strip())
+    if not m:
+        return None
+    lens = m.group(1).strip()
+    if lens.lower() != _RED_TEAM and _RED_TEAM_ISH.search(lens):
+        return None
+    return lens, m.group(2).strip()
+
+
+@dataclass
+class _Doc:
+    lines: list
+    hidden: dict  # 0-based line that is not the text -> what it is inside
+    levels: dict  # 0-based heading line -> level
+    texts: dict  # 0-based heading line -> its text, every line of a setext heading
+
+
+def _doc(lines: list, front_matter: bool = True) -> _Doc:
+    """`lines` as a CommonMark parser reads them: the headings, and the lines that are not
+    the text — front matter, a code block (fenced or indented, closed by its fence, the
+    end of its container or of the file, as CommonMark closes it) and an HTML block. No
+    guess at what a typo meant: the gate does not lean on this reading alone
+    (`_plain_red_team`)."""
+    from markdown_it import MarkdownIt
+    top = 0
+    if front_matter and lines and lines[0].lstrip("\ufeff").strip() == "---":
+        end = next((k for k in range(1, len(lines)) if lines[k].strip() in ("---", "...")),
+                   None)
+        if end is not None:
+            top = end + 1
+    hidden, levels, texts = dict.fromkeys(range(top), "front matter"), {}, {}
+    toks = MarkdownIt("commonmark").parse("\n".join(lines[top:]))
+    for n, tok in enumerate(toks):
+        if not tok.map:
+            continue
+        a, b = tok.map[0] + top, tok.map[1] + top
+        if tok.type == "heading_open":
+            levels[a] = int(tok.tag[1:])
+            texts[a] = toks[n + 1].content
+        elif tok.type in _HIDES:
+            hidden.update(dict.fromkeys(range(a, b), _HIDES[tok.type]))
+    return _Doc(list(lines), hidden, levels, texts)
+
+
+def _mentions(doc: _Doc) -> dict:
+    """{0-based line: level} of every heading that mentions a disposition — the parser's,
+    and a `#` line it does not take for one (`##Red-team`, no space)."""
+    out = {i: lv for i, lv in doc.levels.items() if _MENTION.search(doc.texts[i])}
+    for i, line in enumerate(doc.lines):
+        t = line.strip()
+        if (i not in doc.hidden and i not in doc.levels and t.startswith("#")
+                and _MENTION.search(t)):
+            out[i] = len(t) - len(t.lstrip("#"))
+    return out
+
+
+def sections(plan_md: Path) -> "tuple[list, list, list]":
+    """(every disposition section of every lens; every other heading that mentions a
+    disposition as (line, text) — almost `red-team`, or a table in its scope, a plan
+    title aside; every disposition heading inside a block, as (line, text))."""
+    import plan_refs
+    try:
+        lines = Path(plan_md).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return [], [], []
+    doc = _doc(lines)
+    pins = plan_refs.pinned(Path(plan_md).parent)
+    found, near = [], []
+    for i, level in sorted(_mentions(doc).items()):
+        line = lines[i]
+        h = _heading(line) if i in doc.levels else None
+        if h:
+            body, read, shadow = _body(doc, i, Path(plan_md), pins)
+            found.append(Section(i + 1, h[1], _section_rows([line] + [t for t, _f, _k in body], 0),
+                                 read, h[0], *shadow))
+            continue
+        text = doc.texts.get(i, line).strip()
+        red_team_ish = bool(_RED_TEAM_ISH.search(text))
+        if level < 2 and not red_team_ish:
+            continue  # a plan title: its words are not a table's heading
+        # A sub-heading stays in scope (`## Dispositions` over `### Critique r2`).
+        body, _read, _shadow = _body(doc, i, Path(plan_md), pins, level)
+        if red_team_ish or any(t.strip().startswith("|") for t, _f, _k in body):
+            near.append((i + 1, line.strip() if line.lstrip().startswith("#") else text))
+    buried = [(i + 1, lines[i].strip()) for i in sorted(doc.hidden) if _heading(lines[i])]
+    return found, near, buried
+
+
+def _plan_rel(f: Path, plan_dir: Path) -> str:
+    """`f` relative to the plan dir — `../<plan>/...` for a sibling plan's pinned file."""
+    import os
+    return Path(os.path.relpath(Path(f).resolve(), Path(plan_dir).resolve())).as_posix()
+
+
+def _body(doc: _Doc, start: int, plan_md: Path, pins: set,
+          scope: "int | None" = None) -> "tuple[list, list, tuple[int, tuple]]":
+    """([(text, file, 0-based line)] of the section after line `start`, a pointer line
+    read as the body of the reference file it points to, each run of hidden lines as one
+    `_MARK` line — it ends a table, not the section; each file read that way, with its
+    pointer line; how many table lines a block hides here before any disposition heading
+    of its own, and what hides them). The section ends at the next heading — of any level, or with `scope` of
+    that level or above."""
+    import plan_refs
+    end = next((k for k in sorted(doc.levels) if k > start
+                and (scope is None or doc.levels[k] <= scope)), len(doc.lines))
+    body: list = []
+    read: list = []
+    shadow: list = [0, False, set()]  # hidden table lines, a hidden heading seen, inside what
+
+    def visit(text: str, f: Path, k: int, hid: "str | None", prev: bool) -> bool:
+        if hid:
+            if not prev:
+                body.append((_MARK, f, k))
+            shadow[1] = shadow[1] or bool(_heading(text))
+            if not shadow[1] and text.strip().startswith("|"):
+                shadow[0] += 1
+                shadow[2].add(hid)
+            return True
+        body.append((text, f, k))
+        return False
+
+    prev = False
+    for k in range(start + 1, end):
+        if k in doc.hidden:
+            prev = visit(doc.lines[k], plan_md, k, doc.hidden[k], prev)
+            continue
+        target = plan_refs.pointer_target(doc.lines[k], plan_md, plan_md.parent, pins)
+        if target is None:
+            prev = visit(doc.lines[k], plan_md, k, None, prev)
+            continue
+        numbered = plan_refs.numbered_body(target)
+        ref = _doc([t for _n, t in numbered], front_matter=False)
+        for j, (n, t) in enumerate(numbered):
+            prev = visit(t, target, n - 1, ref.hidden.get(j), prev)
+        read.append("%s (through the pointer at %s:%d)"
+                    % (_plan_rel(target, plan_md.parent), plan_md.name, k + 1))
+    return body, read, (shadow[0], tuple(sorted(shadow[2])))
+
+
+def _plain_red_team(plan_md: Path) -> "tuple[list, list]":
+    """(the red-team sections, the near-miss headings) as a plain line reading finds them:
+    every `## Red-team disposition` line, in a block or not, a section ending at any `#`
+    line, a pointer followed — the reading the gate held before the parser. The gate reads
+    it beside the parser's and is never looser than it: an empty cell either finds holds
+    the plan, and a finding is answered only by a row both find."""
+    import plan_refs
     try:
         lines = Path(plan_md).read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return [], []
+    pins = plan_refs.pinned(Path(plan_md).parent)
     found, near = [], []
-    for i, l in enumerate(lines):
-        m = _HEADING.match(l.strip())
+    for i, line in enumerate(lines):
+        m = _PLAIN.match(line.strip())
         if m:
-            body, read = _body(lines, i, Path(plan_md))
-            found.append(Section(i + 1, m.group(1).strip(), _section_rows([l] + body, 0), read))
-        elif _NEAR.match(l.strip()):
-            near.append((i + 1, l.strip()))
+            end = next((k for k in range(i + 1, len(lines)) if lines[k].strip().startswith("#")),
+                       len(lines))
+            body: list = []
+            for k in range(i + 1, end):
+                target = plan_refs.pointer_target(lines[k], Path(plan_md), Path(plan_md).parent,
+                                                  pins)
+                body.extend([lines[k]] if target is None else plan_refs.body(target))
+            found.append(Section(i + 1, m.group(1).strip(), _section_rows([line] + body, 0),
+                                 cut=end if end < len(lines) else None))
+        elif _NEAR.match(line.strip()):
+            near.append((i + 1, line.strip()))
     return found, near
-
-
-def _body(lines: list, start: int, plan_md: Path) -> "tuple[list, list]":
-    """(the section's lines up to the next heading, a pointer line read as the reference
-    file it points to (`plan_refs`); each file read that way, with its pointer line)."""
-    import plan_refs
-    end = next((k for k in range(start + 1, len(lines)) if lines[k].strip().startswith("#")),
-               len(lines))
-    body: list = []
-    read: list = []
-    pins = plan_refs.pinned(plan_md.parent)
-    for k in range(start + 1, end):
-        target = plan_refs.pointer_target(lines[k], plan_md, plan_md.parent, pins)
-        if target is None:
-            body.append(lines[k])
-            continue
-        body.extend(plan_refs.body(target))
-        read.append("%s (through the pointer at %s:%d)"
-                    % (target.relative_to(plan_md.parent.resolve()).as_posix(),
-                       plan_md.name, k + 1))
-    return body, read
-
-
-def disposition_rows(plan_md: Path) -> "list | None":
-    """The data rows of every disposition table in plan.md, or None without a heading."""
-    found, _near = sections(plan_md)
-    return [r for s in found for r in s.rows] if found else None
 
 
 def _section_rows(lines: list, start: int) -> list:
@@ -217,36 +373,87 @@ def check(plan_dir: Path, reports: list) -> Disposition:
     if not revise:
         return out
     plan_md = Path(plan_dir) / "plan.md"
-    found, near = sections(plan_md)
-    rows = [r for s in found for r in s.rows] if found else None
+    found, near, _buried = sections(plan_md)
+    found = [s for s in found if s.red_team]
+    plain, plain_near = _plain_red_team(plan_md)
+    near = [n for n in near if _RED_TEAM_ISH.search(n[1])]
+    near += [n for n in plain_near if n[0] not in {m[0] for m in near}]
+    near.sort()
+    seen = {s.line for s in found}
+    buried = [s for s in plain if s.line not in seen]
+    rows = [r for s in found for r in s.rows]
+    plain_rows = [r for s in plain for r in s.rows] if plain else None
     said = "%s concludes REVISE" % ", ".join(revise)
     quoted = "; ".join("line %d «%s»" % n for n in near)
+    inside = ("`%s` heading(s) inside a code block, a comment or an HTML block, so not read: %s"
+              % (HEADING, "; ".join("line %d «%s»" % (s.line, HEADING + (
+                  " " + s.suffix if s.suffix else "")) for s in buried)))
     if near and found:
         out.notes.append("heading(s) not in the `%s` form, so not read: %s" % (HEADING, quoted))
-    if rows is None:
+    if buried and found:
+        out.notes.append(inside)
+    if plain_rows is None:
         out.blocking.append(
             "%s and %s has no `%s` table: add it with one row per finding "
             "(Accept: where the plan changed / Reject: the evidence)%s"
             % (said, plan_md, HEADING,
                "; heading(s) found but not in that form: %s" % quoted if near else ""))
-    elif not rows:
+    elif not found:
+        out.blocking.append("%s and its %s — close the block above it, or move the table "
+                            "out of it" % (said, inside))
+    elif not rows or not plain_rows:
         where = "; ".join(r for s in found for r in s.read) or str(plan_md)
-        out.blocking.append("%s and the `%s` table in %s has no rows"
-                            % (said, HEADING, where))
+        why = ""
+        shaded = [s for s in found if s.shadow]
+        if not rows and shaded:
+            kinds = sorted({k for s in shaded for k in s.shadow_in})
+            why = ("; the rows under line %s are inside %s, so markdown does not read them as "
+                   "a table" % (", ".join(str(s.line) for s in shaded), " / ".join(kinds)))
+            if _HIDES["html_block"] in kinds:
+                why += " — a table right after an HTML tag needs a blank line between them"
+        elif rows and not plain_rows:
+            hidden = _doc(Path(plan_md).read_text(encoding="utf-8", errors="replace")
+                          .splitlines()).hidden
+            cuts = [s.cut for s in plain if s.cut is not None and s.cut in hidden]
+            if cuts:
+                why = ("; the `#` line at line %s, inside %s, ends the section for the "
+                       "line-by-line reading — move that block below the table"
+                       % (", ".join(str(c + 1) for c in cuts),
+                          " / ".join(sorted({hidden[c] for c in cuts}))))
+            else:
+                why = ("; the line-by-line reading takes only a heading written exactly `%s` "
+                       "and finds no rows under line %s — write the table's heading in exactly "
+                       "that form" % (HEADING, ", ".join(str(s.line) for s in plain)))
+        out.blocking.append("%s and the `%s` table in %s has no rows%s"
+                            % (said, HEADING, where, why))
     else:
-        open_rows = [_norm(r[0]) or "row %d" % (i + 1)
-                     for i, r in enumerate(rows) if any(not c for c in r)]
+        # An empty cell either reading finds holds the plan: what the parser reads as a
+        # block can be a typo, and the gate is never looser for it.
+        every = rows + [r for s in plain for r in s.rows if r not in rows]
+        open_rows = []
+        for i, r in enumerate(every):
+            name = _norm(r[0]) or "row %d" % (i + 1)
+            if any(not c for c in r) and name not in open_rows:
+                open_rows.append(name)
         if open_rows:
             out.blocking.append("%s and the `%s` table still has empty cells in: %s"
                                 % (said, HEADING, ", ".join(open_rows)))
-        missing = []
+        # A finding is answered by a row both readings find: one only the parser reads may
+        # sit past a typo, one only the plain reading reaches may be a code example.
+        missing, halves = [], []
         for name, ids in owed.items():
-            covered = {_norm(r[0]) for s in found if _covers(s.suffix, name, owed)
-                       for r in s.rows}
-            missing += ["%s (%s)" % (i, name) for i in ids if i not in covered]
+            parsed = {_norm(r[0]) for s in found if _covers(s.suffix, name, owed)
+                      for r in s.rows}
+            lined = {_norm(r[0]) for s in plain if _covers(s.suffix, name, owed)
+                     for r in s.rows}
+            missing += ["%s (%s)" % (i, name) for i in ids if i not in parsed or i not in lined]
+            halves += [i for i in ids if (i in parsed) != (i in lined)]
         if missing:
-            out.blocking.append("%s and the `%s` table has no row for: %s"
-                                % (said, HEADING, ", ".join(missing)))
+            out.blocking.append("%s and the `%s` table has no row for: %s%s"
+                                % (said, HEADING, ", ".join(missing),
+                                   "; a row for %s is read only inside a code block, a comment "
+                                   "or an HTML block, or only past a `#` line inside one, and "
+                                   "does not count" % ", ".join(halves) if halves else ""))
     return out
 
 
@@ -285,12 +492,15 @@ def _resolve(plan_dir: Path, root: Path, rel: str) -> "tuple[Path, bool]":
     return here, rel == "plan.md" or rel.startswith("phases/") or here.is_file()
 
 
-def check_cites(plan_dir: Path, root) -> dict:
-    """{"counts": {...}, "warnings": [...]} for every cite in the disposition table —
-    advisory: the counts always, a warning per kind that did not hold."""
+def check_cites(plan_dir: Path, root, parsed: "tuple[list, list, list] | None" = None) -> dict:
+    """{"counts": {...}, "warnings": [...]} for every cite in every disposition table —
+    advisory: the counts always, a warning per kind that did not hold, and one naming each
+    heading that mentions a disposition but is not read. `parsed` is `sections` of the
+    plan.md when the caller already holds it."""
     import plan_handoff
 
-    rows = disposition_rows(Path(plan_dir) / "plan.md") or []
+    found, near, buried = parsed if parsed is not None else sections(Path(plan_dir) / "plan.md")
+    rows = [r for s in found for r in s.rows]
     counts = dict.fromkeys(("cites", "quoted", *_KINDS), 0)
     bad: dict = {k: [] for k in ("moved", "not_found", "out_of_range", "missing_file", "no_file")}
     for row in rows:
@@ -368,6 +578,15 @@ def check_cites(plan_dir: Path, root) -> dict:
             "unseen; follow each with a «quote» of the line to have it checked by content "
             "(`%s --pin-cites` adds them from the current text; an approved plan is then "
             "re-approved)" % (counts["range_only"], cmd))
+    if near:
+        warnings.append(
+            "disposition heading(s) not read, so no cite under them is checked — not in the "
+            "`## <lens> disposition` form: %s" % "; ".join("line %d «%s»" % n for n in near))
+    inside = ["line %d «%s»" % n for n in buried] + [
+        "%d table line(s) under line %d" % (s.shadow, s.line) for s in found if s.shadow]
+    if inside:
+        warnings.append("disposition table(s) inside a code block, a comment or an HTML block, so no cite in "
+                        "them is checked: %s" % "; ".join(inside))
     return {"counts": counts, "warnings": warnings}
 
 
@@ -458,7 +677,7 @@ def _expanded(plan_dir: Path, rel: str, pins: set) -> list:
         if target is None:
             out.append((line, (rel, k)))
             continue
-        ref = target.relative_to(Path(plan_dir).resolve()).as_posix()
+        ref = _plan_rel(target, plan_dir)
         out.extend((t, (ref, n)) for n, t in plan_refs.numbered_body(target))
     return out
 
@@ -482,22 +701,13 @@ def _aligned(old: list, new: list, start: int, end: int) -> list:
 def _table_lines(plan_md: Path, pins: set) -> dict:
     """{file: {0-based line}} of every line a disposition table is read from — the same
     lines `sections` hands `_section_rows`, pointers followed."""
-    import plan_refs
-    plan_dir = plan_md.parent
     lines = plan_md.read_text(encoding="utf-8", errors="replace").splitlines()
     out: dict = {}
-    for i, l in enumerate(lines):
-        if not _HEADING.match(l.strip()):
+    doc = _doc(lines)
+    for i in sorted(doc.levels):
+        if _heading(lines[i]) is None:
             continue
-        body: list = []
-        for k in range(i + 1, len(lines)):
-            if lines[k].strip().startswith("#"):
-                break
-            target = plan_refs.pointer_target(lines[k], plan_md, plan_dir, pins)
-            if target is None:
-                body.append((lines[k], plan_md, k))
-            else:
-                body.extend((t, target, n - 1) for n, t in plan_refs.numbered_body(target))
+        body, _read, _shadow = _body(doc, i, plan_md, pins)
         started = False
         for text, f, k in body:
             t = text.strip()
@@ -530,7 +740,7 @@ def rewrite_cites(plan_dir: Path, root, source: "str | None" = None,
     olds: dict = {}  # cited file -> its lines in `source`
     news: dict = {}  # cited file -> its lines now, through pointers
     result: dict = {"ok": True, "mode": "remap" if source else "pin", "rewritten": [],
-                    "unresolved": [], "foreign": [], "files": []}
+                    "unresolved": [], "foreign": [], "files": [], "shared": []}
 
     def place(rel: str, start: int, end: int, where: str) -> "tuple[str, int, list] | None":
         if rel not in olds:
@@ -608,11 +818,17 @@ def rewrite_cites(plan_dir: Path, root, source: "str | None" = None,
         return _CITE.sub(one, cell)
 
     for f, idx in _table_lines(plan_md, pins).items():
+        rel = _plan_rel(f, plan_dir)
+        if rel.startswith("../"):
+            # another plan's file, read as this plan's table: rewriting it here would
+            # re-open that plan and every sibling that reads it
+            result["shared"].append(rel)
+            continue
         body = f.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
         new = ["|".join(cell_sub(c) for c in l.split("|")) if k in idx else l
                for k, l in enumerate(body)]
         if new != body:
-            result["files"].append(Path(f).resolve().relative_to(plan_dir.resolve()).as_posix())
+            result["files"].append(rel)
             if not dry_run:
                 f.write_text("".join(new), encoding="utf-8")
     result["ok"] = not result["unresolved"]
@@ -625,7 +841,7 @@ def main(argv=None) -> int:
     import harness_paths
     import plan_graph
     ap = argparse.ArgumentParser(
-        description="Rewrite the cites in a plan's red-team disposition tables.")
+        description="Rewrite the cites in a plan's disposition tables (every lens).")
     ap.add_argument("--plan", required=True,
                     help="the plan: its dir, or its name under the project's plans/")
     mode = ap.add_mutually_exclusive_group(required=True)

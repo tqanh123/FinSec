@@ -21,6 +21,7 @@ that is deliberately out of scope.
 
 Usage: python3 pyclasses.py <project_dir> [-o graph.json] [--direction TB|LR]
                                           [--group] [--no-reduce]
+                                          [--snap REF [--snap-store DIR]]
 """
 import argparse
 import ast
@@ -69,13 +70,13 @@ def base_simple_name(expr):
     return expr.rsplit(".", 1)[-1] if _DOTTED.match(expr) else None
 
 
-def snapshot_classes(project):
+def snapshot_classes(project, snap=None, out=None):
     """`classes_in` for every module under `project`, read off the shared
     codegraph snapshot (each class symbol's `bases`) -- None when the door
     cannot answer for `project` (`pyimports.snapshot_records`), which the
     caller reads as "scan the files directly"."""
     from pyimports import snapshot_records
-    got = snapshot_records(project)
+    got = snapshot_records(project, snap, out)
     if got is None:
         return None
     _records, under = got
@@ -117,6 +118,7 @@ def transitive_reduce(nodes, edges):
 
 
 def main():
+    from pyimports import add_snapshot_args, door_or_exit
     ap = argparse.ArgumentParser(description="Python class-inheritance graph -> autolayout graph JSON.")
     ap.add_argument("project", help="package or project directory")
     ap.add_argument("-o", "--output", help="output JSON path (default: stdout)")
@@ -125,10 +127,12 @@ def main():
                     help="box classes by their module (nested by sub-package)")
     ap.add_argument("--no-reduce", action="store_true",
                     help="keep every edge (skip transitive reduction)")
+    add_snapshot_args(ap)
     args = ap.parse_args()
 
     modules, base = discover(args.project)
-    via_door = snapshot_classes(args.project)
+    via_door = door_or_exit(lambda: snapshot_classes(args.project, args.snap, args.snap_store),
+                            args)
     found = via_door if via_door is not None else [
         c for mod, path in modules.items() for c in classes_in(mod, path)]
     classes = {}                                         # qualified id -> (module, bases)

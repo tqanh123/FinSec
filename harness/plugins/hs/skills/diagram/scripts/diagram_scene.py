@@ -24,6 +24,8 @@ class SceneNode:
     role: str | None = None
     rank_hint: int | None = None
     group: str | None = None
+    technology: str | None = None
+    description: str | None = None
 
 
 @dataclass
@@ -55,7 +57,8 @@ class Scene:
 def _architecture_scene(ir: dict) -> Scene:
     nodes = [
         SceneNode(id=c["id"], label=c.get("label", c["id"]), role=c.get("role"),
-                   rank_hint=c.get("layer"))
+                   rank_hint=c.get("layer"), technology=c.get("technology"),
+                   description=c.get("description"))
         for c in ir.get("components", [])
     ]
     groups = [

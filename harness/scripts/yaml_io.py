@@ -100,11 +100,21 @@ import io
 
 from ruamel.yaml import YAML, YAMLError  # noqa: F401 -- re-exported for callers
 from ruamel.yaml.nodes import MappingNode, ScalarNode, SequenceNode  # noqa: F401 -- re-exported
+from ruamel.yaml.tokens import (  # noqa: F401 -- re-exported
+    FlowMappingEndToken, FlowMappingStartToken, FlowSequenceEndToken,
+    FlowSequenceStartToken, ScalarToken)
+from ruamel.yaml.reader import Reader as _Reader
 from ruamel.yaml.representer import SafeRepresenter
 from ruamel.yaml.resolver import VersionedResolver
 
-__all__ = ["yaml_load", "safe_load", "safe_dump", "YAMLError", "compose_all",
-          "ScalarNode", "MappingNode", "SequenceNode"]
+__all__ = ["yaml_load", "safe_load", "safe_dump", "YAMLError", "compose_all", "scan",
+           "NON_PRINTABLE", "ScalarToken", "FlowMappingEndToken", "FlowMappingStartToken",
+           "FlowSequenceEndToken", "FlowSequenceStartToken", "ScalarNode", "MappingNode",
+           "SequenceNode"]
+
+# One character the reader refuses (libyaml checks the same set), as a compiled
+# pattern: a caller that must read such a file anyway can find or replace them.
+NON_PRINTABLE = _Reader.NON_PRINTABLE
 
 _STR_TAG = "tag:yaml.org,2002:str"
 
@@ -198,6 +208,23 @@ def compose_all(stream):
     (`codegraph`'s path-driver scan) reads a node.
     """
     return _loader().compose_all(stream)
+
+
+def scan(stream):
+    """The scanner's TOKENS for `stream` (`ScalarToken` carries `.plain` and its
+    start/end marks), a generator that raises `YAMLError` at the first lexical
+    error. Lexical, so it keeps going where `compose_all` stops: a file whose
+    structure no longer parses still yields every token before the scanner's own
+    error, and an alias is one `AliasToken` rather than a revisit of its anchor.
+
+    A byte-order mark the stream opens with is dropped by the C reader and counted
+    by the pure one (ruamel's fallback without its C extension): a caller that
+    slices the source by index leaves that mark out of what it passes.
+
+    Its own loader, not the shared one: a scan is a generator, and a load on the
+    shared instance between two of its tokens ends it silently, no StreamEnd and no
+    error."""
+    return YAML(typ="safe", pure=False).scan(stream)
 
 
 def safe_dump(data, stream=None, *, sort_keys=True, allow_unicode=True,

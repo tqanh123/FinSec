@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "vòng đời phiên bản template"
+  },
+  "states": [
+    {
+      "id": "draft",
+      "label": "draft",
+      "kind": "initial"
+    },
+    {
+      "id": "shadow",
+      "label": "shadow",
+      "kind": "active"
+    },
+    {
+      "id": "canary",
+      "label": "canary",
+      "kind": "active"
+    },
+    {
+      "id": "live",
+      "label": "promoted (live)",
+      "kind": "terminal-success"
+    },
+    {
+      "id": "rb",
+      "label": "rolled back",
+      "kind": "failure-recoverable"
+    },
+    {
+      "id": "rej",
+      "label": "rejected",
+      "kind": "terminal-cancelled"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "draft",
+      "to": "shadow",
+      "event": "HITL duyệt"
+    },
+    {
+      "from": "draft",
+      "to": "rej",
+      "event": "từ chối",
+      "kind": "cancel"
+    },
+    {
+      "from": "shadow",
+      "to": "canary",
+      "event": "diff đạt ngưỡng"
+    },
+    {
+      "from": "canary",
+      "to": "live",
+      "event": "duyệt 4 mắt"
+    },
+    {
+      "from": "canary",
+      "to": "rb",
+      "event": "proxy chất lượng tụt",
+      "kind": "fail"
+    },
+    {
+      "from": "live",
+      "to": "rb",
+      "event": "rollback một chạm",
+      "kind": "fail"
+    },
+    {
+      "from": "rb",
+      "to": "draft",
+      "event": "mở run mới",
+      "kind": "retry"
+    }
+  ]
+}
