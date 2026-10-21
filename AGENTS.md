@@ -46,7 +46,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors.
 - `router/linucb_bandit.py`: disjoint LinUCB contextual bandit that chooses a model name.
 - `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`. The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
-- `harness/` (repo root): vendored SDLC harness v7.2.0, driven by `/hs:plan`, `/hs:cook`, `/hs:test` and `/hs:ship`. It reads `docs/system-architecture.md` and `docs/code-standards.md` (written 2026-10-20) before every plan and code change; keep both in sync with this file.
+- `harness/` (repo root): vendored SDLC harness v7.3.0 (upgraded 2026-10-21), driven by `/hs:plan`, `/hs:cook`, `/hs:test` and `/hs:ship`. It reads `docs/system-architecture.md` and `docs/code-standards.md` (written 2026-10-20) before every plan and code change; keep both in sync with this file.
 
 ## Product Direction (PROPOSED 2026-10-20; pending owner decisions in docs/project-roadmap.md §9)
 - **Vision.** A private research and alerting tool. Each US/VN disclosure becomes a calibrated probability of abnormal return. The probability is logged in an append-only ledger before the outcome exists and scored automatically when its horizon matures.
@@ -94,6 +94,9 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - FTSE secondary-emerging status is effective 2026-09-21. VERIFIED https://www.lseg.com/en/media-centre/press-releases/ftse-russell/2025/ftse-russell-country-classification-september-2025
 - **vnstock licence.** The Community licence allows personal, study or research use only, with no redistribution. VERIFIED https://github.com/thinh-vu/vnstock. Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
 - **`.gitignore` (OBSERVED 2026-10-20).** The unanchored `data/` and `models/` patterns ignore any directory with those names. `harness/**/data/` is re-included explicitly.
+- **Harness install state (OBSERVED 2026-10-21).**
+  - Strict verify reads the omitted-skills record in the gitignored `harness/state/`. A fresh clone or worktree therefore reports files as "missing" until you run the installer there: the default-off skills stashed in `disabled-skills/` (477 files in v7.3.0) plus `harness/state/.gitkeep`.
+  - The installer skips the pre-push transport gate when `.git` is a file (a worktree), so no pre-push hook is installed.
 
 ## Engineering Rules (binding)
 - **No order execution anywhere.**
@@ -127,3 +130,5 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - pytest collects 0 tests until Phase 0 adds a test wrapper.
 - **FastAPI server:** `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --reload --port 8000`. fastapi is not installed on the dev machine yet.
 - **Harness integrity:** `python3.13 harness/scripts/verify_install.py --root . --strict`. Local gate: `/hs:test`.
+  - Standards docs: `python3.13 harness/scripts/scaffold_standards.py --type system-architecture --check docs/system-architecture.md`, and the same with `--type code-standards` for `docs/code-standards.md`.
+  - Upgrade (Git Bash, POSIX paths): `sh install.sh /c/.../harness-vX.Y.Z.tar.gz .`. Then convert `harness/release.json` back to LF, because strict verify compares it with HEAD. Never edit `harness/manifest.json`: `kit_digest` pins its CRLF bytes.
