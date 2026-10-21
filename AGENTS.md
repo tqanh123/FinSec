@@ -8,9 +8,22 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-21 — All remaining roadmap §9 decisions answered; the roadmap is ADOPTED as the working plan:
+  - §9.1: personal research; outputs are owner-only (demos use replayed data and derived signals).
+  - §9.2: US pipeline first; VN capture-only poller from week 1; VN is the main research market from Phase 3.
+  - §9.4: VN capture runs on a spare always-on laptop configured as a server (no sleep, lid = do nothing, mains power, NTP, daily heartbeat, nightly off-machine backup).
+  - §9.5: no SSI account or SSI client before Phase 6; FC Data only, never FC Trading.
+  - §9.6: $0 plus the capture laptop through Phase 4.
+  - §9.7: broad point-in-time universe (~500 US, 150-250 VN, ranked by ADV) plus a watchlist of ≤30 per market; financials stay in event studies.
+  - §9.8: private Telegram 1:1 bot to one allowlisted chat id.
+  - §9.9: embedded storage (raw JSONL/Parquet, SQLite WAL, DuckDB); TimescaleDB only for Phase 6 ticks; Redpanda removed.
+  - §9.10: judged on prediction quality; the complexity gate is binding.
+  - §9.11: LLM provider chosen at the Phase 5 gate (rule-based extraction first).
+  - §9.12: AGENTS.md and docs in English; alerts and digests Vietnamese-first.
+  - §9.13: keep `.agents/`, with its rules rewritten as pointers to AGENTS.md (Phase 0).
 - 2026-10-20 — §9.3: "real-time" means fast disclosure capture first (detection latency); tick streaming is Phase 6.
 - 2026-10-20 — `CLAUDE.md` only imports `@AGENTS.md` (plus the generated harness block); project knowledge lives in this file.
-- The other open decisions are listed in docs/project-roadmap.md §9.
+- Full wording and options: docs/project-roadmap.md §9. To change a decision, add a new dated line; never edit an old one.
 
 ## System Overview
 FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time market data, financial statements and corporate decisions for US (NYSE/NASDAQ) and Vietnam (HOSE/HNX/UPCOM) equities into predictions that are scored against what actually happened. It never places orders and is not investment advice.
@@ -48,7 +61,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`. The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
 - `harness/` (repo root): vendored SDLC harness v7.2.0, driven by `/hs:plan`, `/hs:cook`, `/hs:test` and `/hs:ship`. It reads `docs/system-architecture.md` and `docs/code-standards.md` (written 2026-10-20) before every plan and code change; keep both in sync with this file.
 
-## Product Direction (PROPOSED 2026-10-20; pending owner decisions in docs/project-roadmap.md §9)
+## Product Direction (ADOPTED 2026-10-21; detail in docs/project-roadmap.md)
 - **Vision.** A private research and alerting tool. Each US/VN disclosure becomes a calibrated probability of abnormal return. The probability is logged in an append-only ledger before the outcome exists and scored automatically when its horizon matures.
 - **"Real-time" (DECIDED 2026-10-20, §9.3).** In Phases 0-4 this means disclosure detection latency: median under 5 min (US) and under 10 min (VN). Tick streaming is Phase 6, after the owner checkpoint that follows Phase 4.
 - **Pre-registered targets** (full definitions in roadmap §2):
@@ -61,7 +74,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - A hit rate above 60% or an IC above 0.10 triggers a leakage audit.
   - A documented null result with stated power counts as a pass.
 
-## Roadmap (PROPOSED; detail in docs/project-roadmap.md §7)
+## Roadmap (ADOPTED 2026-10-21; detail in docs/project-roadmap.md §7)
 - **Phase 0 (next, ~2 weeks):**
   - a verification spike (EDGAR time, Alpaca, vnstock, SSI);
   - `docs/system-architecture.md` and `docs/code-standards.md` (done 2026-10-20);
@@ -110,15 +123,16 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **Forensics.** Altman/Beneish/Piotroski scores never apply to banks, insurers or securities firms.
 - **External facts.** Label them VERIFIED, OBSERVED or ASSUMED. Never invent API names, fields, model IDs or prices.
 - **Package names.** Do not name a package `data/` or `models/` until the `.gitignore` patterns are anchored; use `modeling/`.
-
-## Proposed Rules (pending owner decisions in docs/project-roadmap.md §9; not binding yet)
-- **Private outputs only.** Outputs go only to the owner, never to groups or the public (§9.1).
-- **Complexity gate.** RAG, the bandit, SLM fine-tuning or a new database enter the pipeline only with a measured gain on the scoreboard or in latency (§9.10). Tick streaming is already scheduled for Phase 6 (§9.3).
-- **Point-in-time contract.** Every record carries tz-aware UTC `information_time`, `first_seen_at`, `ingested_at`, `source`, `source_id` and `pit_quality`. Features read only through `store.as_of()` (roadmap §5).
-- **VN labels.**
+- **Private outputs only (§9.1, §9.8).** Outputs go only to the owner, through the private Telegram 1:1 bot or local reports; never to groups, channels or the public.
+- **Complexity gate (§9.10).** RAG, the bandit, SLM fine-tuning or a new database enter the pipeline only with a measured gain on the scoreboard or in latency. Tick streaming is scheduled for Phase 6 (§9.3).
+- **Storage (§9.9).** Raw data is append-only JSONL/Parquet; operations use SQLite (WAL); research uses DuckDB. No other database before Phase 6.
+- **Point-in-time contract (roadmap §5).** Every record carries tz-aware UTC `information_time`, `first_seen_at`, `ingested_at`, `source`, `source_id` and `pit_quality`. Features read only through `store.as_of()`.
+- **VN labels (roadmap §6.3).**
   - Adjust for corporate actions ourselves from raw bars.
   - Treat band-locked sessions as unfillable.
-  - No 1-session VN stock target counts as a tradable call (roadmap §6.3).
+  - No 1-session VN stock target counts as a tradable call.
+- **Budget and vendors (§9.5, §9.6).** No paid data or service and no SSI client before the decision allows it ($0 through Phase 4; SSI from Phase 6).
+- **Language (§9.12).** Code, AGENTS.md and docs in English; user-facing alerts Vietnamese-first; Vietnamese text keeps its diacritics (NFC).
 
 ## Build & Verification Commands
 - **End-to-end smoke check.**

@@ -1,7 +1,7 @@
 # FinSec AlphaRadar: Direction and Roadmap
 
-> **Status: PROPOSED 2026-10-20 — pending the owner decisions in section 9.** Nothing below is decided until that section records an answer. Decided so far: §9.3 (real-time = disclosure capture first, ticks in Phase 6).
-> Last updated 2026-10-20. Merged from five design lenses (data, modeling, Vietnam market, product, risk) and two critiques.
+> **Status: ADOPTED 2026-10-21.** All 13 owner decisions in section 9 are answered (§9.3 on 2026-10-20, the rest on 2026-10-21), so this roadmap is the working plan. Change it only through a dated decision recorded in section 9 and in AGENTS.md "Decisions".
+> Last updated 2026-10-21. Merged from five design lenses (data, modeling, Vietnam market, product, risk) and two critiques.
 > Evidence labels: **VERIFIED** means a source URL is given. **OBSERVED** means it was seen by running code or fetching data, with the date. **ASSUMED** means unchecked; it must be probed before anything depends on it.
 > This is a research and alerting project. Nothing here is investment advice.
 
@@ -577,9 +577,9 @@ Each item needs an `/hs:plan` that cites the metric it is expected to improve.
 
 ---
 
-## 9. Open decisions (owner)
+## 9. Owner decisions
 
-Each decision is unanswered until the owner picks an option. Record the answer here and in AGENTS.md, with the date.
+All decisions were answered by the owner (§9.3 on 2026-10-20, the rest on 2026-10-21). To change one, add a new dated decision line under it and in AGENTS.md "Decisions"; do not edit the old line.
 
 ### 9.1 What is the project for, and who will ever see its outputs? This decides the legal and data-licensing posture: VN advisory licensing, the US publisher exclusion, and the vnstock/Alpaca/SSI no-redistribution terms.
 
@@ -589,7 +589,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** Personal research or study use, with private outputs. Before any demo shown to others, use replayed historical data with derived signals only. Any public, group or paid use needs a legal review and written data agreements first.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. Personal research/study project; outputs are visible only to the owner. Demos for anyone else use replayed historical data and derived signals only. Any group, public or paid use needs a legal review and written data agreements first.
 
 ### 9.2 Which market leads the build?
 
@@ -599,7 +599,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** US pipeline first, with VN capture starting in week 1. US timestamps are clean and free, so the first measurable number comes fastest. VN publish times cannot be backfilled, so VN capture must start immediately whichever option you choose.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. The US pipeline (EDGAR + Alpaca) is built first; the VN disclosure capture-only poller starts in week 1; VN becomes the main research market from Phase 3.
 
 ### 9.3 What does 'real-time' (cào realtime) need to mean for you, and when should tick streaming start?
 
@@ -619,7 +619,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** A spare always-on PC or a small VPS, with NTP time sync, a daily heartbeat message and a nightly off-machine backup. Use the laptop only if you accept gaps; gaps are logged and the affected events are marked pit_quality=late.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** a spare laptop kept always on, configured as a server: never sleep or hibernate, lid close = do nothing, always on mains power (battery charge limit if the firmware offers one), Windows Update active hours that cover 08:00-17:30 ICT, NTP time sync, a daily heartbeat and a nightly off-machine backup. Any gap is logged and affected events get `pit_quality = late`.
 
 ### 9.5 Will you open an SSI (or DNSE) brokerage account to get FastConnect market-data credentials?
 
@@ -629,7 +629,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** Defer unless you already have an SSI account. Phases 0-4 do not need it. If you open one, register only for FC Data (ConsumerID/Secret), never FC Trading.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. No SSI account and no SSI client before Phase 6. When one is opened, register FC Data only (ConsumerID/Secret), never FC Trading.
 
 ### 9.6 What is the budget?
 
@@ -640,7 +640,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** $0 plus the host through Phase 4. Pay for SIP only after a daily-horizon signal shows edge. Set a hard daily LLM cap at the Phase 5 gate. Check whether you have a CUDA GPU before keeping the finetune extra.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. $0 plus the capture laptop through Phase 4. Paid SIP data only after a daily-horizon signal shows edge; a hard daily LLM cost cap is set at the Phase 5 gate.
 
 ### 9.7 How broad should the research universe be, and should financial firms be included?
 
@@ -650,7 +650,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** The broad point-in-time universe plus a small live watchlist. 30+30 names cannot detect a realistic IC; detecting IC 0.03 needs about 4,400 effectively independent events. Keep financial firms in the event studies, but exclude them from the Altman/Beneish/Piotroski features.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. Broad point-in-time universe ranked by ADV (about 500 US, 150-250 VN names, recomputed monthly, delisted names kept) plus a live watchlist of 30 or fewer per market. Financial firms stay in the event studies but are excluded from the Altman/Beneish/Piotroski features.
 
 ### 9.8 Which alert channel?
 
@@ -661,7 +661,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** A private Telegram 1:1 bot with Vietnamese-first cards, a bilingual disclaimer and no buy/sell wording. No groups or channels until a legal review.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. A private Telegram 1:1 bot to one allowlisted chat id, Vietnamese-first cards with a bilingual disclaimer and no buy/sell wording; no groups or channels.
 
 ### 9.9 Which storage stack for Phases 0-5?
 
@@ -670,7 +670,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** Embedded. It runs on Windows without Docker, and none of the docker-compose services is used today. Add TimescaleDB in Phase 6 if tick storage needs it.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. Embedded storage: append-only raw JSONL/Parquet, SQLite (WAL) for operations, DuckDB for research. TimescaleDB only when ticks arrive in Phase 6; Redpanda is removed.
 
 ### 9.10 How will the project be judged (for example, if it is a study or thesis project)?
 
@@ -680,7 +680,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** Prediction quality and honest evaluation first. The showcase components stay gated in Phases 5-7, so each one enters only if it improves a measured number. If a grader needs the showcase, schedule Phase 5 or 7 explicitly after Phase 4.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. Judged on prediction quality with honest evaluation (scoreboard, leakage tests, null results allowed). The complexity gate is binding: showcase components enter only when they improve a measured number.
 
 ### 9.11 Which LLM provider (and models) for Phase 5 extraction?
 
@@ -690,7 +690,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** Decide at the Phase 5 gate. Start rule-based, then add the cheapest hosted model behind the validator. The model IDs currently hard-coded in api/server.py and router/linucb_bandit.py are unverified ('gemini-4-argon-pro' was not found), so choose models from the provider's live model list.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. Deferred to the Phase 5 gate: start rule-based, then the cheapest hosted model behind a JSON schema, the number-faithfulness validator, a cache and a daily cost cap; model IDs come from the provider's live model list.
 
 ### 9.12 What language should docs, labels and alerts use?
 
@@ -700,7 +700,7 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** English for AGENTS.md and docs, because every coding agent reads them. Alerts should be Vietnamese-first for you. Vietnamese labels and keywords stay in Vietnamese, with diacritics, after NFC normalization.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. AGENTS.md and docs/ in English; alerts and digests Vietnamese-first with a bilingual disclaimer; Vietnamese labels and keywords keep their diacritics after NFC normalization.
 
 ### 9.13 What should happen to the .agents/ configuration (another agent tool's rules, hooks and MCP servers)?
 
@@ -710,4 +710,4 @@ Each decision is unanswered until the owner picks an option. Record the answer h
 
 **Recommendation:** Keep it, with its rules rewritten as pointers to AGENTS.md. Rule 3 currently requires BM25+dense+MaxSim in every *.py file, and that would pull agents back into RAG work. Remove the Alpaca 'trading' toolset and pin the community MCP servers to commit SHAs.
 
-**Decision:** _open_
+**Decision (owner, 2026-10-21):** option 1. Keep `.agents/`, rewrite its rules as pointers to AGENTS.md (drop rule 3), remove the Alpaca `trading` toolset and pin the community MCP servers (Phase 0).
