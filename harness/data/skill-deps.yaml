@@ -1,0 +1,132 @@
+# Skill dependency graph for the installer's skill picker.
+#
+# After the plugin collapse every skill is invoked bare as its skill-name.
+# When a user ticks a skill, the installer auto-ticks its declared deps
+# (transitively). The core_immutable spine can never be unticked.
+#
+# deps are bare skill-names seeded from each skill's declared cross-skill
+# handoff/route references in its SKILL.md. Most leaf skills have no deps.
+# Every name in any deps list must be one of the entries below
+# (invokable skills + the _docslib shared-lib entry).
+
+# The always-on floor the installer pins permanently (cannot be unticked): the
+# 13-skill spine + find-skills and cleanup, which must stay reachable to locate a
+# disabled skill and to sweep one away, + codemap, which hs-run's code-map offer
+# names from every facts domain and so must be there whenever that offer is.
+core_immutable: [plan, cook, test, ship, fix, debug, code-review, review-pr, git, scout, understand, setup, triage, find-skills, cleanup, codemap]
+# The floor members that are not the SDLC spine: every reader that splits the floor
+# (spine = core_immutable - floor_extra) reads it here instead of keeping its own list.
+floor_extra: [find-skills, cleanup, codemap]
+
+skills:
+  # spine
+  plan: { deps: [cook, workflow-orchestrate] }
+  cook: { deps: [bakeoff, plan, remember, test] }
+  test: { deps: [code-review, cook, debug, fix] }
+  ship: { deps: [code-review, context-engineering, cook, critique, test] }
+  fix: { deps: [brainstorm, debug, remember, scout, workflow-orchestrate] }
+  debug: { deps: [brainstorm, fix, remember, scout, workflow-orchestrate] }
+  code-review: { deps: [cook, fix, git, remember, scout, security-scan, test, workflow-orchestrate] }
+  review-pr: { deps: [code-review, fix, git, workflow-orchestrate] }
+  git: { deps: [context-engineering] }
+  scout: { deps: [code-review, context-engineering, debug, fix, research, workflow-orchestrate] }
+  understand: { deps: [context-engineering, docs, plan, scout, triage, workflow-orchestrate] }
+  setup: { deps: [codemap] }  # the onboarding routes it used to name are gone with the off-skill proxy; the code map is offered from the configured state
+  triage: { deps: [bakeoff, code-review, debug, fix, plan, scenario, scout, test] }
+
+  # flow
+  loop: { deps: [cook, debug, fix, goal] }
+  goal: { deps: [] }
+  team: { deps: [code-review, cook, debug, research, workflow-orchestrate] }
+  worktree: { deps: [git] }
+  workflow-orchestrate: { deps: [] }
+  coding-agent-orchestration: { deps: [] }
+  compound: { deps: [insights] }
+
+  # think
+  brainstorm: { deps: [debug, plan, research, scout, workflow-orchestrate] }
+  predict: { deps: [bakeoff, debug, plan, scenario, workflow-orchestrate] }
+  scenario: { deps: [plan, predict, research, test] }
+  problem-solving: { deps: [bakeoff, brainstorm, debug, plan, workflow-orchestrate] }
+  critique: { deps: [brainstorm, remember, workflow-orchestrate] }
+  bakeoff: { deps: [brainstorm, goal, loop, predict, worktree] }
+
+  # research
+  research: { deps: [bakeoff, plan, workflow-orchestrate] }
+  discover: { deps: [bakeoff, brainstorm, cook, plan, problem-solving, research, understand, workflow-orchestrate] }
+  techstack: { deps: [setup, test] }
+  security-scan: { deps: [code-review, fix, git, plan, workflow-orchestrate] }
+  contract-test: { deps: [test, web-testing] }
+  eval-bootstrap: { deps: [techstack, test] }
+
+  # create
+  skill-creator: { deps: [harness-creator] }
+  harness-creator: { deps: [skill-creator] }
+  port: { deps: [bootstrap, brainstorm, cook, plan, scout] }
+  bootstrap: { deps: [cook, docs, plan, remember, workflow-orchestrate] }
+
+  # mem
+  remember: { deps: [rule-author] }
+  insights: { deps: [setup] }
+  docs: { deps: [scout] }
+
+  # meta
+  find-skills: { deps: [] }   # true leaf: it reports an off match, it no longer routes one anywhere
+  context-engineering: { deps: [scout] }
+  rule-author: { deps: [remember] }
+
+  # ai
+  gemini: { deps: [] }   # gemini partner lane; ships OFF (not core_immutable), true leaf
+  partner: { deps: [] }   # ccs partner lane; ships OFF (not core_immutable), true leaf
+
+  threejs: { deps: [] }
+
+  # harness operation
+  goal-warmup: { deps: [advise, plan] }  # outcome-lock preflight before a long autonomous run
+  eli5: { deps: [preview] }   # names hs:preview as the route when the answer IS the picture
+  finetune: { deps: [find-skills, loop, predict, scenario, security-scan] }  # directed router: names each as the owner of a measured outcome
+  dispatch: { deps: [coding-agent-orchestration, find-skills, finetune, triage, workflow-orchestrate] }  # names each in its Boundaries table
+
+  # devops
+  cleanup: { deps: [] }  # recipient-side orphan sweep after over-install
+  codemap: { deps: [port] }  # the code map's setup and upkeep; port's own setup stays with hs:port, reported as a route
+  deploy: { deps: [] }
+  release: { deps: [docs-standardize] }  # owner-only build step; engine ships in the skill's scripts/ but runs only in the source repo (drives release/, not shipped); preflight runs the docs-standardize gate
+  rops: { deps: [] }  # remote execution CLI; engine ships at harness/scripts/rops/, run via the hs-rops launcher ($HARNESS_BIN_ROOT/harness/bin/hs-rops)
+  web-testing: { deps: [test] }
+
+  # stack
+
+  # uiux
+
+  # integrations
+
+  # extra
+  prompt: { deps: [find-skills, plan] }
+  handoff: { deps: [gemini, partner] }  # --dispatch gemini/ccs routes to hs:gemini / hs:partner; internal/install-target IDs need no dep
+  advise: { deps: [brainstorm, plan, scout, workflow-orchestrate] }            # interview-driven advisory verdict
+
+  # (The CLI-sequenced `plan-ng`/`cook-ng` variants used to sit here. They were
+  # prototypes for moving the deterministic step ORDER out of prose and into the
+  # hs-run CLI; that move landed in the spine `plan`/`cook` themselves, so the
+  # prototypes were retired rather than kept as permanent siblings. Their deps
+  # are not migrated: `plan`/`cook` already carry their own, and the shared
+  # judgment drawers now live under `_shared/hs-run/`.)
+
+  # product
+  spec: { deps: [critique, shape] }     # PO product-spec hierarchy; hs:shape is its BA sibling (2-cycle, resolver tolerates)
+  shape: { deps: [code-review, cook, plan, spec, test] }   # BA bridge PO-story -> dev tasks
+
+  # viz
+  diagram: { deps: [drawio, mermaidjs, preview, scout, tech-graph, understand] }  # typed-IR system-map compiler; main door, names each sibling's kept role
+  mermaidjs: { deps: [diagram, docs, drawio, preview, tech-graph] }
+  preview: { deps: [brainstorm, cook, diagram, docs, plan, scout] }
+  tech-graph: { deps: [diagram, drawio, mermaidjs, understand] }
+
+  # docs-ssot pipeline. deps ở đây encode HANDOFF edge (từ SKILL.md "Sau/Trước"),
+  # KHÔNG phải build-order DAG — cycle hợp lệ; test_handoff_deps_drift enforce.
+  _docslib: { deps: [] }   # shared lib, no SKILL.md; consumed by docs-scaffold/standardize/build
+  docs-scaffold: { deps: [_docslib, docs-standardize] }       # scaffold → standardize
+  docs-standardize: { deps: [_docslib, docs-scaffold, docs-build] }  # standardize ↔ scaffold/build
+  docs-build: { deps: [_docslib, docs-standardize] }          # build cần gate standardize trước render
+  drawio: { deps: [diagram, mermaidjs, preview, tech-graph, understand] }

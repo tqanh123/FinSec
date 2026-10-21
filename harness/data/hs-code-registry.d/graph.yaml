@@ -1,0 +1,40 @@
+# graph.yaml — the `graph` domain's fragment of the hs-code registry.
+#
+# Owned exclusively by whoever builds the `graph` domain's verbs. Never touch
+# another domain's fragment from here — one file per domain is what lets
+# concurrent build phases add domains without two agents writing the same
+# file. Schema + merge/conflict rules: see harness/data/hs-code-registry.yaml's
+# header.
+#
+# `module:` is any name `importlib.import_module` resolves from harness/scripts/;
+# the graph verbs live in the domain's own package `codegraph.graph` (`verbs`,
+# `query`, `rules`), as every domain with a package does. The reachability gate
+# reads the dotted name as that exact module (test_module_reachability.py).
+
+domains:
+  graph:
+    snapshot: {module: codegraph.graph.verbs, entry: SNAPSHOT, help: "measure the tree into a new snapshot (dry-run by default, --apply writes)"}
+    where: {module: codegraph.graph.query, entry: WHERE, help: "find where a symbol matching a regex pattern lives now (case-insensitive unless --case-sensitive)"}
+    grep: {module: codegraph.graph.query, entry: GREP, help: "find a string in every tracked file, each match typed: code, docstring, comment, string, data, doc"}
+    file: {module: codegraph.graph.query, entry: FILE, help: "show what one file holds: its symbols and imports"}
+    unit: {module: codegraph.graph.query, entry: UNIT, help: "show a unit's digest: modules, entries, in/out edges, cycles"}
+    importers: {module: codegraph.graph.query, entry: IMPORTERS, help: "list a module's importers (fan-in), or who calls a specific symbol"}
+    changed: {module: codegraph.graph.query, entry: CHANGED, help: "list symbols changed between the primary snapshot and another snapshot"}
+    big: {module: codegraph.graph.query, entry: BIG, help: "list the largest files and longest symbols"}
+    unassigned: {module: codegraph.graph.query, entry: UNASSIGNED, help: "list symbols left without a --key label (default 'dist')"}
+    stats: {module: codegraph.graph.query, entry: STATS, help: "show snapshot measurements: commit, totals, roots"}
+    trace: {module: codegraph.graph.query, entry: TRACE, help: "follow one symbol across two snapshots (file, symbol, group, tier)"}
+    tests: {module: codegraph.graph.query, entry: TESTS, help: "show which test file or function touches a unit, or a summary"}
+    rules: {module: codegraph.graph.rules, entry: RULES, help: "run every declared rule over the latest (or given) snapshot"}
+    drift: {module: codegraph.graph.rules, entry: DRIFT, help: "check whether the measured tree still matches its snapshot"}
+    incremental: {module: codegraph.graph.rules, entry: INCREMENTAL, help: "run declared rules over only the modules changed since a base"}
+    init: {module: codegraph.graph.rules, entry: INIT, help: "write a fresh codemap.yaml descriptor (dry-run by default)"}
+    adapter-blindspots: {module: codegraph.graph.rules, entry: ADAPTER_BLINDSPOTS, help: "print every adapter's 'what it cannot see' contract"}
+
+# What `hs-code init` runs for this domain (schema: init.yaml's header).
+initializers:
+  graph:
+    order: 10
+    summary: "codemap.yaml + first snapshot: backs the code.* facts and every graph/change/check/scaffold verb"
+    status: {module: codegraph.init.initializers, entry: graph_status}
+    run: {module: codegraph.init.initializers, entry: graph_run}

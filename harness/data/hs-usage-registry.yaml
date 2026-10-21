@@ -1,0 +1,14 @@
+# hs-usage-registry.yaml — base file of hs-usage's command registry.
+#
+# The live commands are rows of hs-usage-registry.d/*.yaml. A command that leaves
+# hs-usage keeps answering with its new door through a row here or in a fragment:
+#
+#   domains:
+#     <old-command>: {moved_to: "<cli> <command>"}
+#
+# Same loader, merge and conflict rules as hs-cli-registry.yaml / hs-rops-registry.yaml
+# (`hs_family.registry.load_registry`); a `moved_to` whose target does not exist is a
+# broken registry. Env overrides: HARNESS_HS_USAGE_REGISTRY (single file),
+# HARNESS_HS_USAGE_REGISTRY_DIR.
+
+domains: {}

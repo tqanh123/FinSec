@@ -1,0 +1,11 @@
+# Preset `monorepo-workspace` — distribution packages under packages/
+# (uv-workspace / hatchling monorepo shape). Each packages/<name>/
+# subdirectory is one unit; src/ inside a package is detected, not assumed.
+layout:
+  roots:
+    - id: packages
+      path: packages
+      kind: workspace
+scan:
+  include: ["*.py"]
+  exclude: []

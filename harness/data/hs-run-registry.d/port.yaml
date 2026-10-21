@@ -1,0 +1,185 @@
+# port.yaml — the `port` domain's fragment of the hs-run registry.
+#
+# Owned exclusively by whoever builds the `port` domain's verbs. Never touch
+# another domain's fragment from here — one file per domain is what lets domains
+# be built concurrently without two agents writing the same file. Schema +
+# merge/conflict rules: see harness/data/hs-run-registry.yaml's header.
+#
+# This is the domain's FIRST fragment. `next` answers whether `.port/port.yaml`
+# exists and is valid; batch/run/ledger verbs and the states that come with them
+# land in a later fragment update, not here.
+
+domains:
+  port:
+    next: {module: hs_run_port, entry: NEXT, help: "report the next port step from .port/ on disk (never writes)"}
+
+step_routing:
+  port:
+    skill: port
+    covers_skill: true
+
+    # Both apply at every state this slice reports, which is what `always:` is
+    # for rather than a copy in each of three: probe the real config on disk
+    # rather than assuming it (`agent-operational-discipline`), and route the
+    # decision tree for where a ported layer lands (`port-layering-and-
+    # capability-assignment`) — the skill body cites both, and `covers_skill`
+    # means the CLI, not the prose, is now the one to hand them over.
+    always:
+      rules: [agent-operational-discipline, port-layering-and-capability-assignment]
+
+    states:
+      # `--repo` named a path that does not exist or is not a directory — a bad
+      # ARGUMENT, distinct from `no_workspace` (a real path with nothing ported
+      # into it yet). Fixed by retyping the flag; nothing was read.
+      error:
+        summary: >-
+          The invocation itself was wrong — `--repo` named a path that does not
+          exist or is not a directory. Nothing was read; fix the flag and re-run.
+
+      # Nothing has been planned for this repo yet — no `.port/` directory was
+      # found at `--repo`, or walking up from the process CWD, or the
+      # directory that was found holds no `port.yaml` inside it. Not an
+      # error: a fresh repo starts here every time.
+      no_workspace:
+        summary: >-
+          No `.port/port.yaml` under the resolved target (`--repo`, or the
+          nearest ancestor of the current directory holding `.port/`).
+          Nothing has been planned for this repo yet — run `/hs:port` to plan
+          one.
+
+      # The file exists but fails validation. Every problem it has is listed in
+      # the envelope, not just the first, so one run surfaces everything a fix
+      # needs to address rather than one problem per round trip.
+      config_invalid:
+        summary: >-
+          `.port/port.yaml` exists but does not validate. The envelope's
+          `next_action` names the first problem and `problems` lists every one
+          found — an unknown key, a missing required field, or an attempt to
+          turn off the one rule that can never be turned off.
+
+      # The config is valid and nothing is planned under it yet. This is the
+      # honest answer for a repo that has declared its port config but not yet
+      # planned a batch — once one exists, `batch_planned` and the states after it answer.
+      no_batch:
+        summary: >-
+          `.port/port.yaml` is valid and no batch exists under `.port/batches/`
+          yet. Run `/hs:port` to plan the first one.
+
+      # `.port/ledger.jsonl` exists (read through the compatible streaming
+      # reader) but at least one line is unusable — bad JSON, a value that is
+      # not a JSON object, a missing envelope field, or a partial
+      # (interrupted-write) tail. The ledger is append-only: the fix is a
+      # line by hand, never an automatic rewrite.
+      ledger_broken:
+        summary: >-
+          `.port/ledger.jsonl` holds at least one line `hs-run port next`
+          cannot read — the envelope's `l0_findings` names each broken line
+          and why. Append-only: fix or remove the bad line BY HAND (it is
+          evidence), never edit it in place automatically.
+
+      # A batch's own `.port/batches/<name>/runs.jsonl` holds a line this
+      # reader cannot use — bad JSON, a non-object value, a record failing
+      # its own shape check, or a partial (interrupted-write) tail. The
+      # run ledger is append-only, same policy as `ledger_broken` above.
+      runs_broken:
+        summary: >-
+          A batch's own `runs.jsonl` holds at least one line `hs-run port
+          next` cannot read — the envelope's `run_findings` names each
+          broken line and why. Append-only: fix or remove the bad line BY
+          HAND, never edit it in place automatically.
+
+      # A batch's own `.port/batches/<name>/open.jsonl` holds at least one
+      # item still `open`/`proposed` — a real fork (`hs-code port
+      # add-module`/`judge-nodes` raised it) nothing mechanical can settle
+      # further. Checked BEFORE the step lane below: a step that failed
+      # BECAUSE it is waiting on this fork would otherwise report
+      # `step_red` forever, and re-running the exact same command can never
+      # turn it green — only a model proposal + a human `approve`/`reject`
+      # does.
+      open_items:
+        summary: >-
+          A batch has one or more open item(s) waiting on a person —
+          `hs-code port add-module`/`judge-nodes` hit a fork it could not
+          resolve alone. An item with no proposal yet needs one from the
+          model (`hs-code port propose`); a proposed item needs a human
+          `approve`/`reject` (`hs-code port approve`). The envelope's
+          `open_items` lists every pending item's id, kind, subject,
+          candidates and proposal.
+        ask_user:
+          question: >-
+            This batch has open item(s) waiting on a person. Approve the
+            proposed choice, reject it, or pick a different candidate?
+          facts:
+            - "hs-run lists each pending item's id/kind/subject/candidates/proposal below — it makes no recommendation of its own"
+          options:
+            - "approve the proposed choice — hs-code port approve <id> --batch <b> --apply"
+            - "reject it — hs-code port approve <id> --batch <b> --reject --why <reason> --apply"
+            - "pick another candidate — hs-code port approve <id> --batch <b> --choice <c> --apply"
+
+      # `.port/batches/<name>/handoff.json` (written by a mechanical step
+      # like `build`/`tests-land`) holds at least one item,
+      # and `batch.yaml` carries no `plan:` yet — or its `handoff_sha256:`
+      # no longer matches the file's CURRENT bytes (a step re-ran and
+      # changed the items since the plan was recorded). Checked after
+      # `open_items`, before the step lane: a step that failed BECAUSE its
+      # own finding is unplanned would otherwise report `step_red` forever.
+      handoff_unplanned:
+        summary: >-
+          `handoff.json` holds item(s) nothing mechanical can settle
+          further, and no current plan covers them. Run `/hs:port` pass 2 —
+          it turns each item group into a plan.md phase and records `plan:`
+          + `handoff_sha256:` in `batch.yaml`.
+
+      # The recorded `handoff_sha256:` matches the file's current bytes —
+      # the plan already exists and covers every current item.
+      handoff_in_cook:
+        summary: >-
+          `handoff.json`'s items are already covered by a recorded plan.
+          Hand off to `/hs:cook <plan>` — each phase's own `done_when`
+          command is its acceptance criterion.
+
+      # At least one batch is declared (`.port/batches/<name>/batch.yaml`),
+      # and the FIRST such batch (sorted) that is not fully green has never
+      # been run at all — its own `runs.jsonl` carries zero records.
+      # `next_command` is the exact `hs-code --step ...` for the batch's
+      # first lane step.
+      batch_planned:
+        summary: >-
+          A batch is declared and nothing has run against it yet. Run the
+          command in `next_command` — the first step of the batch's own
+          lane (`harness/data/port-steps.yaml`, or the batch's own `steps:`
+          pick).
+        # Rides the envelope (a `summary:` does not): the one moment a batch
+        # is about to start is when the detector must prove it still works.
+        advisory: >-
+          Before the first step, run `hs-code check gates --page port --only
+          control` — the port tool's own seeded cases, a few seconds. A red
+          there means the detector itself is broken: no step of this batch
+          can be trusted until it is fixed.
+
+      # The deciding batch/step's LAST recorded run failed (a non-zero
+      # `exit_code`). Rung 10, `next_command` null: a step is deterministic,
+      # so the same command re-run unchanged fails the same way.
+      step_red:
+        summary: >-
+          A batch's step last failed. Fix what it reported (or commit what it
+          refused on), then re-run the command `next_action` names.
+
+      # The deciding batch has SOME runs already, but the deciding step was
+      # either never run, or was run with a different command than the one
+      # this verb renders right now (a dry run missing `--apply`, or a
+      # `batch.yaml`/`port-steps.yaml` edit since it last ran, both read the
+      # same way: the recorded argv no longer matches).
+      steps_remaining:
+        summary: >-
+          A batch's next step has not been run with its CURRENT command —
+          never run, or run without `--apply`, or run before a config edit
+          changed what it renders to. Run `next_command`.
+
+      # Every declared batch is fully green — every step (per dist, for a
+      # per-dist step) has a LAST recorded run with exit 0 and argv matching
+      # what this verb renders right now.
+      closed:
+        summary: >-
+          Every batch under `.port/batches/` is fully green. Nothing left
+          for this engine to hand out.

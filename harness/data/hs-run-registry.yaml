@@ -1,0 +1,275 @@
+# hs-run-registry.yaml — the BASE of the data-driven domain/verb dispatch table for
+# `hs-run`. hs_run.py reads THIS file (if present) PLUS every `*.yaml` fragment under
+# the sibling `hs-run-registry.d/` directory, and merges them into one
+# `{domain: {verb: {module, entry}}}` table. It never hardcodes a domain/verb in an
+# if/else chain (survival invariant #3) — adding a THIRD domain is a new fragment file, not a router edit.
+#
+# WHY A DROP-IN DIRECTORY, NOT ONE MONOLITHIC FILE (decision D7):
+# concurrent build phases each own a different domain's verbs (one phase owns `plan`,
+# another owns `cook`) and run AT THE SAME TIME. Two agents writing one shared YAML file
+# simultaneously is a data-corruption hazard the concurrency rule forbids outright. One
+# fragment file per domain means the `plan` and `cook` phases can never collide, by construction — no merge coordination,
+# no lock file, no "whoever writes last wins" race.
+#
+# Base pattern copied from harness/data/hook-dispatch.yaml + harness/hooks/
+# hook_dispatch.py (the repo's existing load-once/resolve-by-name precedent); the
+# drop-in-directory extension on top of it is this build's own addition.
+#
+# --------------------------------------------------------------------- Schema
+#
+#   domains:
+#     <domain>:
+#       <verb>:
+#         module: <python module name>   # importable from harness/scripts (on sys.path)
+#         entry:  <callable name>        # signature: fn(argv: list[str], root: Path) -> dict
+#                                         #   the dict is the three-tier stdout contract's
+#                                         #   JSON body: {state, next_action[, artifacts,
+#                                         #   warnings, exit_code, summary_numbers, ...]}.
+#                                         #   exit_code defaults to 0 (EXIT_DONE) when absent;
+#                                         #   set it to 10 (EXIT_NEEDS_MODEL) for a two-beat
+#                                         #   step, two-beat. A raised exception is caught
+#                                         #   by the dispatcher and mapped to exit 2 (EXIT_BROKEN)
+#                                         #   — a verb entry point never needs its own try/except
+#                                         #   just to keep stdout valid JSON.
+#
+# Every verb WRAPS a script that already owns the logic (survival invariant #4) —
+# hs_run_plan.py / hs_run_cook.py never re-implement plan/cook decisions, they call
+# into the existing scripts (scaffold.py, plan_graph.py, open_plan.py, ...).
+#
+# --------------------------------------------------------- Where a new domain goes
+#
+# Add `harness/data/hs-run-registry.d/<your-domain>.yaml` with its own `domains:`
+# block (one top-level key, your domain's name). Do NOT add rows to THIS base file
+# for a new domain going forward — this file stays the shared base (today: empty),
+# and each domain's rows live in its own fragment so ownership never overlaps.
+#
+# --------------------------------------------------------------------- Load order
+#
+# 1. This base file, if it exists (missing is fine — an empty base is not an error).
+# 2. Every `*.yaml` under `hs-run-registry.d/`, in SORTED FILENAME order — never
+#    directory iteration order. Directory listing order is a filesystem/OS detail,
+#    not a documented contract; a merge whose meaning depended on it would be a bug
+#    waiting to be blamed on something else entirely. Sorting by filename is the one
+#    order that is deterministic on every platform this ships to.
+#
+# --------------------------------------------------------------------- Conflicts
+#
+# A `(domain, verb)` key declared by more than one source (base vs. a fragment, or
+# fragment vs. fragment) is a HARD ERROR — hs_family.registry.RegistryConflictError, which the
+# dispatcher maps to exit 2, naming BOTH files. Decision, not an oversight: silent
+# last-wins would let a typo'd or alphabetically-late fragment filename silently
+# hijack an already-registered verb, and nothing would shout about it. The whole
+# point of one-file-per-domain only holds if a genuine collision surfaces loudly as
+# the authoring mistake it is.
+#
+# A fragment that fails to PARSE (bad YAML) is the same story: hs_family.registry.RegistryParseError,
+# exit 2, naming that exact file — never silently skipped. A silently-skipped fragment
+# makes its verbs vanish, and the resulting "unknown verb" error would point the user
+# at completely the wrong cause.
+#
+# An empty fragment (or one with only header comments) is legal — a no-op, useful
+# while a domain owner is scaffolding their file before filling it in.
+#
+# A missing `hs-run-registry.d/` directory ENTIRELY degrades gracefully to base-only
+# content (never a crash) — covers a hypothetical stripped-down install.
+#
+# --------------------------------------------------------------- Env overrides
+#
+# HARNESS_HS_RUN_REGISTRY      — a single-file override that REPLACES this whole
+#                                base+fragments pipeline (base file AND the .d/
+#                                directory are both ignored, not merged in). This is
+#                                deliberate, not an inconsistency: a test/fixture that
+#                                injects one throwaway registry must see EXACTLY what
+#                                it wrote — merging it with the real base/fragments
+#                                would leak real domains into what's supposed to be a
+#                                hermetic test, or let a fixture verb name collide with
+#                                a real one undetected.
+# HARNESS_HS_RUN_REGISTRY_BASE — overrides just this base file's path (leaves the
+#                                normal .d/ merge pipeline running against it).
+# HARNESS_HS_RUN_REGISTRY_DIR  — overrides just the hs-run-registry.d/ path (leaves
+#                                the base file resolution untouched).
+#
+# ---------------------------------------------------------------- A verb that moved
+#
+# A row may read `moved_to: "<cli> <command>"` instead of `{module, entry}` — the
+# verb (or the whole domain, naming just `<cli> <domain>` with no verb) moved
+# somewhere else in the family, and dispatching the old spelling answers with the new
+# door (exit 2) instead of "unknown verb". The loader (hs_family.registry) pulls every
+# such row out of the live `domains:` table into its own `.moved` map at load time — a
+# moved row can never also carry real verbs, and a target that does not resolve to a
+# live command anywhere in the family (hs-run, hs-code, or hs-cli's own argparse
+# parser) is a broken registry, not a silent no-op. A domain-level target with no verb
+# (`hs-run cook`, not `hs-run cook next`) appends whatever verb the caller actually
+# typed, so a whole domain's move does not have to hardcode one. hs-cli-registry.yaml
+# is the model for a registry that carries ONLY moved rows and no live verbs at all.
+#
+# Today this base is intentionally EMPTY — `plan` and `cook`'s rows live in
+# hs-run-registry.d/plan.yaml and hs-run-registry.d/cook.yaml respectively (plan.yaml:
+# `next`/`scaffold`/`graph`/`prompt`/`record`; cook.yaml: `next`/`status`/`preflight`/`open`/
+# `verify`/`close`/`prompt`/`record`). Every verb arrived as a fragment-file edit, never a
+# base-file edit.
+
+domains: {}
+
+# Rules this table deliberately does NOT route, and why. The routing table's own
+# record of its edges — kept here rather than inferred from absence, because
+# absence is exactly what let ten rules ship with nothing pointing at them.
+#
+# The bar for landing here is narrow and mechanical: the rule fires BEFORE any verb
+# runs, so there is no state to bind it to. A rule that merely has no obvious home
+# does not qualify — it has a home nobody has looked for yet.
+#
+# ── When repeating stops being an attempt ────────────────────────────────────────
+# The trigger for asking a stronger model for counsel. The upstream pattern spends a
+# flag on this; a flag fires only when somebody remembers it, and the moment a run is
+# genuinely stuck is the moment nobody is thinking about flags. The ledger already
+# records (session, domain, state) per call, so "the same answer, N times in a row, in
+# this session" is a READ rather than a judgement — the only kind of decision this
+# engine is allowed to make.
+#
+# `repeat_threshold` is declared, not hardcoded: how many failures make a wall is a
+# judgement, and a project whose runs are cheap should be able to say a different
+# number without editing the engine. Below 2 it would fire on the first stumble, which
+# the escalation rule explicitly refuses.
+#
+# `domains` is scoped on purpose. A domain that only REPORTS (git, skills, setup) can
+# repeat an answer forever without anything being wrong — escalating there would teach
+# the reader to ignore the signal.
+advice_escalation:
+  repeat_threshold: 3
+  domains: [cook, fix, ship, test, review, review-pr]
+
+# Scope posture. The DEFAULT is load-bearing and stays `full`: deliver the whole thing
+# that was asked for. Cutting is the opt-in (`--yagni`), never the reverse — a harness
+# that trims by default trims things nobody agreed to lose, and the loss is silent.
+#
+# Two lists, kept disjoint so a reader can tell which one decided:
+#   auto_domains     — the step already decides scope, so the envelope raises the
+#                      question whether or not anyone typed the flag. `plan` writes the
+#                      scope-boundary fact; that IS this question.
+#   enforce_domains  — the step BUILDS to a scope somebody already set. Nothing to
+#                      decide, so the flag only travels here as an instruction.
+# Absent from both: a domain that neither sets scope nor builds to one. A posture field
+# there is noise, and a field that is noise is a field the reader learns to skip.
+scope_posture:
+  default: full
+  auto_domains: [plan]
+  enforce_domains: [cook, fix, test]
+
+# Where the deliverable LANDS. `markdown` is what every step already produces; the
+# rungs above it are opt-in, because a self-contained page costs a render and a
+# publish costs a decision. Domains are listed per rung rather than one flat list:
+# a step that produces no durable document has nothing to render, and stamping a
+# rung there teaches the reader to skip the field.
+output_rung:
+  default: markdown
+  rungs:
+    # keyed by DOMAIN (what `_apply_output_rung` matches), not skill: the
+    # code-review skill runs under the `review` domain, and `understand` has
+    # no domain at all — either spelling here would never match and the rung
+    # would just never engage.
+    html: [plan, review, review-pr]
+    wiki: [plan, review]
+
+# Gated by test_rule_reachability.py: the list is capped, each reason must be a real
+# sentence, and a rule already reachable from prose or routing is REFUSED an
+# exemption (otherwise the cheap fix for a red gate is to exempt everything).
+rules_not_routed: {}   # empty: every rule left in harness/rules/ is reached from
+# prose or routing. The last entry here was the off-skill rule, retired with the
+# proxy it described.
+
+# `facts:` DECLARATIONS live on a domain's own state row (a fifth field on the
+# same `step_routing.<domain>.states.<state>` hash `rules`/`refs`/`docs`/
+# `advisory` already share — see `hs-run-registry.d/cook.yaml`'s
+# `needs_implementation` and `hs-run-registry.d/review.yaml`'s `ready`/
+# `ready_recall`). The PROVIDER TABLE answering those declarations lives here
+# instead, at the SAME tier `advice_escalation`/`scope_posture`/`output_rung`
+# already sit at: which fact ids exist, and how to fill them, is process-wide
+# engine policy, not any one domain's fragment — a second domain declaring
+# `code.tests_reached` reads the identical provider a first one does, and a
+# provider table forked per fragment would let two domains silently disagree
+# about what one fact id means.
+#
+#   module / entry   the provider function (`hs_run_facts.<fact>.provide` by
+#                     convention — `hs_run_facts.engine._resolve_provider`
+#                     just `importlib.import_module`s whatever string is here,
+#                     dotted or flat, so this is convention, not a constraint)
+#   source            which `fact_sources` row's snapshot/freshness this fact
+#                     reads — shared across every fact on one source, so the
+#                     freshness check and the parsed index are paid ONCE per
+#                     `resolve()` call even when several facts are declared on
+#                     the same state
+#   cap               the per-fact element cap `_apply_cap` enforces — a LIST
+#                     value is trimmed to the first `cap` entries; a DICT
+#                     value (`code.importers`'s `{subject: [importers]}`) is
+#                     trimmed to the first `cap` SUBJECTS, each kept whole
+#   subjects          `explicit` -- the fact reads NAMED symbols (`module::name`)
+#                     and has no default scope. Without it the fact reads repo
+#                     paths, and a named `module::name` reaches it as the file
+#                     defining that module (`engine.path_subjects`, echoed back
+#                     as `subjects_as_paths`)
+fact_providers:
+  code.tests_reached:
+    module: hs_run_facts.code_tests_reached
+    entry: provide
+    source: code_graph
+    cap: 200
+  code.importers:
+    module: hs_run_facts.code_importers
+    entry: provide
+    source: code_graph
+    cap: 50
+  # A DATA POINT for a review/red-team report -- `value` is a per-subject
+  # importer COUNT (`codegraph_change_reader.fan_in`'s own shape), the same
+  # door `simplify_gate.py` already calls for its diff-size nudge. Never a
+  # severity/risk input: `test_fan_in_stays_out_of_severity.py` is the AST
+  # gate keeping `risk_rubric.derive_risk`/`review_recall.assess_scope` from
+  # ever reading it.
+  code.fan_in:
+    module: hs_run_facts.code_fan_in
+    entry: provide
+    source: code_graph
+    cap: 50
+  # `subjects: explicit` -- this fact has NO default subject scope
+  # (`hs_run_facts.engine._requires_explicit_subjects`): a caller list is
+  # only meaningful for a symbol a caller has actually named, so a state
+  # declaring this fact with no `--fact-subjects` given answers
+  # `unavailable` for it and never calls its provider; the state's other
+  # facts resolve as usual, and a state declaring only such facts does not
+  # even select a snapshot -- see `plan.needs_planner`'s row for the one
+  # state that declares it today.
+  code.callers:
+    module: hs_run_facts.code_callers
+    entry: provide
+    source: code_graph
+    cap: 50
+    subjects: explicit
+  # Where a NAMED subject is still written, each match typed (code /
+  # docstring / comment / string / data / doc / text). Explicit like
+  # `code.callers` and read through the same `--fact-subjects`: a live
+  # symbol's `code` hits are counted only (callers/importers list them),
+  # anything else (an env name, a key, a message) lists every kind.
+  code.mentions:
+    module: hs_run_facts.code_mentions
+    entry: provide
+    source: code_graph
+    cap: 50
+    subjects: explicit
+  # Names the diff REMOVED (defined at the merge-base, defined nowhere now)
+  # and where each is still written -- the docstring or config key that
+  # outlives what it named. Default scope: the changed files.
+  code.stale_mentions:
+    module: hs_run_facts.code_stale_mentions
+    entry: provide
+    source: code_graph
+    cap: 50
+
+# `refresh_command` names the CONCEPT (`hs_run_facts.engine._build_refresh_
+# command` splices `--repo <root> --apply` in after the binary name, so this
+# is never a literal argv a driver execs verbatim) — `hs-code graph snapshot`
+# is the shipped snapshot builder every `code.*` fact reads through
+# `codegraph_snapshot_reader`/`codegraph_change_reader` (never `codegraph`
+# itself — see those two flat modules' own docstrings for why).
+fact_sources:
+  code_graph:
+    refresh_command: "hs-code graph snapshot"

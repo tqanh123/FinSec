@@ -1,0 +1,16 @@
+# flow-builders.yaml — how a flow is DECLARED in code, per builder library.
+#
+# `port_flow_trace` reads a run's node graph off the calls a builder makes:
+# `entry` names the first node, `node` registers one (name, implementation),
+# `edge` joins two, `branch` joins one to every value of a destination table
+# (an inline dict or a same-file constant). `framework` is the module prefix a
+# file must import `END`/`START` from for them to count as the framework's own
+# sentinels. A declaration adds its own library under `flow_builders:` with the
+# same four roles; a flow names its builder with `builder:` (default langgraph).
+builders:
+  langgraph:
+    framework: langgraph
+    entry: set_entry_point
+    node: add_node
+    edge: add_edge
+    branch: add_conditional_edges

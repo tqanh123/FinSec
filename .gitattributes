@@ -1,0 +1,4 @@
+# The SDLC harness is verified byte-for-byte against harness/manifest.json and
+# ships sh scripts (harness/bin/hs-*, pre-push hook) — never convert its line
+# endings, even under core.autocrlf=true.
+harness/** -text

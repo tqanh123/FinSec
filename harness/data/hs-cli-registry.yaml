@@ -1,0 +1,14 @@
+# hs-cli-registry.yaml — base file of hs-cli's command registry.
+#
+# The live commands are rows of hs-cli-registry.d/*.yaml. A command that leaves hs-cli
+# keeps answering with its new door through a row here or in a fragment:
+#
+#   domains:
+#     <old-command>: {moved_to: "<cli> <command>"}
+#
+# Same loader, merge and conflict rules as hs-run-registry.yaml / hs-code-registry.yaml
+# (`hs_family.registry.load_registry`); a `moved_to` whose target does not exist is a
+# broken registry. Env overrides: HARNESS_HS_CLI_REGISTRY (single file),
+# HARNESS_HS_CLI_REGISTRY_BASE, HARNESS_HS_CLI_REGISTRY_DIR.
+
+domains: {}

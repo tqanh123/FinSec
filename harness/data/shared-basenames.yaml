@@ -1,0 +1,41 @@
+# shared-basenames.yaml — module basenames carried by more than one file that a
+# process can reach by BARE NAME.
+#
+# This tree imports flat: a directory goes on sys.path and its modules are
+# imported as `import spec_graph_port`. When two files share a basename, which
+# one a process gets depends on which directory landed on sys.path first.
+# Nothing in Python says a word about it.
+#
+# harness/tests/test_a_shared_basename_is_declared_and_resolves_in_zone.py holds
+# it: the list may shrink, not grow, and a real caller is run per name to see
+# which copy it actually gets.
+#
+# Files inside a package (a directory carrying __init__.py) are NOT here: they
+# are addressed by dotted path, so a repeated leaf there is not ambiguous.
+
+why: >-
+  Measured 2026-09-22 with obt snapshot: five names — spec_graph,
+  encoding_utils, frontmatter_parser, fs_guard, check_fence — were carried by
+  both the ported hs:spec scripts and harness/scripts, across 105 ambiguous
+  import sites. Forcing harness/scripts to the front of sys.path flipped
+  nineteen of them, and one flip was already live rather than hypothetical:
+  check_consistency deferred its frontmatter_parser import into a function body,
+  so it ran after the test loader restored sys.path and took the harness/scripts
+  copy silently, both copies having parse_file. The spec copies were renamed to
+  <name>_port, which keeps the standing ruling that the port owns its own copies
+  while ending the name collision; the deferred import was hoisted to module
+  level at the same time. What is left is one latent pair that nothing imports.
+
+names:
+  - name: build
+    why: >-
+      Two showcase builders, one under docs/ and one at the root. Neither is
+      imported by anything — both are run as scripts — so the ambiguity is
+      latent rather than live, and it is listed so that importing either one
+      later is a decision rather than an accident.
+    paths:
+      - docs/showcase/build.py
+      - showcase/build.py
+    in_zone_probe: null
+    no_probe_why: >-
+      Nothing imports `build` at all; both files are invoked as scripts by path.

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hs-diagram/dataflow.schema.json",
+  "title": "hs:diagram dataflow IR",
+  "description": "ETL pipelines, stream processing, data lineage -- nodes grouped in ordered stages.",
+  "allOf": [{ "$ref": "#/$defs/envelope" }],
+  "type": "object",
+  "properties": {
+    "diagram_type": { "const": "dataflow" },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "order"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/safe_text" },
+          "order": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 250,
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/safe_text" },
+          "stage": { "$ref": "#/$defs/id" },
+          "role": {
+            "type": "string",
+            "enum": ["source", "transform", "store", "sink", "consumer",
+                     "filter", "governance"]
+          },
+          "classification": {
+            "type": "string",
+            "enum": ["public", "internal", "confidential", "pii", "restricted"]
+          }
+        }
+      }
+    },
+    "flows": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "$ref": "#/$defs/id" },
+          "to": { "$ref": "#/$defs/id" },
+          "label": { "$ref": "#/$defs/safe_text" }
+        }
+      }
+    }
+  },
+  "required": ["nodes"]
+}

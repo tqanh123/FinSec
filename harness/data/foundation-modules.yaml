@@ -1,0 +1,70 @@
+# foundation-modules.yaml — the floor of the import graph.
+#
+# These modules are imported by dozens of others and import nothing else in this tree.
+# That second half is what makes the first half safe, and it is what breaks silently: a
+# foundation module that grows one internal import drags that module's whole dependency
+# tree under everything depending on it, and nothing says a word until something cycles.
+# harness/tests/test_the_foundation_imports_nothing_internal.py holds the property.
+#
+# This is NOT a tier table, and the harness deliberately does not have one yet. Measured
+# 2026-09-22, topological depth over the tracked python tree spans TWELVE rungs and the
+# directory a module lives in does not predict its rung — harness/scripts spans 0 to 10,
+# harness/hooks 0 to 9, and hook_runtime sits at rung 2, below many harness/scripts
+# modules. A scheme keyed on directory would be wrong on its first row; a 500-row table
+# generated from the measurement would restate it without constraining anything. Tiers
+# become declarable one line per distribution, once distributions exist.
+#
+# The criterion produced this list; the PROPERTY keeps a module in it. A module that
+# stops importing nothing internal comes out of the list with its coupling fixed — never
+# by widening the rule.
+
+criterion: >-
+  Under harness/scripts, at topological rung 0 (imports nothing internal), and imported by
+  at least eight other modules. Measured 2026-09-22; re-derive with `obt snapshot . --out
+  DIR --apply`, whose per-module records carry imports_module_level and
+  imports_function_local separately, plus the fan-in scan in the gate. Test-only and
+  plugin-local helpers that met the numbers were left out: they carry one skill, not the
+  tree.
+
+modules:
+  - module: yaml_io
+    why: >-
+      The single YAML door for the whole tree — 117 importers, the highest in the graph.
+      A second reader here would be two meanings for one file, which the ruling behind
+      this module already refused.
+  - module: harness_paths
+    why: >-
+      Resolves bin root, data root and project root for every caller, 64 importers. It is
+      what makes a two-zone install resolvable at all, so it cannot depend on anything
+      that a zone might move.
+  - module: encoding_utils
+    why: >-
+      Console encoding for every CLI and hook, 36 importers. It runs before anything is
+      printed, including an error message about a failed import.
+  - module: build_manifest
+    why: >-
+      Writes the integrity manifest that every install and verify reads, 18 importers.
+      The writer of the file that proves the tree cannot itself depend on the tree.
+  - module: preflight_deps
+    why: >-
+      Answers whether the dependencies are present, 14 importers. A dependency check that
+      imported harness code would fail in exactly the situation it exists to report.
+  - module: telemetry_formatters
+    why: >-
+      Shapes telemetry records for the sinks, 12 importers. Formatting must not reach back
+      into the subsystems being measured.
+  - module: stage_detector
+    why: >-
+      Classifies a command into a stage for the gates, 8 importers. A pure classifier over
+      its input; the gates depend on it, not the other way round.
+  - module: graph_core
+    why: >-
+      Shared graph primitives under the spec and plan tooling, 8 importers.
+  - module: grid.types
+    why: >-
+      Shared type vocabulary, 22 importers. A vocabulary that imported an implementation
+      would put every user of the words behind that implementation.
+  - module: scope_match
+    why: >-
+      Path and scope matching used by the fences and policy readers, 8 importers. Pure
+      string and path logic by construction.

@@ -1,0 +1,18 @@
+# check.yaml — the `check` domain of hs-code: run the gate book.
+#
+# `hs-code check gates` runs every enabled row of harness/data/gate-registry.d (see
+# codegraph/check/gates.py); `scc`, `smoke` and `f821` read the target tree through one
+# fresh snapshot (codegraph/check/tree.py).
+
+domains:
+  check:
+    gates: {module: codegraph.check.gates, entry: GATES, help: "run every enabled gate-registry row and bucket each pass/fail/broken/runtime/judged/off"}
+    scc: {module: codegraph.check.scc, entry: SCC, help: "find import cycles between workspace packages or within one, and rank the rung ladder"}
+    smoke: {module: codegraph.check.smoke, entry: SMOKE, help: "import every module under namespace_root in a child interpreter and flag import errors"}
+    f821: {module: codegraph.check.f821, entry: F821_VERB, help: "check ruff's F821 undefined-name findings against a two-way committed baseline per scope"}
+    pkgsync: {module: codegraph.check.pkgsync, entry: PKGSYNC, help: "check each workspace package declares exactly the imports and dependencies it uses"}
+    plan-baseline: {module: codegraph.check.plan_baseline, entry: PLAN_BASELINE, help: "compute baseline module/unit counts, import edges, ambiguous imports and rung ladder"}
+    owners: {module: codegraph.check.owners, entry: OWNERS, help: "assign each command-line module to its declared owner channel from reference evidence"}
+    route-parity: {module: codegraph.check.route_parity, entry: ROUTE_PARITY, help: "diff the target app's routes against an upstream app's, two-way, against a baseline"}
+    live-smoke: {module: codegraph.check.live_smoke, entry: LIVE_SMOKE, help: "start the app's real lifespan and probe routes to catch what an import-only check misses"}
+    dist-obligations: {module: codegraph.check.dist_obligations, entry: DIST_OBLIGATIONS, help: "report which codemap.yaml obligations rows a dist meets in the repo's own registries (or --all dists)"}

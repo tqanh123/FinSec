@@ -1,0 +1,99 @@
+# gate-evidence.yaml — artifact nào là BẰNG CHỨNG CHỐNG-LƯNG-CỔNG, và nhà nó ở đâu.
+#
+# Luật (sổ quyết định giữ phán quyết + lý do): bằng chứng mà một cổng THƯỜNG TRÚ đọc
+# thì không được neo
+# dưới `plans/`, vì plans là cây làm việc theo đợt và bị dọn. Ràng buộc chỉ áp khi có
+# cổng thường trú đọc tệp SỐNG; store plan-scoped có chủ đích thì khai ở `plan_scoped`.
+#
+# Cổng canh tệp này: harness/tests/test_gate_backing_evidence_lives_outside_plans.py
+#   1. mỗi mục ở `gate_backed` phân giải NGOÀI plans/, và `artifact` khớp thứ hàm trả về
+#   2. producer VÀ gate của mỗi mục đều còn tồn tại, gate còn gọi tên artifact/resolver
+#   3. mọi module khai một nhà dưới docs//plans/ phải có mặt ở MỘT trong hai danh sách
+#
+# `path_fn` là `module:function` — hàm là nguồn duy nhất của đường dẫn artifact, không
+# bao giờ đánh vần lần thứ hai ở đây. `module_path` là TỆP chứa module (tương đối gốc
+# repo): cổng NẠP hàm từ tệp này thay vì `__import__` theo tên trần (vốn chỉ resolve khi
+# harness/scripts còn phẳng), nên một lần dời tệp chỉ cần viết lại dòng `module_path` —
+# công cụ dời tự cập nhật các dòng có đường dẫn; sót thì cổng đỏ, không câm.
+
+gate_backed:
+  - id: decisions-ssot
+    artifact: docs/decisions.yaml
+    path_fn: decision_register:_yaml_path
+    module_path: harness/scripts/decision_register.py
+    producer: harness/scripts/decision_register.py
+    gate: harness/tests/test_dec_id_grammar.py
+    why: sổ quyết định là SSOT; 14 tệp cổng đọc bản sống
+
+  - id: decisions-view
+    artifact: docs/decisions.md
+    path_fn: decision_register:_decisions_path
+    module_path: harness/scripts/decision_register.py
+    producer: harness/scripts/decision_register.py
+    gate: harness/tests/test_decision_register.py
+    why: bản render người đọc của cùng sổ; cổng ngữ pháp ID chấm cả hai
+
+  - id: backlog-ssot
+    artifact: docs/backlog.yaml
+    path_fn: backlog_register:_yaml_path
+    module_path: harness/scripts/backlog_register.py
+    producer: harness/scripts/backlog_register.py
+    gate: harness/tests/test_backlog_register.py
+    why: 5 tệp cổng đọc bản sống
+
+  - id: backlog-view
+    artifact: BACKLOG.md
+    path_fn: backlog_register:_md_path
+    module_path: harness/scripts/backlog_register.py
+    producer: harness/scripts/backlog_register.py
+    gate: harness/tests/test_backlog_register.py
+    why: bản render ở gốc repo (markdown gốc được duyệt)
+
+  - id: glossary-ssot
+    artifact: docs/glossary.yaml
+    path_fn: glossary_register:_yaml_path
+    module_path: harness/scripts/glossary_register.py
+    producer: harness/scripts/glossary_register.py
+    gate: harness/tests/test_glossary_register.py
+    why: 7 tệp cổng đọc bản sống
+
+  - id: glossary-view
+    artifact: docs/GLOSSARY.md
+    path_fn: glossary_register:_view_path
+    module_path: harness/scripts/glossary_register.py
+    producer: harness/scripts/glossary_register.py
+    gate: harness/tests/test_glossary_register.py
+    why: bản render người đọc của cùng sổ
+
+  - id: cull-ledger
+    artifact: docs/harness/cull-ledger.jsonl
+    path_fn: cull_evidence:ledger_path
+    module_path: harness/scripts/cull_evidence.py
+    producer: harness/scripts/cull_evidence.py
+    gate: harness/tests/test_the_live_cull_ledger_reconciles.py
+    why: >-
+      cái phanh mà một lượt xoá test chạy đằng sau. Đây là mục mà việc neo vào plans/
+      đã đo được thiệt hại: dọn một thư mục plan đã xong kéo phạm vi từ 44 bản ghi
+      opt-in xuống 14, cả 4 case vẫn xanh.
+
+# Store KHAI nhà dưới plans/ — hợp lệ, vì không cổng thường trú nào đọc tệp sống của nó.
+plan_scoped:
+  - module: harness/scripts/auto_decision_log.py
+    why: >-
+      plan-scoped có chủ đích — `resolve_store()` ghi vào `artifacts/` của plan đang
+      chạy, `plans/reports/` chỉ là chặng cuối khi không có plan active. Đo 2026-09-22:
+      4 tệp cổng của nó (test_auto_decision_log/render/review/review_nudge) đều chạy
+      trên fixture tmp, và tệp sống `plans/reports/auto-decisions.jsonl` không tồn tại
+      trên đĩa — nên điều kiện của luật (cổng thường trú đọc bản SỐNG) không thoả.
+
+  - module: harness/scripts/hs_run_plan.py
+    why: >-
+      chính thư mục plan là CHỦ THỂ của nó — `Path(root)/"plans"/plan_arg` là cái nó
+      được sinh ra để phân giải, không phải một store nó gửi bằng chứng vào. Neo ngoài
+      plans/ ở đây sẽ là vô nghĩa.
+
+  - module: harness/scripts/dismissals_store.py
+    why: >-
+      nhà của nó đã NGOÀI plans/ (`docs/review/dismissals.jsonl`) nên luật không bị
+      phạm; khai ở đây thay vì `gate_backed` vì tệp sống chưa tồn tại (0 dismissal tới
+      2026-09-22), nên chưa có cổng thường trú nào đọc bản sống để mà ràng buộc.

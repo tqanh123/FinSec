@@ -1,0 +1,40 @@
+# hs-code-registry.yaml — the BASE of the data-driven domain/verb dispatch table
+# for `hs-code`. hs_code.py reads THIS file (if present) PLUS every `*.yaml`
+# fragment under the sibling `hs-code-registry.d/` directory (today: just
+# `_shell.yaml`, the shell's own declaration — see that file's own comment),
+# through the SAME merge/conflict/duplicate-key machinery hs-run's registry
+# uses (`hs_family.registry.load_registry`) — see `hs-run-registry.yaml`'s own
+# comment for the full schema, conflict rules and env-override names; this
+# file only restates what is specific to hs-code.
+#
+# Schema — one verb row:
+#
+#   domains:
+#     <domain>:
+#       <verb>:
+#         module: <python module name>   # importable from harness/scripts
+#         entry:  <constant name>        # a `hs_family.cli.Command(add_args, run)`:
+#                                         #   the shared core builds its parser from
+#                                         #   `add_args`, then calls `run(ns)` with
+#                                         #   `ns.ctx.root` (the codebase operated on)
+#                                         #   and `ns.opts` (hs_code.ShellOptions —
+#                                         #   the shell's OWN flags).
+#
+# Where a new domain goes: add `harness/data/hs-code-registry.d/<domain>.yaml`
+# with its own `domains:` block — never a row in THIS base file, and never an
+# if/else branch in hs_code.py. This base stays empty; every real domain
+# (graph, change, ...) lands as its own fragment file, exactly like hs-run's.
+#
+# Env overrides (same three-tier shape as hs-run-registry.yaml):
+#   HARNESS_HS_CODE_REGISTRY       — single-file override, replaces the whole
+#                                    base+fragments pipeline.
+#   HARNESS_HS_CODE_REGISTRY_BASE  — overrides just this base file's path.
+#   HARNESS_HS_CODE_REGISTRY_DIR   — overrides just the hs-code-registry.d/ path.
+#
+# A verb that moved: same `moved_to: "<cli> <command>"` row shape as hs-run-
+# registry.yaml's own comment describes (including the domain-level, no-verb
+# form) — one shared loader and one shared family-wide check, never a per-CLI
+# copy. hs-cli-registry.yaml is the model for a registry that carries ONLY
+# moved rows.
+
+domains: {}

@@ -1,0 +1,11 @@
+# Preset `python-flat` — importable package(s) sitting directly at the repo
+# root (no src/, no packages/). Partial v2 descriptor; merge via `extends:`.
+# A flat package at the root is a FIRST-CLASS root, not an error case.
+layout:
+  roots:
+    - id: root
+      path: .
+      kind: flat
+scan:
+  include: ["*.py"]
+  exclude: []

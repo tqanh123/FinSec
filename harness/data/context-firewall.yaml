@@ -1,0 +1,36 @@
+# context-firewall.yaml — deterministic blast-radius thresholds for the
+# context_firewall hook (human-edited). Every value is a byte or item count so
+# a verdict reproduces from the same call; a malformed or missing value falls
+# back to the shipped default below rather than disabling a limit.
+#
+# Ladder: allow -> warn -> narrow -> block. A signal with a semantics-preserving
+# rewrite (read/search) always narrows instead of warning/blocking. A signal
+# with no rewrite (glob breadth, shell shape) warns, then escalates to block
+# once the same operation repeats `repeat_block_count` times in one session.
+
+# Unbounded Read of a file this large warns; at this size or above it narrows
+# to a bounded window regardless of severity (see narrow_read_limit_lines).
+read_warn_bytes: 262144        # 256 KiB
+read_block_bytes: 2097152      # 2 MiB
+
+# `cat`/`bat`/`less`/`more`/`nl`-style whole-file dumps inside a Bash call.
+shell_dump_warn_bytes: 131072  # 128 KiB
+shell_dump_block_bytes: 524288 # 512 KiB
+
+# A Grep call in content mode with no head_limit at or below this counts as
+# unbounded.
+search_head_limit: 100
+narrow_search_head_limit: 100
+
+# A Glob call whose real match count (capped at block_count + 1 while
+# counting, so a pathological pattern cannot make the count itself expensive)
+# reaches these counts.
+glob_breadth_warn_count: 200
+glob_breadth_block_count: 2000
+
+# Identical risky shell/glob operations (same signal + same target) seen this
+# many times in one session escalate a warning into a block.
+repeat_block_count: 3
+
+# The bounded window a narrowed Read carries when no offset/limit was given.
+narrow_read_limit_lines: 200

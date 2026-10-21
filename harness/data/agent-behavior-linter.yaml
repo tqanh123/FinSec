@@ -1,0 +1,26 @@
+# agent-behavior-linter.yaml — detector thresholds for the agent_behavior_linter
+# hook (human-edited). Thresholds are deliberately generous: a linter that cries
+# wolf gets disabled, and a missed finding costs far less than a false one.
+#
+# The hook itself only ever reports at Stop (nudge class, never blocking); its
+# on/off switch is `agent_behavior_linter` in harness/data/harness-hooks.yaml.
+
+# D1 — a Read of the same unchanged file (same offset/limit window) this many
+# times or more counts as a repeated-unchanged-read finding.
+unchanged_reads: 3
+
+# D2 — a Bash command failing with the same error signature this many times or
+# more (with no file mutation in between) counts as a deterministic-retry
+# finding. Commands whose class is inherently network/non-deterministic never
+# trigger this.
+retry_attempts: 2
+
+# D3 — this many unscoped ("broad") searches in a session, with at least this
+# many rooted at the SAME path, and no narrower search anywhere in the
+# session, counts as a broad-search-without-narrowing finding.
+broad_searches: 4
+shared_root_searches: 2
+
+# D4 — this many bytes of cumulative tool output with zero file mutations
+# counts as a low-yield-tool-output finding.
+output_bytes: 204800  # 200 KiB

@@ -1,0 +1,30 @@
+# port-project-kinds.yaml — human-edited: which equivalence-check STEPS a `.port/
+# port.yaml` `project.kind` contributes to a batch's standard lane, as DATA rather than
+# a per-kind branch of code — adding a kind is one entry here, never a code
+# change.
+#
+# Read by `harness/scripts/port_kinds.py` — the ONE loader; `port_config.py`
+# (`.port/port.yaml`'s `project:` block) and `port_steps.lane_of`'s callers
+# (`hs_run_port.py`, `port_runs.py`) both go through it, never a second parser.
+#
+# `kind`: a `project.kind` value this table declares.
+#   steps:     step ids (declared in `harness/data/port-steps.yaml`'s own `steps:`
+#              mapping) appended to the standard lane, right after `rules` — see that
+#              file's own module docstring for the exact position and why.
+#   requires:  keys `.port/port.yaml`'s `project:` block must ALSO carry for this kind
+#              (today only `app`, a `module:attr` the appended steps render as `{app}`)
+#              — a kind naming `app` here without `project.app` set is `config_invalid`,
+#              never a silently half-rendered step.
+#
+# `library`: no ASGI app to probe — the only equivalence check a plain importable
+# library gets is `hs-code check smoke` (does every module still import).
+# `fastapi`: `route-parity` (the OpenAPI path+method set did not shrink against the
+# upstream app) and `live-smoke` (the app's lifespan still boots) — both need
+# `project.app` to know which object IS the app. `source` first: `route-parity`
+# reads the upstream app from the read-only checkout of the batch's pin.
+kinds:
+  library:
+    steps: [smoke]
+  fastapi:
+    steps: [source, route-parity, live-smoke]
+    requires: [app]

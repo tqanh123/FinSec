@@ -1,0 +1,19 @@
+# _shell.yaml — hs-code's own declaration.
+#
+# This fragment exists so the directory is a real, intentional registry
+# location from day one, not an accidental empty glob a later change happens
+# to populate. It declares NO domains on purpose — every real domain (graph,
+# change, ...) lands as its own `<domain>.yaml` fragment in this same
+# directory, one file per domain, never a row added here. A registry whose
+# loaded fragments carry no domain at all (e.g. an `HARNESS_HS_CODE_REGISTRY`
+# override pointed at an empty file — the core `hs-code-registry.d/` this
+# file lives in normally ships WITH its sibling domain fragments, so this
+# file alone is not that state in practice) answers every dispatch with
+# "registry loaded 0 domains" (see harness/scripts/hs_code.py's
+# `_zero_domains_message`) — the honest state for an empty registry, not a
+# bug to route around.
+#
+# leading underscore keeps this fragment first in the sorted-filename merge
+# order load_registry() uses, and reads (to a human scanning the directory)
+# as "the shell's own file", distinct from a domain's.
+domains: {}

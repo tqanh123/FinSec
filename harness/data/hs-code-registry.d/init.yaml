@@ -1,0 +1,23 @@
+# init.yaml — the `init` domain's fragment of the hs-code registry.
+#
+# `init` sets a repo up for the code map. It holds no setup logic of its own:
+# each domain declares what it needs as an `initializers:` block in ITS OWN
+# fragment (graph.yaml, port.yaml, ...), merged by the shared registry loader,
+# and `init` walks those rows. Adding a setup step = one block in the owning
+# domain's fragment, never a row here.
+#
+# One initializer row (in the owning fragment):
+#
+#   initializers:
+#     <name>:
+#       order: <int>                        # run/report order, low first
+#       summary: "<one line>"
+#       status: {module: <m>, entry: <fn>}  # fn(root) -> {ready, detail}
+#       run:    {module: <m>, entry: <fn>}  # fn(ctx, opts) -> {exit_code, ...}; dry unless --apply
+#       route:  "/hs:<skill>"               # instead of run: owned by an interview elsewhere
+
+domains:
+  init:
+    status: {module: codegraph.init.verbs, entry: STATUS, help: "show each initializer's readiness and whether this repo has adopted the code map"}
+    run: {module: codegraph.init.verbs, entry: RUN, help: "set up every initializer not yet ready (dry-run by default, --apply writes)"}
+    decline: {module: codegraph.init.verbs, entry: DECLINE, help: "record that this session declined the code map, so it is not offered again"}

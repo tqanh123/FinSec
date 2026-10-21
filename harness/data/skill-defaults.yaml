@@ -1,0 +1,98 @@
+# skill-defaults.yaml — the ship default-off skill catalog (SSOT).
+#
+# A fresh install ships most of the catalogue OFF. OFF skills are copied into
+# the stash (harness/plugins/hs/disabled-skills/ — a SHIPPED tree, unlike the
+# gitignored harness/state/) so `hs-cli skills --enable` can
+# reach them without the source tree. The core-immutable floor (the spine plus
+# find-skills, cleanup and codemap, named in harness/data/skill-deps.yaml) and the interview
+# keep-list stay ON. A kept skill may route to an OFF one (off-as-dep is valid — the
+# pointer resolves once it is on). Source: interview #21.
+#
+# No counts in this header. Four of them were wrong at once when measured: an ON total,
+# an OFF total, a floor size, and a floor MEMBER (`use`) that had been cut from the
+# catalogue entirely. Each read as a fact and none could be contradicted, because prose
+# is not checked. For the live figures, read the lists below or ask
+# `python3 harness/scripts/disabled_skills.py --status <name>`.
+#
+# `default_off` is the flat authority; `clusters` groups the same names for the
+# hs:setup onboarding prompt and must partition default_off exactly.
+#
+# `release` and `rops` are deliberately NOT here: a fresh install carries them ON but
+# hidden. release/release.yaml `ship_overrides` makes the bundle's copy of each
+# SKILL.md declare `disable-model-invocation: true` and `user-invocable: false`, so
+# neither the model nor a typed slash command reaches them. `release` stays an inert
+# shell in an install: its engine drives release/, which never ships. `rops`'s engine
+# now lives at harness/scripts/rops/ and DOES ship (inside harness/manifest.json, run
+# through the hs-rops launcher) -- only the skill surface stays hidden by the same
+# ship_overrides; the CLI itself is real and runnable in an install.
+
+default_off:
+  - docs-build
+  - docs-scaffold
+  - docs-standardize
+  - drawio
+  - mermaidjs
+  - tech-graph
+  - preview
+  - insights
+  - bootstrap
+  - port
+  - skill-creator
+  - harness-creator
+  - goal
+  - team
+  - threejs
+  - deploy
+  - web-testing
+  - compound
+  - coding-agent-orchestration
+  - dispatch
+  - finetune
+  - contract-test
+  - spec
+  - shape
+  - eval-bootstrap
+  - goal-warmup
+
+clusters:
+  docs-ssot:  # docs single-source-of-truth build chain
+    - docs-build
+    - docs-scaffold
+    - docs-standardize
+  viz:  # diagram / visual generators
+    - drawio
+    - mermaidjs
+    - tech-graph
+    - preview
+  reflection:  # journaling + usage reflection
+    - insights
+  project-setup:  # project scaffolding + context packing
+    - bootstrap
+    - port
+  creators:  # skill / harness authoring
+    - skill-creator
+    - harness-creator
+  autonomous:  # unattended long-run substrate: preflight and the run itself. The closing
+               # handoff now ships ON: it grew dispatch, a schema validator and a real
+               # runtime catalog, so it is no longer the bare capture-only stub that earned
+               # the earlier default-off call.
+    - goal
+    - goal-warmup
+  team-agent:  # agent-team orchestration
+    - team
+  ai:  # AI media / generative
+    - threejs
+  devops:  # deploy / browser automation / web testing
+    - deploy
+    - web-testing
+  flow-extras:  # extra flow orchestration
+    - compound
+    - coding-agent-orchestration
+    - dispatch
+    - finetune
+  misc:  # test scaffolding beyond the spine: contract tests, eval suites
+    - contract-test
+    - eval-bootstrap
+  product:  # PO/BA product-spec (spec + shape)
+    - spec
+    - shape

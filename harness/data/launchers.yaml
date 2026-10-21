@@ -1,0 +1,32 @@
+# launchers.yaml — the CLIs `install.py --cli` puts on PATH and `verify_install`
+# checks are reachable. Both read this list; neither names a launcher itself.
+#
+# harness/bin/<name> and harness/bin/<name>.cmd are generated from
+# harness/data/launcher-templates/ by `python3 harness/scripts/launchers.py --write`;
+# `--check` fails when a committed launcher drifts from its template.
+#
+# A row is added when its script exists, not before.
+
+launchers:
+  - name: hs-cli
+    script: hs_cli.py
+    summary: operator front-end over the harness scripts
+  - name: hs-run
+    script: hs_run.py
+    summary: deterministic step-sequence CLI over the harness's plan/cook scripts
+  - name: hs-code
+    script: hs_code.py
+    summary: measure/restructure/test/port a codebase's own map (no domains yet)
+  - name: hs-rops
+    script: hs_rops.py
+    summary: run a build, test, benchmark or container on a remote machine over ssh + rsync
+  - name: hs-secrets
+    script: hs_secrets.py
+    summary: user-level secret store — values in the OS keychain or an encrypted file, append-only ledgers
+  - name: hs-usage
+    script: hs_usage.py
+    summary: local 5h/7d token-usage windows, a plan preset, and per-skill cost
+
+# Files in harness/bin that are not --cli launchers, and why.
+not_launchers:
+  harness: courier lifecycle tool; the courier plugin puts it on PATH, not --cli

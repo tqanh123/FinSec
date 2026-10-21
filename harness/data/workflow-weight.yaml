@@ -1,0 +1,47 @@
+# workflow-weight.yaml — the single source for "how heavy is this work".
+#
+# Read by harness/scripts/workflow_weight.py (env override HARNESS_WORKFLOW_WEIGHT).
+# Two questions, one file:
+#   * execution — the posture of a phase: in place unless the phase is large,
+#     or whichever posture a flag or the plan's `posture:` forces;
+#   * review — the size gates, measured on the REAL diff after the work, that
+#     make the independent review mandatory. Any ONE metric over its threshold
+#     triggers; a risk tier above `when_tier_above` triggers on its own
+#     (tier derivation is risk_rubric.derive_risk's, never re-derived here).
+# Every number and path pattern is policy on purpose: tuning a threshold or a
+# glob must never require touching code.
+
+schema: workflow-weight/1
+
+execution:
+  default: in_place
+  subagent_when:
+    flags: [parallel, subagents]      # any of these on the command line forces subagents
+    phase_declares_more_than: 8       # files declared by the phase; absent -> the reader
+                                      # answers "no threshold" and stays at the default
+  in_place_when:
+    flags: [in_place]                 # forces in place past the threshold; a plan may
+                                      # declare `posture: in_place|subagent` instead.
+                                      # Forces that disagree are refused.
+
+review:
+  # Measured on added+deleted lines of the real diff (base..head).
+  # Blank lines never count. Comment lines never count toward code.
+  # Tests (exclude_paths) and data files — everything that classifies as
+  # neither code nor markdown — never count toward size.
+  unmeasurable: required             # no readable git range -> review stays mandatory
+  metrics:
+    code_effective_lines:
+      over: 250
+      extensions: [.py, .sh, .bash, .js, .mjs, .cjs, .ts]
+      extensionless_under: ["**/bin/**"]
+      comment_prefix: {default: "#", .js: "//", .mjs: "//", .cjs: "//", .ts: "//"}
+      exclude_paths: ["**/tests/**", "**/test/**", "**/test_*.py"]
+    instruction_markdown_lines:      # SKILL/CLAUDE/AGENTS, rules, agents, references, output styles
+      over: 100
+      paths: ["**/SKILL.md", "**/CLAUDE.md", "**/AGENTS.md", "harness/rules/**",
+              "**/agents/*.md", "**/skills/*/references/**", "**/output-styles/**"]
+    docs_markdown_lines:             # every other .md
+      over: 100
+  risk:
+    when_tier_above: tiny            # tier ranked above this value triggers review

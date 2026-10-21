@@ -1,0 +1,11 @@
+# Preset `src-layout` — package(s) under src/ (src/<pkg>/...). One `src` root:
+# the first path segment under it becomes the unit name, so several packages
+# under one src/ are still one declaration.
+layout:
+  roots:
+    - id: src
+      path: src
+      kind: src
+scan:
+  include: ["*.py"]
+  exclude: []

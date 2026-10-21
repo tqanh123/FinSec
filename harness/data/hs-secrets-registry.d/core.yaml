@@ -1,0 +1,18 @@
+# core.yaml — the commands hs-secrets ships. One row per command:
+#   <name>: {module: secret_store.verbs.<file>, help: "<one line>"}
+# The module itself is the command (`add_args(p)` + `run(ns)`), same shape as
+# every one-level family CLI.
+
+domains:
+  set: {module: secret_store.verbs.set, help: "store a secret value (prompted, or --value - for stdin — never on argv)"}
+  get: {module: secret_store.verbs.get, help: "show a secret's metadata with the value redacted"}
+  list: {module: secret_store.verbs.list, help: "list the live secret refs (no value column)"}
+  delete: {module: secret_store.verbs.delete, help: "delete a secret's value and record the event"}
+  rotate: {module: secret_store.verbs.rotate, help: "replace a live secret's value, stamping rotatedAt"}
+  trust: {module: secret_store.verbs.trust, help: "pin (or re-pin) an agent binary's identity by path + sha256"}
+  grant: {module: secret_store.verbs.grant, help: "let an agent fingerprint read a ref (or --block it); never itself"}
+  grants: {module: secret_store.verbs.grants, help: "list the live grant table (no value column)"}
+  revoke: {module: secret_store.verbs.revoke, help: "close grants by ref + fingerprint (--all for every agent)"}
+  resolve: {module: secret_store.verbs.resolve, help: "internal: print a ref's value for the inject hook, grant-gated by the agent above"}
+  approve: {module: secret_store.verbs.approve, help: "answer the access asks a denied resolve recorded (--json lists them)"}
+  import-env: {module: secret_store.verbs.import_env, help: "pull a dotenv file's values into the store (--rewrite backs up, then placeholders)"}

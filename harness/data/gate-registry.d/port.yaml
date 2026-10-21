@@ -1,0 +1,11 @@
+# One `map:<batch>` row per batch a port root declares — the frozen SOURCE
+# snapshot's dist-law completeness plus the target `new_snapshot`'s own
+# name/hash agreement with the tree on disk, both through the `map` rule
+# kind (see harness/scripts/codegraph/_core/rules/kinds/map.py) — plus its
+# `ledger:<batch>` twin, and ONE `control` row whenever a port root exists:
+# the seeded cases under harness/data/port-control/cases/ run through the
+# real ledger door (harness/scripts/port_control_cases.py), red when the
+# tool stops catching one of them.
+page: port
+source: {module: codegraph_port_batch_verbs, entry: port_gate_rows}
+run: {module: codegraph_port_batch_verbs, entry: port_gate_run}

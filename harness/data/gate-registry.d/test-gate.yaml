@@ -1,0 +1,34 @@
+# Test files that enumerate the tree they live in, found by the criterion in
+# hs_family/tree_scanning_tests.py. `gates:` holds the ones it cannot see.
+page: test-gate
+run: {module: codegraph.check.gates, entry: run_tests}
+source: {module: hs_family.tree_scanning_tests, entry: tree_scanning_gates}
+#
+# Rows the criterion cannot see. Each goes red when one file under harness/ changes
+# without a manifest rebuild (measured): it verifies the manifest hashes, directly or
+# through a real install of the tree into a temp dir.
+gates:
+  test_a_real_install_ships_no_test_files:
+    file: harness/tests/test_a_real_install_ships_no_test_files.py
+    whole_tree: true
+    why: runs the real installer over the tree; a drifted hash fails the install
+  test_ci_dispatcher:
+    file: harness/tests/test_ci_dispatcher.py
+    whole_tree: true
+    why: ci_schema_check runs verify_install --strict over the manifest
+  test_hs_cli:
+    file: harness/tests/test_hs_cli.py
+    whole_tree: true
+    why: doctor verifies this repo against its manifest
+  test_install:
+    file: harness/tests/test_install.py
+    whole_tree: true
+    why: installs the tree end to end and verifies it
+  test_install_components:
+    file: harness/tests/test_install_components.py
+    whole_tree: true
+    why: a component selection must stay verify-clean under --strict
+  test_install_excludes_tests:
+    file: harness/tests/test_install_excludes_tests.py
+    whole_tree: true
+    why: verify must stay clean after the tests are dropped

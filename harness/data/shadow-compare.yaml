@@ -1,0 +1,38 @@
+# shadow-compare.yaml — a second, cheaper judge next to a decision the harness already
+# makes (harness/scripts/shadow_compare.py). OFF at ship: each round is a paid model call
+# and sends redacted facts to another model, so a project opts in with its own
+# <data home>/shadow-compare.yaml (`enabled: true`) or HARNESS_SHADOW_COMPARE=1.
+# The judge never changes the decision; a disagreement is recorded and surfaced in the
+# hs-run envelope of the domains listed per profile, naming the second look to spawn.
+enabled: false
+# more candidates than this skips the round; the list is never cut to fit
+max_candidates: 5
+profiles:
+  domain-routing:
+    domains: [skills]
+    suggest: independent-revalidator
+    question: "Which skill should handle this request?"
+  cook-weight:
+    domains: [cook]
+    suggest: red-teamer
+    question: "Does this change need the full cook loop, or the light path?"
+  risk-tier:
+    domains: [plan, cook]
+    suggest: red-teamer
+    question: "Which risk tier fits this change?"
+  fix-complexity:
+    domains: [fix]
+    suggest: independent-revalidator
+    question: "How complex is this fix?"
+  finding-triage:
+    domains: [review, review-pr, security]
+    suggest: independent-revalidator
+    question: "Which class does this finding belong to? The finding's id, evidence and severity stay as written."
+  workflow-debug:
+    domains: [fix]
+    suggest: independent-revalidator
+    question: "Which debugging step should come next?"
+  workflow-test:
+    domains: [test]
+    suggest: independent-revalidator
+    question: "Which test tier does this change need?"

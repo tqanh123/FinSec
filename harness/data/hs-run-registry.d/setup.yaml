@@ -1,0 +1,72 @@
+# setup.yaml — the `setup` domain's fragment of the hs-run registry.
+#
+# Owned exclusively by whoever builds the `setup` domain's verbs. Never touch
+# another domain's fragment from here — one file per domain is what lets domains
+# be built concurrently without two agents writing the same file. Schema +
+# merge/conflict rules: see harness/data/hs-run-registry.yaml's header.
+
+domains:
+  setup:
+    next: {module: hs_run_setup, entry: NEXT, help: "report the deterministic setup checks (deps, trust) readable from disk"}
+
+# Two of the configuration groups have a condition a program can read. The rest
+# are conversations, and two trees that answered differently are
+# indistinguishable on disk, so a state for them would be an assertion rather
+# than a reading.
+step_routing:
+  setup:
+    skill: setup
+    covers_skill: true
+
+    states:
+      # Rung 2, matching the sibling `test` domain on the IDENTICAL predicate
+      # (`hs_run_test.py:122-132`): a hard blocker, not a projection. The install
+      # command is still named in `next_action` — rung 2 may carry one, only rung
+      # 10 is forbidden a machine-dispatched command.
+      deps_missing:
+        summary: >-
+          A required package is absent. Later hooks and tests fail with opaque
+          ImportErrors until it is installed; nothing else here is worth reading yet.
+
+      # A human decision, not an inference. Granting trust lets a standards rule run
+      # an arbitrary shell detector, which is not something a tree can consent to on
+      # its owner's behalf.
+      trust_needed:
+        summary: >-
+          This repo is not in the trust store, so a standards rule's shell detector
+          stays grep-only. Ask before granting; never grant silently.
+        refs: [references/trust-repo.md]
+        ask_user:
+          question: Grant this repo trust so a standards rule's shell detector may run?
+          facts:
+            - this repo is not currently in the trust store
+            - granting trust lets a standards rule's shell detector run here
+            - declining keeps that detector grep-only
+          options:
+            - grant trust now
+            - keep it grep-only
+
+      # Everything mechanical is satisfied and the rest is the user's to choose. The
+      # state says so rather than pretending the walk is a step the CLI can take.
+      configured:
+        summary: >-
+          Deps present, no legacy keys, repo trusted. Every remaining choice belongs
+          to the user — ask rather than assume a default.
+        ask_user:
+          question: Which configuration group should this session act on next?
+          facts:
+            - required packages are present
+            - this repo is already in the trust store
+          options:
+            - guard/stage policy
+            - output language and voice
+            - hook components
+            - code map (/hs:codemap)
+            - nothing — stop here
+
+      # Routes nothing: a config source that cannot be read leaves no group safe to
+      # walk, so a reference would arrive at a dead end rather than at a step.
+      policy_unreadable:
+        summary: >-
+          A configuration source could not be read at all. The envelope's warnings
+          carry the underlying error; repair it before configuring anything.
