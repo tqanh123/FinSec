@@ -71,7 +71,11 @@ class _ScoreUnavailable(Exception):
 def _require_finite(fs: FinancialStatementSnapshot, names: Tuple[str, ...]) -> None:
     """Raise "<field>_not_finite" for the first of `names` that is NaN or infinite (a guard such as x <= 0 misses NaN)."""
     for name in names:
-        if not math.isfinite(getattr(fs, name)):
+        try:
+            finite = math.isfinite(getattr(fs, name))
+        except (TypeError, OverflowError):  # not a number at all, or an int too large for a float
+            finite = False
+        if not finite:
             raise _ScoreUnavailable(f"{name}_not_finite")
 
 
@@ -192,12 +196,20 @@ def _piotroski_f(fs: FinancialStatementSnapshot) -> int:
 def _try_score(
     name: str, compute: Callable[[FinancialStatementSnapshot], _T], fs: FinancialStatementSnapshot, reasons: Dict[str, str]
 ) -> Optional[_T]:
-    """`compute(fs)`, or None with the reason stored in `reasons[name]` when the score is undefined."""
+    """`compute(fs)`, or None with the reason stored in `reasons[name]` when the score is undefined.
+
+    A score that comes out NaN or infinite from finite inputs (a ratio overflowing on a subnormal denominator) is
+    refused as "score_not_finite": the zone test would read NaN as DISTRESS.
+    """
     try:
-        return compute(fs)
+        score = compute(fs)
     except _ScoreUnavailable as unavailable:
         reasons[name] = unavailable.reason
         return None
+    if isinstance(score, float) and not math.isfinite(score):
+        reasons[name] = "score_not_finite"
+        return None
+    return score
 
 
 def _unscored(fs: FinancialStatementSnapshot, reason: str) -> ForensicAuditResult:

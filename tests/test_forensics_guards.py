@@ -146,6 +146,18 @@ DEGENERATE_CASES: Dict[str, Case] = {
         {"prev_selling_general_admin": 5e-324}, {"beneish": "prev_sga_ratio_non_positive"}, ("altman", "piotroski"),
     ),
     "depreciation=5e-324": ({"depreciation": 5e-324}, {"beneish": "depreciation_rate_non_positive"}, ("altman", "piotroski")),
+    # Finite, positive inputs whose quotient overflows: the score itself is not finite, so it is refused.
+    "total_liabilities=5e-324": (
+        {"total_liabilities": 5e-324}, {"altman": "score_not_finite"}, ("beneish", "piotroski"),
+    ),
+    "total_assets=5e-324,current_assets=-1": (  # inf - inf = NaN, which the zone test would read as DISTRESS
+        {"total_assets": 5e-324, "current_assets": -1.0},
+        {"altman": "score_not_finite", "beneish": "asset_quality_negative"},
+        (),
+    ),
+    # A field that is not a float at all (no type check on the snapshot) is reported like a non-finite one.
+    "market_cap=None": ({"market_cap": None}, {"altman": "market_cap_not_finite"}, ("beneish", "piotroski")),
+    "revenue=10**400": ({"revenue": 10**400}, dict.fromkeys(SCORES, "revenue_not_finite"), ()),
     "prev_revenue=nan": (  # the finite check runs before the prev_revenue guard
         {"prev_revenue": NAN},
         {"beneish": "prev_revenue_not_finite", "piotroski": "prev_revenue_not_finite"},

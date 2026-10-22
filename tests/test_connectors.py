@@ -208,6 +208,26 @@ def test_ssi_endpoints_are_verified() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "key", "value", "field"),
+    [("alpaca", "S", " nvda ", "trade.S"), ("ssi", "Exchange", "HOSE ", "Exchange")],
+)
+def test_text_with_surrounding_whitespace_raises(source: str, key: str, value: str, field: str) -> None:
+    # " NVDA " would become a second, distinct symbol key in the shared engine.
+    with pytest.raises(PayloadFieldError) as excinfo:
+        _parse_with(source, key, value)
+    assert excinfo.value.field == field
+
+
+@pytest.mark.parametrize(
+    ("source", "key", "value", "field"), [("alpaca", "p", True, "trade.p"), ("ssi", "LastVol", False, "LastVol")]
+)
+def test_bool_is_not_a_number(source: str, key: str, value: bool, field: str) -> None:
+    with pytest.raises(PayloadFieldError) as excinfo:  # float(True) == 1.0 would pass silently
+        _parse_with(source, key, value)
+    assert excinfo.value.field == field
+
+
+@pytest.mark.parametrize(
     ("source", "key", "field"),
     [("alpaca", "S", "trade.S"), ("alpaca", "x", "trade.x"), ("ssi", "Symbol", "Symbol"), ("ssi", "Exchange", "Exchange")],
 )

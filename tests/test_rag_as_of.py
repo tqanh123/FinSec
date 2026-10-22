@@ -14,7 +14,7 @@ from typing import Dict, List, Sequence, Tuple
 import pytest
 
 from finsec_alpharadar.domain import MarketRegion, RegulatoryFiling
-from finsec_alpharadar.rag import HybridTemporalRAGEngine, RetrievedPassage
+from finsec_alpharadar.rag import HybridTemporalRAGEngine, InvalidAsOfError, RetrievedPassage
 
 AS_OF = 1_792_211_400.0  # 2026-10-17T04:30:00Z, the decision time
 DAY = 86_400.0
@@ -119,7 +119,7 @@ def test_filters_do_not_change_bm25_statistics() -> None:
 @pytest.mark.parametrize("as_of", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"])
 def test_non_finite_as_of_raises(as_of: float) -> None:
     # NaN would hide every filing and +inf would show every future one (decay 0.0): the engine refuses both.
-    with pytest.raises(ValueError, match="as_of"):
+    with pytest.raises(InvalidAsOfError, match="as_of"):  # a ValueError subclass the API maps to 422
         _engine([P1, P2, F]).search(QUERY, as_of=as_of)
 
 

@@ -156,7 +156,9 @@ class MarketTick:
             floor, ceiling = _limits_pair(where, self.price_limits)
             _require_finite(where, "price_limits floor", floor)
             _require_finite(where, "price_limits ceiling", ceiling)
-        # 1. Limits belong to VN ticks only.
+        # 1. The market is a MarketRegion (another value would skip the VN checks); limits belong to VN ticks only.
+        if self.market not in MarketRegion.__members__.values():
+            raise TickValidationError(f"{where}market {self.market!r} is not one of {', '.join(MarketRegion.__members__)}")
         if self.price_limits is not None and self.market != MarketRegion.VN:
             raise TickValidationError(f"{where}price_limits {self.price_limits!r} are allowed only on a VN tick")
         # 2. VN exchange, reference price and price range.
@@ -166,6 +168,8 @@ class MarketTick:
     def _check_vn_price(self, where: str) -> None:
         exchange = _vn_exchange(self.exchange, where)
         reference = _vn_reference(self.reference_price, where)
+        if not self.price > 0:  # a one-tick reference widens the floor to 0 or below, so the band alone would pass it
+            raise PriceOutOfBandError(f"{where}price {self.price!r} must be above 0")
         if self.price_limits is not None:  # strict: the limits come from the feed or the caller
             floor, ceiling = self.price_limits
             if not 0 < floor <= ceiling:

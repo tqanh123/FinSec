@@ -34,10 +34,14 @@ def _required_value(source: str, symbol: Optional[str], field: str, msg: Mapping
 def _required_text(
     source: str, symbol: Optional[str], field: str, msg: Mapping[str, Any], key: Optional[str] = None
 ) -> str:
-    """`msg[key]` (`key` defaults to `field`) as a non-empty string. None or any non-string raises: never "None"."""
+    """`msg[key]` (`key` defaults to `field`) as a non-empty string without surrounding whitespace.
+
+    None or any non-string raises (never "None"), and so does " NVDA ", which would be a distinct symbol key.
+    """
     value = _required_value(source, symbol, field, msg, key or field)
-    if not isinstance(value, str) or not value.strip():
-        raise PayloadFieldError(source, symbol, field, f"must be a non-empty string, got {value!r}")
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        problem = f"must be a non-empty string without surrounding whitespace, got {value!r}"
+        raise PayloadFieldError(source, symbol, field, problem)
     return value
 
 
@@ -49,6 +53,8 @@ def _required_number(
     OverflowError covers an integer too large for a float: JSON keeps a long integer literal as an exact int.
     """
     value = _required_value(source, symbol, field, msg, key or field)
+    if isinstance(value, bool):  # float(True) == 1.0: a bool is not a number
+        raise PayloadFieldError(source, symbol, field, f"must be a number, got {value!r}")
     try:
         return float(value)
     except (TypeError, ValueError, OverflowError) as err:

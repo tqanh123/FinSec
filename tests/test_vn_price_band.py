@@ -141,6 +141,24 @@ def test_tolerance_uses_ceiling_tick(reference_price: float, price: float, passe
             _vn_tick(reference_price=reference_price, price=price)
 
 
+@pytest.mark.parametrize(
+    ("exchange", "reference_price", "price"),
+    [("UPCOM", 100.0, 0.0), ("UPCOM", 100.0, -10.0), ("HNX", 100.0, -5.0), ("HOSE", 10.0, 0.0)],
+)
+def test_non_positive_vn_price_raises(exchange: str, reference_price: float, price: float) -> None:
+    # With a reference of one tick the widened floor is 0 or below, so the band alone would let these through.
+    with pytest.raises(PriceOutOfBandError, match=r"\bprice\b"):
+        _vn_tick(exchange=exchange, reference_price=reference_price, price=price)
+
+
+def test_unknown_market_raises() -> None:
+    # A market that is not a MarketRegion would skip the VN checks entirely.
+    with pytest.raises(TickValidationError, match=r"\bmarket\b"):
+        _us_tick(market="vn")
+    with pytest.raises(UnknownExchangeError):  # the plain string "VN" equals MarketRegion.VN, so VN rules apply
+        _vn_tick(market="VN", exchange="XYZ")
+
+
 def test_price_limits_allow_special_session() -> None:
     tick = _vn_tick(price=12_000.0, price_limits=(8_000.0, 12_000.0))
     assert tick.price_limits == (8_000.0, 12_000.0)

@@ -28,6 +28,10 @@ class RetrievedPassage:
     final_score: float
 
 
+class InvalidAsOfError(ValueError):
+    """`search` was given a decision time that is not a finite epoch time in seconds (NaN or an infinity)."""
+
+
 class HybridTemporalRAGEngine:
     """BM25 + Reciprocal Rank Fusion + exponential time decay over in-memory filings, answered as of a decision time.
 
@@ -126,10 +130,10 @@ class HybridTemporalRAGEngine:
         and keyword-only, and the engine never reads the clock. Filings published after `as_of` are dropped before
         anything is scored, and the BM25 statistics come from the visible filings only, so a later filing changes no
         score and no rank. The market and symbol filters then narrow the candidates without changing those statistics.
-        A non-finite `as_of` raises ValueError: NaN would hide every filing and +inf would show every future one.
+        A non-finite `as_of` raises InvalidAsOfError: NaN would hide every filing and +inf show every future one.
         """
         if not math.isfinite(as_of):
-            raise ValueError(f"as_of must be a finite epoch time in seconds, got {as_of!r}")
+            raise InvalidAsOfError(f"as_of must be a finite epoch time in seconds, got {as_of!r}")
         visible = [i for i, doc in enumerate(self._docs) if doc.published_at <= as_of]
         candidates = [
             i for i in visible

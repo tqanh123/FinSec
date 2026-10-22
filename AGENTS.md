@@ -41,14 +41,14 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **US sources:** Alpaca market data (paper keys); SEC EDGAR filings (8-K, 10-Q, 10-K, Form 4).
 - **VN sources:** SSI FastConnect Data; `vnstock`; consolidated financial statements (BCTC hợp nhất); board and shareholder resolutions (Nghị quyết HĐQT/ĐHĐCĐ).
 
-## Current Status (verified 2026-10-20)
+## Current Status (verified 2026-10-22)
 - **Prototype.** About 1,400 lines of numpy-only, in-memory code (OBSERVED 2026-10-21). There is no live connector, no database and no LLM call. No prediction has been made or scored yet.
 - **Works, smoke-tested by `tests/test_end_to_end.py`:**
   - OLS market-model CAR (`quant/event_study.py`);
-  - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); undefined ratios return None with a reason; scores run only for non-financial issuers (2026-10-21); formula corrections are Phase 2;
+  - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); undefined ratios return None with a reason; scores run only for non-financial issuers (2026-10-22); formula corrections are Phase 2;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
-- **Tests (OBSERVED 2026-10-22).** pytest collects 245 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39712700898 (commit e2b2da3): success, 231 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
+- **Tests (OBSERVED 2026-10-22).** pytest collects 261 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39713637535 (commit dca8e9d): success, 245 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
 - **Stub or placeholder:**
   - connectors are static dict parsers; the Alpaca and SSI tick parsers raise on missing, null or malformed fields, and an Alpaca quote must share the trade's symbol and not postdate it (2026-10-21);
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
@@ -58,12 +58,13 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **Known bugs:**
   - Foreign flow is summed over a 50-tick deque (`quant/kalman_microstructure.py:99`).
   - On a cold start the router always picks the first arm (`router/linucb_bandit.py:40`).
+  - Extreme but finite tick values (price = volume = 1e308) pass validation and poison the shared quant engine, and a timestamp jump of about 1e103 s overflows the Kalman filter (`quant/kalman_microstructure.py:27`) into an HTTP 500 (OBSERVED 2026-10-22; quant fixes are Phase 6).
 
 ## Package Layout (`src/finsec_alpharadar/`)
-- `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`, `IssuerType`); VN tick validation (D4), `price_limits`; every tick rejects non-finite numbers (2026-10-21).
+- `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`, `IssuerType`); VN tick validation (D4), `price_limits`; every tick rejects non-finite numbers (2026-10-21); an unknown market or a VN price of 0 or below raises (2026-10-22).
 - `connectors/`: payload parsers for Alpaca and SEC EDGAR (`us_alpaca_edgar.py`) and for SSI FastConnect and vnstock (`vn_ssi_vnstock.py`). No network clients yet.
 - `quant/`: `MinHashDeduplicator`, `KalmanPriceFilter` + `StreamingQuantEngine` (VWAP, OBI, CUSUM, volume z-score, VN foreign net flow), `EventStudyAnalyzer` (CAR).
-- `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score; an issuer gate and None-with-reason guards (2026-10-21).
+- `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score; an issuer gate and None-with-reason guards (2026-10-22).
 - `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors. `search` requires `as_of` and ignores documents published after it (2026-10-21); this is as-of `published_at` only, not yet the point-in-time `information_time`.
 - `router/linucb_bandit.py`: disjoint LinUCB contextual bandit that chooses a model name.
 - `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`; required tick fields, 422 on bad input, a bilingual disclaimer on research responses (2026-10-21); `GET /v1/rag/search` takes an optional `as_of` (default: request time), echoes it, and returns 422 for a non-finite one (2026-10-21). The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
@@ -128,6 +129,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
     - The main checkout's `.claude/settings.json` is therefore parked as `harness/state/claude-settings.json.harness-off`. Move it back to turn the hooks on again, once the guard reads the worktree's branch.
 - **Python 3.10** reached end of life on 2026-10-01. VERIFIED https://devguide.python.org/versions/
 - **MCP pins (OBSERVED 2026-10-21).** maverick-mcp `ba17099` = tag v1.1.0; vnstock-agent `e7eaf08` = HEAD of 2026-04-01; ssi-stock-mcp-server `b93442a` = HEAD of 2025-08-06; alpaca-mcp-server 2.4.0; edgartools 5.62.0; @playwright/mcp 0.0.83. Remote `serverUrl` entries cannot be pinned.
+- **Compose image tags (2026-10-22).** `qdrant/qdrant:v1.19.2` and `timescale/timescaledb:2.31.0-pg16` exist on Docker Hub (HTTP 200; a made-up tag returns 404). VERIFIED https://hub.docker.com/v2/repositories/qdrant/qdrant/tags/v1.19.2 and https://hub.docker.com/v2/repositories/timescale/timescaledb/tags/2.31.0-pg16
 
 ## Engineering Rules (binding)
 - **No order execution anywhere.**
@@ -164,7 +166,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
 - **Tests (2026-10-21).**
   - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
-  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-22: `source .venv/Scripts/activate && pytest -q` → 245 passed.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-22: `source .venv/Scripts/activate && pytest -q` → 261 passed.
   - `make test` runs `python -m pytest -q` (2026-10-22).
 - **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
 - **FastAPI server (2026-10-22).** bash: `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`; PowerShell: `$env:PYTHONPATH='src'; uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`. fastapi installs into `.venv` with the dev setup (2026-10-21).

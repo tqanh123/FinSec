@@ -3,13 +3,14 @@
 Needs fastapi: without it (the global Python on the dev machine) pytest skips this whole module. The handlers share
 the module-level engines of `api/server.py`, so every test sends its own symbol. A direct call bypasses FastAPI's
 query handling: always pass every search parameter (an omitted `Query(...)` parameter receives the `Query` object).
-No test reads the clock. The search test that passes `as_of=None` lets the handler read it, as a live request does,
-and asserts only the type and sign of the echoed decision time.
+No test reads the wall clock: the search tests that pass `as_of=None` replace `server.datetime` with a fixed clock, so
+the handler's default decision time is known exactly.
 """
 from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
@@ -22,6 +23,16 @@ from fastapi import HTTPException
 from finsec_alpharadar.api import server
 from finsec_alpharadar.domain import MarketRegion, RegulatoryFiling
 from finsec_alpharadar.rag import HybridTemporalRAGEngine
+
+FIXED_NOW = datetime(2026, 10, 17, 4, 30, tzinfo=timezone.utc)  # = TS; stands in for the request time
+
+
+class _FixedClock(datetime):
+    """Replaces `server.datetime` so the default decision time is FIXED_NOW, not the wall clock."""
+
+    @classmethod
+    def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+        return FIXED_NOW
 
 TS = 1_792_211_400.0  # 2026-10-17T04:30:00Z
 REQUIRED: List[str] = ["symbol", "market", "timestamp", "price", "volume", "bid_price", "ask_price", "bid_size", "ask_size"]
@@ -95,12 +106,11 @@ def test_search_echoes_explicit_as_of() -> None:
     assert response.get("as_of") == TS
 
 
-def test_search_defaults_as_of_to_request_time() -> None:
-    # None is what FastAPI passes for an omitted as_of. The handler then reads the clock, so only the type and sign of
-    # the echoed decision time are asserted, never its value.
+def test_search_defaults_as_of_to_request_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    # None is what FastAPI passes for an omitted as_of; the handler then reads the clock, here a fixed one.
+    monkeypatch.setattr(server, "datetime", _FixedClock)
     response = server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5, as_of=None)
-    as_of = response.get("as_of")
-    assert isinstance(as_of, float) and as_of > 0, as_of
+    assert response.get("as_of") == FIXED_NOW.timestamp()
 
 
 def test_search_forwards_as_of_to_engine(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,6 +124,7 @@ def test_search_forwards_as_of_to_engine(monkeypatch: pytest.MonkeyPatch) -> Non
         for filing_id, published_at in (("EPOCH", 0.0), ("LATE", TS + 86_400.0))
     ])
     monkeypatch.setattr(server, "rag_engine", engine)
+    monkeypatch.setattr(server, "datetime", _FixedClock)
 
     def search(as_of: Optional[float]) -> Tuple[Any, List[str]]:
         response = server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5, as_of=as_of)
@@ -122,8 +133,28 @@ def test_search_forwards_as_of_to_engine(monkeypatch: pytest.MonkeyPatch) -> Non
     assert search(TS) == (TS, ["EPOCH"])
     assert search(TS + 2 * 86_400.0) == (TS + 2 * 86_400.0, ["EPOCH", "LATE"])
     assert search(0.0) == (0.0, ["EPOCH"])  # 0.0 is a decision time, not a missing one
-    echoed, filing_ids = search(None)  # the request time: only the type and the old filing are asserted
-    assert isinstance(echoed, float) and "EPOCH" in filing_ids
+    assert search(None) == (TS, ["EPOCH"])  # the (fixed) request time is the decision time
+
+
+def test_search_other_engine_errors_are_not_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only a refused decision time is the caller's fault; any other engine error must not be reported as bad input.
+    class _BrokenEngine:
+        def search(self, *args: Any, **kwargs: Any) -> List[Any]:
+            raise ValueError("engine bug")
+
+    monkeypatch.setattr(server, "rag_engine", _BrokenEngine())
+    with pytest.raises(ValueError, match="engine bug"):
+        server.search_disclosures(q="alpha", market=None, symbol=None, top_k=5, as_of=TS)
+
+
+def test_bool_price_returns_422() -> None:
+    detail = _rejected({**_us_payload("TSTB"), "price": True})  # JSON true would otherwise become a price of 1.0
+    assert re.search(r"\bprice\b", detail), detail
+
+
+def test_symbol_with_surrounding_whitespace_returns_422() -> None:
+    detail = _rejected({**_us_payload("TSTW"), "symbol": " tstw "})
+    assert re.search(r"\bsymbol\b", detail), detail
 
 
 @pytest.mark.parametrize("as_of", [float("nan"), float("inf")], ids=["nan", "inf"])

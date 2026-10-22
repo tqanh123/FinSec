@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Query
 
 from finsec_alpharadar.domain.models import MarketRegion, MarketTick
 from finsec_alpharadar.quant.kalman_microstructure import StreamingQuantEngine
-from finsec_alpharadar.rag.hybrid_temporal_rag import HybridTemporalRAGEngine
+from finsec_alpharadar.rag.hybrid_temporal_rag import HybridTemporalRAGEngine, InvalidAsOfError
 from finsec_alpharadar.router.linucb_bandit import LinUCBModelRouter
 
 app = FastAPI(
@@ -25,8 +25,10 @@ DISCLAIMER = "Chỉ dùng cho nghiên cứu, không phải khuyến nghị đầ
 
 
 def _number(name: str, value: Any) -> float:
-    """One tick field as a float; null, a non-number or an int too large for a float raises ValueError naming the field."""
+    """One tick field as a float; null, a bool, a non-number or an int too large for a float raises ValueError."""
     try:
+        if isinstance(value, bool):  # float(True) == 1.0: JSON true is not a number
+            raise TypeError("a bool is not a number")
         return float(value)
     except (TypeError, ValueError, OverflowError) as err:
         raise ValueError(f"tick field {name!r} must be a number, got {value!r}") from err
@@ -35,8 +37,8 @@ def _number(name: str, value: Any) -> float:
 def _tick_from_payload(payload: Dict[str, Any]) -> MarketTick:
     """A `MarketTick` from a request body: a missing required key raises KeyError, a bad value ValueError."""
     symbol = payload["symbol"]
-    if not isinstance(symbol, str) or not symbol.strip():
-        raise ValueError(f"tick field 'symbol' must be a non-empty string, got {symbol!r}")
+    if not isinstance(symbol, str) or not symbol.strip() or symbol != symbol.strip():
+        raise ValueError(f"tick field 'symbol' must be a non-empty string without surrounding spaces, got {symbol!r}")
     market = payload["market"]
     try:
         region = MarketRegion(market)
@@ -115,7 +117,7 @@ def search_disclosures(
     model_arm, ucb_scores = bandit_router.select_model(ctx)
     try:
         passages = rag_engine.search(q, top_k=top_k, market_filter=market, symbol_filter=symbol, as_of=decision_time)
-    except ValueError as err:  # a non-finite as_of (nan, inf), which the engine refuses
+    except InvalidAsOfError as err:  # a non-finite as_of (nan, inf); any other engine error is not the caller's
         raise HTTPException(status_code=422, detail=str(err)) from err
     return {
         "routed_model": model_arm,
