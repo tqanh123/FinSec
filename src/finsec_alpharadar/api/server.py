@@ -46,6 +46,8 @@ def _tick_from_payload(payload: Dict[str, Any]) -> MarketTick:
         allowed = ", ".join(member.value for member in MarketRegion)
         raise ValueError(f"tick field 'market' must be one of {allowed}, got {market!r}") from err
     exchange = payload.get("exchange")  # JSON null counts as absent: None, never the string "NONE"
+    if exchange is not None and (not isinstance(exchange, str) or not exchange.strip() or exchange != exchange.strip()):
+        raise ValueError(f"tick field 'exchange' must be a non-empty string without surrounding spaces, got {exchange!r}")
     reference_price = payload.get("reference_price")
     raw_limits = payload.get("price_limits")
     price_limits: Optional[Tuple[float, float]] = None
@@ -64,7 +66,7 @@ def _tick_from_payload(payload: Dict[str, Any]) -> MarketTick:
         bid_size=_number("bid_size", payload["bid_size"]),
         ask_size=_number("ask_size", payload["ask_size"]),
         reference_price=None if reference_price is None else _number("reference_price", reference_price),
-        exchange=None if exchange is None else str(exchange).upper(),
+        exchange=None if exchange is None else exchange.upper(),
         foreign_buy_volume=_number("foreign_buy_volume", payload.get("foreign_buy_volume", 0.0)),
         foreign_sell_volume=_number("foreign_sell_volume", payload.get("foreign_sell_volume", 0.0)),
         price_limits=price_limits,

@@ -152,6 +152,13 @@ def test_bool_price_returns_422() -> None:
     assert re.search(r"\bprice\b", detail), detail
 
 
+@pytest.mark.parametrize("exchange", [" v ", True, 123], ids=["spaces", "bool", "number"])
+def test_exchange_must_be_clean_text(exchange: Any) -> None:
+    # An optional exchange, when given, is text like the symbol: never str(True) == "TRUE" or " V ".
+    detail = _rejected({**_us_payload("TSTX2"), "exchange": exchange})
+    assert re.search(r"\bexchange\b", detail), detail
+
+
 def test_symbol_with_surrounding_whitespace_returns_422() -> None:
     detail = _rejected({**_us_payload("TSTW"), "symbol": " tstw "})
     assert re.search(r"\bsymbol\b", detail), detail

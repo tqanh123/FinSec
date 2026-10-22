@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Dict, List, Tuple
 
+import numpy as np
 import pytest
 
 from finsec_alpharadar.domain import FinancialStatementSnapshot, IssuerType, MarketRegion
@@ -150,6 +151,17 @@ DEGENERATE_CASES: Dict[str, Case] = {
     "total_liabilities=5e-324": (
         {"total_liabilities": 5e-324}, {"altman": "score_not_finite"}, ("beneish", "piotroski"),
     ),
+    "total_liabilities=float32(1e-40)": (  # a numpy float32 score is not a Python float, but it is checked too
+        {"total_liabilities": np.float32(1e-40)}, {"altman": "score_not_finite"}, ("beneish", "piotroski"),
+    ),
+    "prev_accounts_receivable=1e-310": (  # the receivables ratio stays above 0, but DSRI overflows to inf
+        {"prev_accounts_receivable": 1e-310}, {"beneish": "score_not_finite"}, ("altman", "piotroski"),
+    ),
+    "current_assets=10**308,current_liabilities=-10**308": (  # an int sum too large to convert to float
+        {"current_assets": 10**308, "current_liabilities": -10**308},
+        {"altman": "score_not_finite", "beneish": "asset_quality_negative", "piotroski": "current_liabilities_non_positive"},
+        (),
+    ),
     "total_assets=5e-324,current_assets=-1": (  # inf - inf = NaN, which the zone test would read as DISTRESS
         {"total_assets": 5e-324, "current_assets": -1.0},
         {"altman": "score_not_finite", "beneish": "asset_quality_negative"},
@@ -222,6 +234,7 @@ def test_unknown_issuer_type_fails_closed() -> None:
         _assert_no_scores(ForensicAccountingEngine.evaluate(snapshot), "issuer_type_unknown")
 
 
+@pytest.mark.filterwarnings("ignore:overflow encountered:RuntimeWarning")  # the float32 case overflows on purpose
 @pytest.mark.parametrize("case", list(DEGENERATE_CASES))
 def test_degenerate_input_gives_none_with_reason(case: str) -> None:
     overrides, expected_none, unchanged = DEGENERATE_CASES[case]

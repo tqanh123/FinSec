@@ -119,11 +119,11 @@ class MarketTick:
     sessions, some ex-rights days, the 2026-12-28 HNX-to-HOSE transfer); `vn_ceiling_floor_proximity` returns
     (ceiling, floor). Checks, in order (every failure raises TickValidationError or a subclass):
     0. every market: each number field, plus `reference_price` and both `price_limits` values when given, is finite;
-    1. `price_limits` is allowed only on a VN tick;
+    1. the market is a `MarketRegion`, and `price_limits` is allowed only on a VN tick;
     2. a VN tick needs an exchange that `VNExchangeBand` lists (UnknownExchangeError) and a positive
        `reference_price`. With `price_limits` (0 < floor <= ceiling) the price must lie in [floor, ceiling]; without
        them, in the `vn_price_limits` band widened on each side by one tick (`vn_tick_size` at the ceiling, the
-       larger tick). A price outside raises PriceOutOfBandError.
+       larger tick). A price of 0 or below, or outside that range, raises PriceOutOfBandError.
     Bid/ask prices and sizes are not checked: 0 means no active bid or ask. A US tick needs no exchange.
     Known limit: the check assumes full VND. A tick whose price and reference are both in thousands of VND passes
     (HOSE reference_price=5.0, price=14.0 passes, because the one-tick tolerance is wider than the band); unit
