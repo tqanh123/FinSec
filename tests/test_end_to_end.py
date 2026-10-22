@@ -18,7 +18,7 @@ from finsec_alpharadar.connectors import (
     VnstockBCTCAdapter,
 )
 from finsec_alpharadar.domain import (
-    FinancialStatementSnapshot,
+    FinancialStatementSnapshot, IssuerType,
     MarketRegion,
     MarketTick,
     RegulatoryFiling,
@@ -115,7 +115,7 @@ def run_modular_verification() -> dict:
         prev_depreciation=780.0, prev_net_income=16_200.0, prev_accounts_receivable=4_600.0,
         prev_current_assets=49_000.0, prev_current_liabilities=13_200.0,
         prev_property_plant_equipment=10_800.0, prev_total_assets=78_000.0,
-        prev_long_term_debt=9_000.0, prev_shares_outstanding=24_650.0,
+        prev_long_term_debt=9_000.0, prev_shares_outstanding=24_650.0, issuer_type=IssuerType.NON_FINANCIAL,
     ))
     assert audit.altman_zone == "SAFE" and audit.piotroski_f_score == 9
 

@@ -1,5 +1,6 @@
 from .models import (
     FinancialStatementSnapshot,
+    IssuerType,
     MarketRegion,
     MarketTick,
     PriceOutOfBandError,
@@ -17,6 +18,7 @@ __all__ = [
     "MarketTick",
     "RegulatoryFiling",
     "FinancialStatementSnapshot",
+    "IssuerType",
     "TickValidationError",
     "UnknownExchangeError",
     "PriceOutOfBandError",

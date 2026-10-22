@@ -220,8 +220,24 @@ class RegulatoryFiling:
     xbrl_metrics: Dict[str, float] = field(default_factory=dict)
 
 
-@dataclass
+class IssuerType(str, Enum):
+    """Kind of issuer behind a statement; the forensic scores apply only to NON_FINANCIAL (AGENTS.md "Forensics")."""
+
+    NON_FINANCIAL = "NON_FINANCIAL"
+    BANK = "BANK"
+    INSURER = "INSURER"
+    SECURITIES_FIRM = "SECURITIES_FIRM"
+    UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
 class FinancialStatementSnapshot:
+    """One period's statement lines and the previous period's, as `ForensicAccountingEngine` reads them.
+
+    `issuer_type` gates the scores: only NON_FINANCIAL is scored, and the default UNKNOWN is refused. A `market_cap`
+    of 0 or less (0 also stands for a missing market cap) leaves the Altman Z-Score undefined.
+    """
+
     symbol: str
     market: MarketRegion
     period: str
@@ -254,3 +270,4 @@ class FinancialStatementSnapshot:
     prev_total_assets: float
     prev_long_term_debt: float
     prev_shares_outstanding: float
+    issuer_type: IssuerType = IssuerType.UNKNOWN
