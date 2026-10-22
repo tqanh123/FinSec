@@ -231,9 +231,9 @@ class ForensicAccountingEngine:
 
     Only `IssuerType.NON_FINANCIAL` is scored (AGENTS.md "Forensics"): a bank, insurer or securities firm gets no
     score ("not_applicable_financial_issuer"), and any other issuer type is refused ("issuer_type_unknown"). The three
-    scores are independent. A score is None, with a reason, when a snapshot field its formula reads is not finite
+    scores are independent; formula fixes are Phase 2. A score is None, with a reason, when a field it reads is not finite
     ("<field>_not_finite"), when a ratio is undefined ("<input>_non_positive", "<input>_negative"), or when the score
-    itself is not finite ("score_not_finite"); the first failing check gives the reason. Formula fixes are Phase 2.
+    is not finite ("score_not_finite", also for an int overflow inside a guard); the first failing check gives the reason.
     """
 
     @staticmethod

@@ -48,7 +48,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); undefined ratios return None with a reason; scores run only for non-financial issuers (2026-10-22); formula corrections are Phase 2;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
-- **Tests (OBSERVED 2026-10-22).** pytest collects 267 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39716865556 (commit 9ba4562): success, 261 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
+- **Tests (OBSERVED 2026-10-22).** pytest collects 274 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39721376654 (commit c9168f0): success, 267 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
 - **Stub or placeholder:**
   - connectors are static dict parsers; the Alpaca and SSI tick parsers raise on missing, null or malformed fields, and an Alpaca quote must share the trade's symbol and not postdate it (2026-10-21);
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
@@ -166,7 +166,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
 - **Tests (2026-10-21).**
   - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
-  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-22: `source .venv/Scripts/activate && pytest -q` → 267 passed.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-22: `source .venv/Scripts/activate && pytest -q` → 274 passed.
   - `make test` runs `python -m pytest -q` (2026-10-22).
 - **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
 - **FastAPI server (2026-10-22).** bash: `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`; PowerShell: `$env:PYTHONPATH='src'; uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`. fastapi installs into `.venv` with the dev setup (2026-10-21).

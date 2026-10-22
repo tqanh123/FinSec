@@ -152,11 +152,21 @@ def test_bool_price_returns_422() -> None:
     assert re.search(r"\bprice\b", detail), detail
 
 
-@pytest.mark.parametrize("exchange", [" v ", True, 123], ids=["spaces", "bool", "number"])
+@pytest.mark.parametrize("exchange", [" v ", True, 123, "", "  "], ids=["spaces", "bool", "number", "empty", "blank"])
 def test_exchange_must_be_clean_text(exchange: Any) -> None:
     # An optional exchange, when given, is text like the symbol: never str(True) == "TRUE" or " V ".
     detail = _rejected({**_us_payload("TSTX2"), "exchange": exchange})
     assert re.search(r"\bexchange\b", detail), detail
+
+
+@pytest.mark.parametrize(
+    ("payload_of", "symbol", "exchange", "stored"),
+    [(_us_payload, "TSTE1", "V", "V"), (_us_payload, "TSTE2", "iex", "IEX"), (_vn_payload, "TSTE3", "hose", "HOSE")],
+    ids=["us-code", "us-lower-case", "vn-lower-case"],
+)
+def test_clean_exchange_is_accepted_and_upper_cased(payload_of: Any, symbol: str, exchange: str, stored: str) -> None:
+    server.ingest_tick({**payload_of(symbol), "exchange": exchange})
+    assert server.quant_engine._ticks[symbol][-1].exchange == stored
 
 
 def test_symbol_with_surrounding_whitespace_returns_422() -> None:
