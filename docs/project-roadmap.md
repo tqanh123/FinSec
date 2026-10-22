@@ -244,12 +244,12 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `scripts/train_unsloth_slm.py`, `configs/unsloth_qwen3_catalyst.yaml` | defer | 7 | Use only as a distilled extractor. Drop `abnormal_return_sign_accuracy_reward`; keep the schema and number-faithfulness rewards. |
 | `tests/test_end_to_end.py` | fix | 0 | Wrap `run_modular_verification` in `test_end_to_end()`. Add test_edgar_time, test_no_order_execution and test_agents_md_paths (Phase 0), then test_point_in_time and test_labels (Phase 1). |
 | `pyproject.toml` | fix | 0 | Add `[tool.pytest.ini_options] pythonpath = ["src"]`. Add a dev extra (pytest, hypothesis, ruff) and a research extra (pandas or polars, pyarrow, duckdb, scikit-learn; these choices are ASSUMED). Move pathway, qdrant-client and pydantic-ai to a deferred extra. Pin vnstock to the probed version. |
-| `.gitignore` | fix | 0 | Anchor `data/` and `models/` as `/data/` and `/models/`. Unanchored, they silently ignore any source package with those names (OBSERVED by git check-ignore). |
-| `docker-compose.yml` | fix | 0 | Remove redpanda. Put qdrant and timescaledb behind compose profiles. Pin image tags, bind to 127.0.0.1, read the password from env. |
-| `Makefile` | fix | 0 | Bind run-api to 127.0.0.1. Document the PowerShell equivalents. |
-| `.env.example` | fix | 0 | Drop SSI_PRIVATE_KEY_PATH. Add SSI_API_URL, SSI_STREAM_URL and ALPACA_DATA_FEED. EDGAR_IDENTITY must be a real contact. |
-| `.agents/mcp_config.json` | fix | 0 | Remove `trading` from ALPACA_TOOLSETS. Pin git refs and package versions. MCP is for exploration, never a pipeline data source. |
-| `.agents/rules/*.md` | fix | 0 | Replace rule 3 (BM25 + dense + MaxSim required in every *.py) with a pointer to AGENTS.md. Band rule: tick rounding, feed-provided bands, special days. Storage rule: NUMERIC plus published_at, with tick tables scoped to Phase 6. |
+| `.gitignore` | fix | 0 | Anchor `data/` and `models/` as `/data/` and `/models/`. Unanchored, they silently ignore any source package with those names (OBSERVED by git check-ignore). Done 2026-10-22. |
+| `docker-compose.yml` | fix | 0 | Remove redpanda. Put qdrant and timescaledb behind compose profiles. Pin image tags, bind to 127.0.0.1, read the password from env. Done 2026-10-22. |
+| `Makefile` | fix | 0 | Bind run-api to 127.0.0.1. Document the PowerShell equivalents. Done 2026-10-22 (PowerShell forms in AGENTS.md). |
+| `.env.example` | fix | 0 | Drop SSI_PRIVATE_KEY_PATH and add SSI_API_URL and SSI_STREAM_URL (done 2026-10-22). Add ALPACA_DATA_FEED. EDGAR_IDENTITY must be a real contact. |
+| `.agents/mcp_config.json` | fix | 0 | Remove `trading` from ALPACA_TOOLSETS (done 2026-10-21, with `watchlists`). Pin git refs and package versions (done 2026-10-22). MCP is for exploration, never a pipeline data source. |
+| `.agents/rules/*.md` | fix | 0 | Replace rule 3 (BM25 + dense + MaxSim required in every *.py) with a pointer to AGENTS.md (done 2026-10-22: both rules now point to AGENTS.md, whose decision D4 covers feed-provided bands and special days; tick rounding stays planned). Band rule: tick rounding, feed-provided bands, special days. Storage rule: NUMERIC plus published_at, with tick tables scoped to Phase 6. |
 | `.agents/hooks.json`, `scripts/validate_command_safety.sh` | fix later | 4 | Wired for another tool. The real guards are tests and harness hooks. |
 
 ### 5.3 Resolved contradictions
@@ -379,7 +379,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
    - `tests/test_no_order_execution.py`: no TradingClient, submit_order or FC Trading imports in `src/`;
    - `tests/test_agents_md_paths.py`: every path that AGENTS.md describes as existing does exist.
    - The local gate is `/hs:test`; CI is `.github/workflows/ci.yml` (added 2026-10-21 because a public GitHub remote exists, so no pre-commit config).
-4. Hygiene:
+4. Hygiene. Done 2026-10-22 (Phase 0b plan, phase 5):
    - anchor the `.gitignore` patterns;
    - remove the `trading` toolset and pin the MCP refs;
    - drop SSI_PRIVATE_KEY_PATH and add the SSI URLs;
@@ -390,7 +390,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
    - the RAG as_of fix, with a regression test (done 2026-10-21);
    - `models.py` raises on an unknown exchange (done 2026-10-21);
    - connectors stop defaulting timestamps to `now()` (done 2026-10-21);
-   - fix `.agents/rules` rule 3 and the band rule.
+   - fix `.agents/rules` rule 3 and the band rule (done 2026-10-22).
 6. VN capture-only poller (`capture/`):
    - **Schedule:** every 2-5 minutes from 08:00 to 17:30 ICT on trading days, hourly otherwise.
    - **Sources:** vnstock news/events for the seed universe, plus one official portal listing page (check its URL and robots.txt first).

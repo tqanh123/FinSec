@@ -10,7 +10,7 @@
   - About 1,400 lines (OBSERVED 2026-10-21) of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.11`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:5`).
   - No HTTP/WebSocket client, database driver, environment-variable read or LLM SDK anywhere in `src/`.
   - No prediction has been made or scored yet.
-  - Tests (OBSERVED 2026-10-22): pytest collects 231 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py`, `tests/test_rag_as_of.py`, `tests/test_forensics_guards.py` and `tests/test_api_server.py` (handlers called directly; skipped without fastapi). `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 231 pass in `.venv` (Python 3.13) and on Python 3.11. CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) calls bare `pytest`, which is not on PATH on the dev machine (OBSERVED 2026-10-20).
+  - Tests (OBSERVED 2026-10-22): pytest collects 245 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py`, `tests/test_rag_as_of.py`, `tests/test_forensics_guards.py`, `tests/test_api_server.py` and the repository check `tests/test_repo_hygiene.py` (handlers called directly; skipped without fastapi). `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 245 pass in `.venv` (Python 3.13) and on Python 3.11. CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) runs `python -m pytest -q` (2026-10-22).
 - Shape today: independent engines plus a 3-endpoint FastAPI app. Target shape (PLANNED): a disclosure poller feeding an append-only prediction ledger that is scored automatically (see Data flow).
 
 ## Components
@@ -31,7 +31,7 @@
 
 Outside `src/`:
 - `scripts/train_unsloth_slm.py` only prints a hard-coded training recipe; it does not read `configs/unsloth_qwen3_catalyst.yaml`. Stub.
-- `docker-compose.yml`: Qdrant, TimescaleDB and Redpanda; no code uses them.
+- `docker-compose.yml`: Qdrant (profile `rag`) and TimescaleDB (profile `ticks`); no code uses them. Redpanda was removed (2026-10-22, §9.9).
 - `harness/`: vendored SDLC harness v7.2.0 (`/hs:plan`, `/hs:cook`, `/hs:test`, `/hs:ship`). Not product code.
 - `.agents/`: another agent tool's agent definitions, skills, rules, hooks and MCP config. DECIDED (§9.13, 2026-10-21): keep it, with its rules rewritten as pointers to AGENTS.md in Phase 0.
 
@@ -111,18 +111,18 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
   - SIP history on Basic: ASSUMED.
 - **SSI FastConnect Data** (VN; live use is Phase 6 per §9.3. No SSI account or client before Phase 6: DECIDED §9.5, 2026-10-21).
   - Needs an SSI account plus ConsumerID and ConsumerSecret (no private key). REST `https://fc-data.ssi.com.vn/v2.0/Market`; streaming `https://fc-datahub.ssi.com.vn/v2.0`. VERIFIED https://guide.ssi.com.vn/ssi-products/tieng-viet/fastconnect-data/huong-dan-ket-noi
-  - The old code constant `wss://stream.ssi.com.vn` was wrong; fixed 2026-10-21 (`STREAM_URL`/`REST_URL`, `vn_ssi_vnstock.py:36-37`); never reuse it. `SSI_PRIVATE_KEY_PATH` (`.env.example:11`) is not needed for FC Data.
+  - The old code constant `wss://stream.ssi.com.vn` was wrong; fixed 2026-10-21 (`STREAM_URL`/`REST_URL`, `vn_ssi_vnstock.py:36-37`); never reuse it. `SSI_PRIVATE_KEY_PATH` is not needed for FC Data and was removed from `.env.example` (2026-10-22).
 - **vnstock** (VN prices, statements, events over unofficial broker endpoints).
   - Community licence: personal, study or research use only, no redistribution. VERIFIED https://github.com/thinh-vu/vnstock
   - Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
   - Declared in the `prod` extra (`pyproject.toml:25`), not imported in `src/`.
 - **Telegram Bot API**: the alert channel (DECIDED §9.8; built in Phase 4). It is not in AGENTS.md "Verified Facts"; see roadmap §4 for its source.
 - **LLM providers**: none called. The model IDs in `api/server.py:20` and `tests/test_end_to_end.py:149` are unverified. Provider choice is deferred to the Phase 5 gate (DECIDED §9.11); extraction starts rule-based.
-- **docker-compose services** (`docker-compose.yml`): Qdrant (6333/6334), TimescaleDB (5432), Redpanda (19092). Unused, floating `latest` / `latest-pg16` tags, hard-coded password (`docker-compose.yml:17`, repeated in `.env.example:15`), ports published on all interfaces. Per §9.9 and roadmap §5.1: Redpanda is removed, TimescaleDB waits for Phase 6 ticks, Qdrant for Phase 7 at the earliest.
+- **docker-compose services** (`docker-compose.yml`): Qdrant (6333/6334, profile `rag`) and TimescaleDB (5432, profile `ticks`). Unused. Since 2026-10-22 the image tags are pinned, the password comes from `POSTGRES_PASSWORD` in `.env` (compose refuses an empty one), and every port binds 127.0.0.1 only. Per §9.9 and roadmap §5.1: Redpanda is removed, TimescaleDB waits for Phase 6 ticks, Qdrant for Phase 7 at the earliest.
 
 ## Boundaries & trust
 - **Exposed surface:** the FastAPI app `finsec_alpharadar.api.server:app` on port 8000.
-  - `make run-api` binds `0.0.0.0` (`Makefile:10`), so the API is reachable from the local network. Binding to 127.0.0.1 is a planned Phase 0 fix (roadmap §5.2); until then, run it only on a trusted network.
+  - `make run-api` binds 127.0.0.1 (`Makefile:10`, since 2026-10-22), so the API is not reachable from the local network.
   - No authentication, rate limit or request model: the body is an untyped dict (`server.py:78`), and a missing or invalid field returns 422 (since 2026-10-21).
   - Any caller of `POST /v1/ticks/ingest` mutates shared in-memory engine state.
 - **Secrets:** keys live in `.env` (gitignored, `.gitignore:20`; `*.pem` and `*.key` ignored at lines 26-27). `src/` reads no environment variables today. Guidance (roadmap §4, §8; not an AGENTS.md rule): never commit keys, and never put secrets or personal data in prompts, URLs or logs.
@@ -132,7 +132,7 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
   - vnstock responses (unofficial endpoints that can change or break without notice);
   - scraped HTML/PDF from VN disclosure portals (planned Phase 0 and 3 sources);
   - API request bodies, and any LLM output (Phase 5, behind a planned number-faithfulness validator).
-- **Agent configuration:** AGENTS.md is the single shared contract for every coding agent (AGENTS.md intro). `.agents/rules/quant-and-market-rules.md:11` (rule 3: BM25 + dense + MaxSim in every `*.py`) is not an AGENTS.md rule. Rewriting the `.agents/` rules as pointers to AGENTS.md is DECIDED (§9.13) and scheduled for Phase 0.
+- **Agent configuration:** AGENTS.md is the single shared contract for every coding agent (AGENTS.md intro). Since 2026-10-22 the `.agents/` rules are pointers to AGENTS.md (DECIDED §9.13); the old rule 3 (BM25 + dense + MaxSim in every `*.py`) is gone.
 - **Known gaps against binding rules** (do not copy; fix within scope when touched):
   - Unverified model IDs (`api/server.py:20`) break the external-facts rule.
 
@@ -145,7 +145,7 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
 - **VN band validation** (binding): HOSE ±7% / HNX ±10% / UPCOM ±15% around `reference_price`; raise on an unknown exchange. Why: a silent default gives wrong ceiling/floor values. Built 2026-10-21 (decision D4 in AGENTS.md).
 - **No Altman/Beneish/Piotroski for banks, insurers or securities firms** (binding). Why: the auditor's ratios are not valid for these firms. Built 2026-10-21: only `IssuerType.NON_FINANCIAL` is scored, and an unknown issuer type is refused (AGENTS.md "Decisions"). They stay in the research universe and event studies (DECIDED §9.7).
 - **Label external facts VERIFIED, OBSERVED or ASSUMED; never invent API names, fields, model IDs or prices** (binding). Why: the prototype carried a wrong SSI endpoint (fixed 2026-10-21) and still carries unverified model IDs.
-- **No package named `data/` or `models/`; use `modeling/`** (binding until `.gitignore` is anchored). Why: the unanchored patterns at `.gitignore:32-33` would silently keep such packages out of git (OBSERVED 2026-10-20).
+- **No package named `data/` or `models/`; use `modeling/`** (binding until `.gitignore` is anchored). Why: the unanchored patterns would silently keep such packages out of git (OBSERVED 2026-10-20). Precondition met 2026-10-22: `.gitignore:32-33` now anchor them as `/data/` and `/models/`; `modeling/` stays the planned name.
 - **"Real-time" = disclosure capture first; ticks in Phase 6** (owner, 2026-10-20, §9.3). Why: free tick feeds are thin (Alpaca Basic is IEX-only with 30 WebSocket symbols), and VN shares cannot be sold before the T+2 afternoon, so intraday single-stock forecasts cannot be acted on.
 - **AGENTS.md holds all project knowledge; `CLAUDE.md` only imports `@AGENTS.md`, plus the generated harness block** (owner, 2026-10-20; AGENTS.md "Decisions"). Why: one contract for every coding agent. Record module status, decisions and verified facts in AGENTS.md in the same change as the code (AGENTS.md "Agent Memory Protocol").
 
