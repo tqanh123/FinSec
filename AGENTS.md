@@ -128,6 +128,9 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Claude Code hooks are OFF in this project. Desktop sessions in `.claude/worktrees/*` run hooks with `CLAUDE_PROJECT_DIR` set to the main checkout.
     - `protected_ref_guard` then reads the main checkout's branch (`main`) and refuses every `git commit` made from a worktree.
     - The main checkout's `.claude/settings.json` is therefore parked as `harness/state/claude-settings.json.harness-off`. Move it back to turn the hooks on again, once the guard reads the worktree's branch.
+  - The hs plugin (`/hs:*` skills) is ON through the main checkout's gitignored `.claude/settings.local.json` (OBSERVED 2026-10-21). That file holds only `extraKnownMarketplaces` (`hs-local`, a directory source at `./harness/plugins`) and `enabledPlugins` (`"hs@hs-local": true`). The plugin ships no hooks.
+    - Use `settings.local.json`, not a plugin-only `settings.json`: strict verify's hook-wiring check reads `settings.json` and fails hard when that file has no hook groups.
+    - A worktree session cannot write the base repo's `.claude/`, so create or change this file from the main checkout or by hand.
 - **Python 3.10** reached end of life on 2026-10-01. VERIFIED https://devguide.python.org/versions/
 - **MCP pins (OBSERVED 2026-10-21).** maverick-mcp `ba17099` = tag v1.1.0; vnstock-agent `e7eaf08` = HEAD of 2026-04-01; ssi-stock-mcp-server `b93442a` = HEAD of 2025-08-06; alpaca-mcp-server 2.4.0; edgartools 5.62.0; @playwright/mcp 0.0.83. Remote `serverUrl` entries cannot be pinned.
 - **Compose image tags (2026-10-22).** `qdrant/qdrant:v1.19.2` and `timescale/timescaledb:2.31.0-pg16` exist on Docker Hub (HTTP 200; a made-up tag returns 404). VERIFIED https://hub.docker.com/v2/repositories/qdrant/qdrant/tags/v1.19.2 and https://hub.docker.com/v2/repositories/timescale/timescaledb/tags/2.31.0-pg16
