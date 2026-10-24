@@ -116,7 +116,7 @@ và `:56` phải cập nhật (red-team r1 LT12).
 ## Success Criteria
 - [ ] [test] Test hygiene RED trước, xanh sau; guard no-order-execution xanh với script mới.
 - [ ] [manual] `summary.json` trả lời đủ 7 câu R5.2 (neo `manual_test_anchor.py`; hệ thống ngoài sống, không double được).
-- [ ] [invariant] Không body Alpaca, không key trong repo (grep ở gate; `git status --porcelain` chỉ có file trong bảng).
+- [ ] [invariant] Không body Alpaca, không key trong repo (grep ở gate; `git status --porcelain` chỉ có file trong bảng và file của plan dưới `plans/261022-1147-phase0a-capture/` — tracked từ D9).
 - [ ] [invariant] `grep -n "SIP history on Basic: ASSUMED" AGENTS.md docs/system-architecture.md` → không hit (thay bằng dòng OBSERVED có ngày);
       `tests/test_agents_md_paths.py` xanh.
 

@@ -19,7 +19,7 @@ làm; agent soạn runbook, đọc bằng chứng owner thả vào thư mục sy
 
 **Thứ tự commit (red-team r1 LT4, phán quyết của main — giữ "một commit mỗi phase"):** commit DUY NHẤT của P3 mang runbook + `configs/capture.toml`
 cuối cùng và được push TRƯỚC khi laptop triển khai; laptop clone đúng commit đó. Triển khai, burn-in 24 h và `verification-P3.json` diễn ra SAU commit
-(phase chỉ "xong" khi burn-in đạt). Các sự thật OBSERVED về laptop đi vào AGENTS.md trong commit của Phase 4 (P4 "Delta docs"); dòng có ngày
+(phase chỉ "xong" khi burn-in đạt; `verification-P3.json` đi vào commit của Phase 4 — `plan.md` Rollback). Các sự thật OBSERVED về laptop đi vào AGENTS.md trong commit của Phase 4 (P4 "Delta docs"); dòng có ngày
 "capture window started <date> at <sha>" đi vào commit phase ĐẦU TIÊN sau khi cửa sổ mở (P4; cửa sổ chưa mở lúc cook P4 thì P5, P6 hoặc P7 — P4 "Delta
 docs"). Burn-in đòi đổi code/config → thủ tục hotfix R3.9, không sửa commit P3.
 

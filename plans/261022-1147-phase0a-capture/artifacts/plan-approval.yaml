@@ -1,33 +1,34 @@
 schema: plan-approval/v1
 plan: 261022-1147-phase0a-capture
-plan_hash: 093e9d1c6ab9
+plan_hash: 98be6c7cc014
 file_hashes:
-  plan.md: 37fdfaee71de
-  phases/phase-1-vnstock-probe.md: c8f232a7318f
+  plan.md: 71804f3914a7
+  phases/phase-1-vnstock-probe.md: d83a479a037e
   phases/phase-2-capture-poller.md: 1be0a2bb93df
-  phases/phase-3-capture-deploy.md: 30077b4717e6
+  phases/phase-3-capture-deploy.md: 79dabd955379
   phases/phase-4-edgar-golden-test.md: 5d4cc3fcfda5
-  phases/phase-5-alpaca-probe.md: 80e2042e299e
+  phases/phase-5-alpaca-probe.md: 857f8aee25b9
   phases/phase-6-vn-reconcile.md: a26e0439606b
-  phases/phase-7-phase0-exit-audit.md: 3be294359223
-  plan-graph.yaml: 2fb6e6ca3b0f
+  phases/phase-7-phase0-exit-audit.md: c8c9cd44e867
+  plan-graph.yaml: f7d5ea6adc10
 raw_hashes:
-  plan.md: 17a7e4dd2418
-  phases/phase-1-vnstock-probe.md: 9a4cfc99e192
-  phases/phase-2-capture-poller.md: 9e9c781caae4
-  phases/phase-3-capture-deploy.md: 213e33fb7266
-  phases/phase-4-edgar-golden-test.md: 9ef3581c0e5b
-  phases/phase-5-alpaca-probe.md: 842bb5b914fb
-  phases/phase-6-vn-reconcile.md: 72c40822fb7c
-  phases/phase-7-phase0-exit-audit.md: 882757d8f3ee
-  plan-graph.yaml: 2fb6e6ca3b0f
+  plan.md: 2e480eb5fbf4
+  phases/phase-1-vnstock-probe.md: 71bae7e457c8
+  phases/phase-2-capture-poller.md: 05ac21e9a66a
+  phases/phase-3-capture-deploy.md: d8fa53d0bb54
+  phases/phase-4-edgar-golden-test.md: d50ebda86f9d
+  phases/phase-5-alpaca-probe.md: 25ecce8ac55f
+  phases/phase-6-vn-reconcile.md: dc7f9becd806
+  phases/phase-7-phase0-exit-audit.md: 11125da04365
+  plan-graph.yaml: f7d5ea6adc10
 hash_scheme: 2
 paused: []
 author: user:tqanh123
 reviewer: user:tqanh123
 verdict: APPROVED
-rationale: 'Owner approved in session 2026-10-24 after reading the plan: D1-D8 and
-  VL-1..VL-4 decided by the owner, red-team r1 fully dispositioned, consistency sweep
-  0 contradictions; keep one plan (1 cluster, linear 7-phase chain).'
-ts: '2026-10-24T12:35:49.785032+00:00'
+rationale: 'Owner approved on 2026-10-25 (''approve plan mới điều chỉnh commit plan
+  lên git''): amendment applies D9 (plans/ committed, public harness identity) only;
+  independent check found 11 items, 10 fixed, 1 info; graph exit 0, 47/47 cites matched,
+  G2/G5 clean.'
+ts: '2026-10-24T18:24:41.712235+00:00'
 run_seq: null

@@ -85,6 +85,10 @@ của `--deep` được thay bằng bảng "Related Code Files" + citation chín
   task chạy dưới user đó; vnstock đăng ký dưới user đó; client OneDrive/Google Drive chạy trong phiên đó; loại `%USERPROFILE%\.vnstock` khỏi backup.
 - **D8 Fixture Form 4:** thay tên / địa chỉ / điện thoại của reporting owner bằng placeholder, giữ nguyên CIK và `<ACCEPTANCE-DATETIME>`; manifest ghi
   `sha256_original` và `sha256_committed`.
+- **D9 Plans tree được commit (owner, 2026-10-24; AGENTS.md "Decisions", merge ở PR tqanh123/FinSec#7, OBSERVED ở main `9214447`).** Nguyên văn:
+  "- 2026-10-24 — The plans tree is committed (plans, research, harness artifacts; it was untracked before). Harness records name the owner `user:tqanh123`, not a personal email: each clone sets `HARNESS_USER=tqanh123` (the harness adds the `user:` prefix), e.g. in the gitignored `.claude/settings.local.json`; git commits use 52412090+tqanh123@users.noreply.github.com."
+  D9 thay thế VL-4 và phần `.gitignore` của red-team r1 RT8: P1 không ignore `plans/` và không có `test_plans_dir_is_ignored` (P1 R1.12); rủi ro PII của RT8 do
+  scrub danh tính (`user:tqanh123`, email noreply), placeholder `<insider-*>` trong research và G5 (Acceptance) xử lý.
 
 **Thiết kế của main session (ghi rõ là của main; red-team có thể thách):**
 - M1 `tzdata` là dependency lõi không marker (P2). M2 Một biến môi trường cho data root ngoài repo, `FINSEC_DATA_ROOT` (tuyệt đối, ngoài clone), dùng chung cho spike và
@@ -104,7 +108,8 @@ của `--deep` được thay bằng bảng "Related Code Files" + citation chín
 - PL6 Task Scheduler logon type Password (đăng ký qua bộ tham số `User`/`Password`, không `Principal`) + wrapper `.cmd` (`python -P`) + WorkingDirectory =
   data root (P3 R3.3) — `[ASSUMED]` tới cổng burn-in (poll `run_mode = 'run'` sau reboot).
 - PL7 Heartbeat mỗi 15 phút + một file mỗi ngày UTC; backup ngày UTC đã đóng lúc 07:15 ICT; ghi vào thư mục sync có retry, lỗi thành DEGRADED.
-- **Sau red-team r1 (2026-10-22; main chấp nhận mọi finding RT1-RT15, LT1-LT12, kèm phán quyết):** `/plans/` vào `.gitignore` (RT8); fsync mọi file đã
+- **Sau red-team r1 (2026-10-22; main chấp nhận mọi finding RT1-RT15, LT1-LT12, kèm phán quyết):** `/plans/` vào `.gitignore` (RT8 — bị D9 thay thế
+  2026-10-24: `plans/` được commit, P1 không chạm `.gitignore`); fsync mọi file đã
   chạm trước commit + đối soát đuôi archive vào `seen` lúc khởi động + luật "first_seen_at sớm nhất thắng" (RT12); watchdog trên daemon thread riêng,
   deadline tổng mỗi request, worker vnstock có timeout, tick giữa các nguồn (RT2/LT1); Python cài cho chính user chạy nó, không fallback uv (RT6);
   P3 một commit trước triển khai, dòng mở cửa sổ ghi ở commit phase đầu tiên sau khi cửa sổ mở (P4-P7), canary chụp lúc `run` + `canary-reset` (LT4); thủ tục khởi động lại cửa sổ / hotfix, dòng mới
@@ -125,7 +130,7 @@ Mỗi bước để lại một FILE hoặc một exit code mà cook kiểm; l�
 | OB3 | owner | Chọn trang/endpoint cổng chính thức từ bảng ứng viên P1 (đọc ToS HOSE trong trình duyệt) | cuối P1 → chặn P2 | dòng Decisions có ngày trong AGENTS.md, cook ghi từ câu trả lời của chính owner (AskUserQuestion ở main) |
 | OB4a | owner | Tài khoản vnstock Community + API key; `vnstock register` dưới user probe trên máy dev (tự gõ key) | P1 | `C:\finsec-probe\out\<date>\vnstock-status.txt` (đã redact) có tier + device |
 | OB4b | owner | `vnstock register` dưới user `capture` trên laptop | P3 | `<backup-mirror>\ops\vnstock-status.txt` + hai file hash before/after bằng nhau |
-| OB5 | owner | User Windows chuẩn riêng trên máy dev (PasswordNeverExpires) + `icacls <clone> /deny vnprobe:(OI)(CI)(R,W,D)` + Python 3.13 cài cho `vnprobe` + venv từ bộ wheel + thư mục chung `C:\finsec-probe\` | P1 | `C:\finsec-probe\out\<date>\ob5\` có `net user vnprobe` ("Password expires Never"), output `icacls`, `pyvenv.cfg` (`home` trong profile `vnprobe`); hash `before-probe` chụp trước `register` |
+| OB5 | owner | User Windows chuẩn riêng trên máy dev (PasswordNeverExpires) + `icacls <clone> /deny vnprobe:(OI)(CI)(R,W,D)` + `icacls H:\study\Project\FinSec_data /deny vnprobe:(OI)(CI)(R,W,D)` (data root dev; cùng ACL kế thừa `Authenticated Users:(M)` — OBSERVED 2026-10-25) + Python 3.13 cài cho `vnprobe` + venv từ bộ wheel + thư mục chung `C:\finsec-probe\` | P1 | `C:\finsec-probe\out\<date>\ob5\` có `net user vnprobe` ("Password expires Never"), output `icacls` của clone và của data root, `pyvenv.cfg` (`home` trong profile `vnprobe`); hash `before-probe` chụp trước `register` |
 | OB6 | owner | `EDGAR_IDENTITY` thật trong `.env` (không phải `research@yourdomain.com`) | P4 | `.venv/Scripts/python scripts/spike/record_edgar_headers.py --check-env` → exit 0, in `ok`; request đầu không phải 403 |
 | OB7 | owner | Thư mục backup (tài khoản cloud phụ) + `FINSEC_BACKUP_DIR` + quyết định Autologon trên laptop + thư mục đọc được từ máy dev | P3 | `heartbeat.json` xuất hiện trong `<backup-mirror>`; owner thấy trên điện thoại (manual, neo `manual_test_anchor.py`); lựa chọn Autologon ghi trong dòng D7 |
 | OB8 | owner | Lệnh OWNER-RUN: `vnstock_probe.py probe` (P1), `vn_counts.py events` (P6) dưới user probe; `laptop-head-<yyyyMMdd>.txt` (P7) | P1, P6, P7 | file output tương ứng trong thư mục chung / `<backup-mirror>\ops\` |
@@ -155,12 +160,18 @@ Main chạy ngày 2026-10-22:
 
 ## Nơi chạy cook
 Cook chạy ở **main checkout** `H:\study\Project\FinSec`, sau khi PR của plan 0b đã merge vào `main`: `git fetch origin` rồi
-`git switch -c claude/phase0a-capture origin/main`; `plans/` (untracked, và bị ignore từ P1 — RT8) đi theo nhánh mới. Lý do như plan 0b "Nơi chạy cook": worktree không có `plans/` lẫn state
-của installer (`.worktreeinclude` chỉ mang `harness/**` + `.claude/settings.json`), strict verify trên tree chưa cài báo drift, và `hs-run` gọi bằng đường dẫn trần sẽ
-đi ngược lên tìm `plans/`. Gọi `hs-run` với `HARNESS_DATA_ROOT` tuyệt đối và KHÔNG đặt `HARNESS_BIN_ROOT` bằng repo (OBSERVED 2026-10-22: đặt thế thì `hs-run` trả
+`git switch -c claude/phase0a-capture origin/main`; `plans/` được track trên `main` (D9; OBSERVED ở `9214447`: 108 file) nên có sẵn trên nhánh mới.
+**Điều kiện trước** (sau `git fetch origin`, trước `git switch`): amendment 2026-10-25 và lần duyệt lại đã merge vào `main`;
+`git show origin/main:plans/261022-1147-phase0a-capture/phases/phase-1-vnstock-probe.md | grep -c "Supersede[d] by D9"` → 1 (`[d]` để chính lệnh này không tự khớp),
+khác → DỪNG (bản trên `main` còn là hợp đồng cũ ignore `plans/`). Lý do chạy ở main checkout như plan 0b
+"Nơi chạy cook", trừ vế `plans/` (một worktree giờ có `plans/` qua git): worktree không có state của installer (`.worktreeinclude` chỉ mang `harness/**` +
+`.claude/settings.json`) và strict verify trên tree chưa cài báo drift. Gọi `hs-run` với `HARNESS_DATA_ROOT` tuyệt đối và KHÔNG đặt `HARNESS_BIN_ROOT` bằng repo (OBSERVED 2026-10-22: đặt thế thì `hs-run` trả
 `state: error` "SHARED bin root … refusing"; chỉ `HARNESS_DATA_ROOT` → exit 10 bình thường — P7 R7.5). Sau mỗi lần `pyproject.toml` đổi (P1, P2):
 `.venv/Scripts/python -m pip install -e ".[dev]"`. Nếu plan 0b đã được archive vào `plans/archive/` trước khi cook: sửa mỗi `from:` liên plan thành
-`archive/261021-1314-phase0b-foundations/P5` (một dòng mỗi cạnh), không waive. Máy dev cần `FINSEC_DATA_ROOT` (ví dụ `D:\finsec-data`, ngoài clone).
+`archive/261021-1314-phase0b-foundations/P5` (một dòng mỗi cạnh), không waive. Máy dev cần `FINSEC_DATA_ROOT` = `H:\study\Project\FinSec_data` (owner tạo 2026-10-25, ngoài clone; OBSERVED: `git -C H:/study/Project/FinSec_data rev-parse`
+→ "not a git repository"); OB5 chặn `vnprobe` khỏi thư mục này. **Trước commit đầu:** `git config user.email` → `52412090+tqanh123@users.noreply.github.com` và
+`HARNESS_USER` = `tqanh123` (D9; OBSERVED 2026-10-25 trong worktree: cả hai đúng — địa chỉ noreply đến từ config local của repo, mọi worktree dùng chung; config
+toàn cục của máy KHÔNG phải noreply); khác → DỪNG.
 
 ## Features
 - `vnstock-pinned-env` — môi trường vnstock Gen 5 khoá hash: vnstock chỉ từ index vendor, mọi gói khác chỉ từ PyPI, cô lập dưới user riêng.
@@ -194,7 +205,6 @@ của installer (`.worktreeinclude` chỉ mang `harness/**` + `.claude/settings.
 | Heartbeat `capture-heartbeat/1` | — | JSON khoá cố định, `OK\|DEGRADED\|DOWN`, canary chụp lúc `run`, `wu_pause_expiry` (P2 R2.10) | P2 |
 | Backup đêm | — | `daily/<d>/{capture-<d>.tar.gz, state-<d>.sqlite (journal DELETE), manifest-<d>.json}` + đọc an toàn `iter_backup_members` (P2 R2.11) | P2 |
 | Audit | — | đọc snapshot `mode=ro&immutable=1`; cặp ảo hai mép; ≥ 1 poll ok mỗi nguồn cổng trong 08:00-17:30 mỗi ngày giao dịch (P2 R2.12) | P2 |
-| `.gitignore` | không ignore `plans/` | + `/plans/` (ngoài block installer) | P1 |
 | Dòng cửa sổ trong AGENTS.md | — | "capture window started/restarted <date> at <sha>", dòng mới nhất thắng (ghi lần đầu ở commit phase đầu tiên sau khi cửa sổ mở: P4, P5, P6 hoặc P7; sau đó theo R3.9) | P4-P7, R3.9 |
 | `finsec_alpharadar.connectors.edgar_acceptance` | — | `extract_acceptance_raw`, `parse_acceptance_datetime`, `us_session_bucket`, họ `EdgarAcceptanceError` | P4 |
 | `.gitattributes` | `harness/** -text` | + `tests/fixtures/edgar_headers/** -text` | P4 |
@@ -232,7 +242,7 @@ Mọi số/sự thật ─► docs/phase0-spike-report.md + AGENTS.md "Verified 
 ## Phases
 | # | Theme | Phụ thuộc | Cỡ |
 |---|---|---|---|
-| 1 | Vnstock Probe — guard data root, lock hash + extra `capture`, probe vnstock (user riêng) + probe cổng, báo cáo spike, `/plans/` vào `.gitignore`, owner chọn cổng (OB3) | 0b/P5 | L (17 tệp: 9 mới, 3 config, 1 test sửa, 4 docs; OB3, OB4a, OB5, OB8) |
+| 1 | Vnstock Probe — guard data root, lock hash + extra `capture`, probe vnstock (user riêng) + probe cổng, báo cáo spike, owner chọn cổng (OB3) | 0b/P5 | L (15 tệp: 9 mới, 2 config, 4 docs; OB3, OB4a, OB5, OB8) |
 | 2 | Capture Poller — `capture/` 12 module, schema v1, state, heartbeat, backup, audit, `configs/capture.toml`, tzdata | P1, 0b/P5 | XL (29 tệp: 12 module, 10 test, config, 2 cấu hình gốc, 4 docs) |
 | 3 | Capture Deploy — runbook + config cuối (một commit, TRƯỚC triển khai), rồi laptop (OB2, OB4b, OB7), task, burn-in 24 h, mở cửa sổ 5 phiên + đóng băng, thủ tục hotfix R3.9 | P2, 0b/P5 | M (5 tệp; phần lớn vận hành) |
 | 4 | Edgar Golden Test — script ghi, 8 fixture + manifest, `edgar_acceptance.py`, `test_edgar_time.py`, `.gitattributes` (OB6) | P3, 0b/P5 | M (19 tệp; 9 fixture ghi máy) |
@@ -258,7 +268,7 @@ file dùng chung (`AGENTS.md`, `docs/*`, `docs/phase0-spike-report.md`, `tests/t
 | `tests/test_capture_ops.py` | P2 | unit (heartbeat, backup + đọc tar an toàn, audit hai mép + snapshot chỉ đọc, ghi bị khoá) | test | chạy |
 | `tests/test_capture_cli.py` | P2 | integration CLI (factory giả, git tạm) | test + invariant (config tuân D5) | chạy |
 | `tests/test_capture_invariants.py` | P2 | invariant cấu trúc (AST, regex, subprocess `-I`) | invariant | chạy |
-| `tests/test_repo_hygiene.py` (test `plans/` P1; tham số mới P2; test mới P5) | P1, P2, P5 | invariant repo | invariant | chạy |
+| `tests/test_repo_hygiene.py` (tham số mới P2; test mới P5) | P2, P5 | invariant repo | invariant | chạy |
 | `tests/test_edgar_time.py` | P4 | golden + âm tính + phân loại phiên | test | chạy |
 | `tests/test_power_rule.py` | P6 | unit | test | chạy |
 | `tests/test_no_order_execution.py`, `tests/test_agents_md_paths.py` (có sẵn) | mọi phase | invariant (quét script spike mới; path AGENTS.md) | invariant | chạy |
@@ -297,11 +307,15 @@ Mỗi mục có spec class (five-hat): `test` = lệnh/assert tự động; `inv
     (5 phiên giao dịch liên tiếp, heartbeat mỗi ngày, không khoảng trống chưa ghi), cộng đối chiếu Event Log [manual].
 - [ ] [invariant] Không dữ liệu có bản quyền, key, liên hệ EDGAR hay tên người trong file commit:
   - G1 `git ls-files tests/fixtures` → chỉ 9 file dưới `tests/fixtures/edgar_headers/` (baseline OBSERVED 2026-10-22 ở `a76e7c9`: 0 file);
-  - G2 `git ls-files | grep -iE "\.(jsonl|parquet|whl|sqlite|db|bin)$"` → chỉ 5 file `.jsonl` có sẵn dưới `harness/data/port-control/cases/*/port/ledger.jsonl`
-    (baseline OBSERVED 2026-10-22: đúng 5 dòng đó);
+  - G2 `git ls-files | grep -iE "\.(jsonl|parquet|whl|sqlite|db|bin)$" | grep -vE '^harness/data/port-control/cases/[^/]+/port/ledger\.jsonl$|^plans/[^/]+/artifacts/(auto-decisions|phase-commits|record-log|phase-superseded-P[0-9]+|harness-checks-P[0-9]+)\.jsonl$'`
+    → rỗng (grep cuối exit 1). Allowlist theo TÊN, không theo thư mục: 5 ledger `.jsonl` có sẵn dưới `harness/data/port-control/` và các tên artifacts harness đã biết
+    dưới `plans/*/artifacts/` (D9; tập đóng của cây 0b, cộng `harness-checks-<phase>.jsonl` mà `harness/scripts/harness_checks.py:52` ghi), nên một capture/spike
+    `.jsonl` chép tay vào `artifacts/` vẫn bị bắt (baseline OBSERVED 2026-10-25 ở worktree trên `9214447`: bước đầu ra 9 dòng = 5 ledger + 4 của plan 0b; cả lệnh → rỗng);
   - G3 `git grep -n -F "$EDGAR_IDENTITY"`, `git grep -n -F "$ALPACA_API_KEY"`, `git grep -n -F "$ALPACA_SECRET_KEY"` → không hit (shell đã nạp `.env`);
   - G4 `tests/test_edgar_time.py::test_form4_fixture_is_redacted` xanh; diff AGENTS.md/báo cáo không có tiêu đề công bố hay tên người (đọc lại trước mỗi commit P1, P6);
-  - G5 `git ls-files plans` → rỗng (red-team r1 RT8; `/plans/` bị ignore từ P1); không commit nào dùng `git add -A`.
+  - G5 không danh tính cá nhân trong file commit (D9): `git grep -n -E 'tqanh6203[t]kqn' -- .` → không hit (baseline OBSERVED 2026-10-24: 0; `[t]` để chính dòng này không tự khớp); research giữ placeholder `<insider-*>`; file plan được add theo đường dẫn tường minh, không bao giờ `git add -A`;
+    metadata commit của nhánh: `git log --format='%ae%n%ce' origin/main..HEAD | sort -u` → chỉ `52412090+tqanh123@users.noreply.github.com` (và `noreply@github.com`).
+    Không bao giờ viết địa chỉ cá nhân nguyên văn vào file nào dưới `plans/` (G5 sẽ khớp).
 - [ ] [invariant] Mỗi ngày giao dịch của cửa sổ có file `<backup-mirror>\heartbeats\heartbeat-<d>.json` đã sync (red-team r1 RT11; kiểm ở P7).
 - [ ] [invariant] Không test nào chạm mạng/đồng hồ/sleep: `tests/test_capture_invariants.py` xanh; `grep -rnE "urlopen\(|socket\.socket|requests\.(get|post)|time\.sleep\(" tests/`
   → chỉ hit nằm trong chuỗi mẫu của `tests/test_capture_invariants.py` (baseline OBSERVED 2026-10-22: 0 hit).
@@ -311,13 +325,16 @@ Mỗi mục có spec class (five-hat): `test` = lệnh/assert tự động; `inv
 ## Rollback
 - Mỗi phase là đúng một commit trên `claude/phase0a-capture`. Hoàn tác theo thứ tự ngược `git revert <sha-P7>` … `<sha-P1>` (phase sau xây trên file của phase trước;
   revert lẻ giữa chuỗi có thể conflict ở AGENTS.md/docs — khi đó revert luôn các phase sau). Sau mỗi revert chạy lại regression gate của phase đứng trước.
+- Artifacts harness của phase N ghi SAU commit của nó (`verification-P<n>.json`, dòng verify của `phase-commits.jsonl`; `verification-P3.json` sau burn-in) đi vào
+  commit của phase N+1, add theo đường dẫn tường minh sau khi G5 sạch; sau P7 thêm đúng một commit `chore(plans): record P7 cook artifacts` trước khi PR
+  "Ready for review" — ngoại lệ có tên của "một commit mỗi phase". Revert một phase cũng gỡ artifacts nó mang; chạy lại verify thay vì sửa tay.
 - Merge PR bằng "Create a merge commit" để SHA từng phase còn trên `main`; rollback sau merge: nhánh mới từ `main`, `git revert -m 1 <merge-sha>`, đưa qua PR.
 - **Dữ liệu đã thu KHÔNG BAO GIỜ bị xoá** — kể cả khi revert P2/P3: data root trên laptop, thư mục backup và output spike nằm ngoài repo, append-only; rollback chỉ
   dừng tiến trình (runbook mục 17: `Unregister-ScheduledTask`, `powercfg /import` baseline, tắt Autologon, trả W32Time về trigger-start), không chạm file dữ liệu.
 - Revert P2 khi laptop đang chạy: dừng task TRƯỚC (một outage `process_down` sẽ được ghi khi chạy lại), rồi revert; dữ liệu v1 đã ghi vẫn đọc được bằng `from_json_line`
   của commit cũ.
-- Revert P1 bỏ pin + lock (vnstock quay về dòng `prod` không cài được — đúng trạng thái trước plan) và bỏ `/plans/` khỏi `.gitignore` (khi đó KHÔNG
-  `git add -A`: `plans/` lại hiện `??`); venv probe và laptop nằm ngoài repo, xoá tay nếu cần.
+- Revert P1 bỏ pin + lock (vnstock quay về dòng `prod` không cài được — đúng trạng thái trước plan); revert gỡ các file artifacts của plan mà commit P1 đã thêm; phần còn lại của `plans/` không đổi (D9);
+  venv probe và laptop nằm ngoài repo, xoá tay nếu cần.
 - P3 có đúng một commit (runbook + config cuối) đứng TRƯỚC triển khai (red-team r1 LT4); revert nó không gỡ triển khai — gỡ bằng runbook mục 17. Mỗi
   hotfix R3.9 là một commit `fix(capture): …` riêng, revert được độc lập (rồi ghi dòng "window restarted" mới).
 - Môi trường local: `.venv/` tái tạo bằng `pip install -e ".[dev]"`; `C:\finsec-probe\` và `C:\finsec\venv` ngoài repo.
@@ -331,7 +348,7 @@ Mỗi mục có spec class (five-hat): `test` = lệnh/assert tự động; `inv
 | Một khoảng trống chưa ghi phá chuỗi 5 phiên | Trung bình × Trung bình | Quy tắc khoảng trống theo lịch + outage tự động (process_down, host_stalled, clock_step); audit; không làm mềm, đếm lại. |
 | Owner chậm ở bước chặn → chuỗi tuyến tính đứng | Trung bình × Cao | Danh sách OB đưa lúc duyệt; mỗi phase DỪNG rõ ràng; tuần sạch cho cửa sổ kéo tới 18/12/2026. |
 | Backfill P6 ăn quota vnstock chung với laptop trong cửa sổ | Trung bình × Trung bình | Chạy đêm, rate dưới ngưỡng an toàn, dừng ở quota < 30%; lỗi quota trên laptop là outage đã ghi của nguồn phụ. |
-| Dữ liệu có bản quyền / tên người / key lọt vào repo public | Thấp × Cao | Guard data root; payload test tổng hợp; fixture SEC giảm PII; `/plans/` bị ignore; grep G1-G5 ở Acceptance; pre-push gate quét secret (AGENTS.md:126). |
+| Dữ liệu có bản quyền / tên người / key lọt vào repo public — kể cả `plans/`, public từ D9 | Thấp × Cao | Guard data root; payload test tổng hợp; fixture SEC giảm PII; text plan, research và artifacts không bao giờ mang dữ liệu có bản quyền, key, liên hệ EDGAR hay tên người (D9); grep G1-G5 ở Acceptance (G2, G3, G5 chạy trên toàn repo nên phủ cả `plans/`); pre-push gate quét secret (AGENTS.md:126). |
 | HOSE đổi API SPA / WAF chặn | Trung bình × Trung bình | Outage có tên; HNX chạy song song; probe P1 đo WAF; `pageSize ≤ 20`, ≥ 5 s giữa trang. |
 | Schema v1 thiếu thứ Phase 1/3 cần | Trung bình × Cao | Giữ byte gốc (blob + item nguyên văn + sha + descriptor); v2 chỉ thêm trường. |
 | Phase 2 lớn (29 tệp) | Trung bình × Trung bình | TDD theo thứ tự module, test đích sau mỗi module, một commit khi cả gate xanh. |
@@ -369,7 +386,7 @@ Quyết định chép nguyên văn lựa chọn của owner.
 | VL-1 | Assumptions / Scope | Seed universe cho nguồn `vnstock_events` trên laptop (không có chủ trước validate) | "VN30 tại ngày P1" | Không ghi DEC (tham số config). `phases/phase-1-vnstock-probe.md` R1.10 + bước probe rate limit; `phases/phase-2-capture-poller.md` R2.15 (`symbols`, comment ngày as-of). |
 | VL-2 | Architecture (quy trình) | Thời điểm PR / merge | "Một PR, merge sau P7" | Không ghi DEC. `plan.md` PL11; `phases/phase-1-vnstock-probe.md` bước 12 (draft PR); `phases/phase-7-phase0-exit-audit.md` bước 5 (merge commit sau cook). |
 | VL-3 | Risks / Trade-offs | Hotfix `capture/` giữa cửa sổ 5 phiên | "Đếm lại từ đầu" | Không ghi DEC riêng: thành một vế của dòng Decisions D4 mà Phase 3 thêm vào AGENTS.md. `phases/phase-3-capture-deploy.md` R3.7 (restart cùng SHA = outage đã ghi; SHA mới = đếm lại), R3.9 (Ghi lại), delta AGENTS.md D4; `phases/phase-7-phase0-exit-audit.md` Risk. Trước đó R3.9 ghi "redeploy có chủ đích thì đếm tiếp" — đã sửa theo VL-3. |
-| VL-4 | Assumptions / Risks | Ignore `/plans/` (red-team r1 RT8) | "Ignore /plans/" | Không ghi DEC. `phases/phase-1-vnstock-probe.md` R1.12 (đánh dấu VL-4); Acceptance G5 trong `plan.md`. |
+| VL-4 | Assumptions / Risks | Ignore `/plans/` (red-team r1 RT8) | "Ignore /plans/" — superseded by D9 (owner, 2026-10-24) | Không ghi DEC. Superseded by D9: không còn nơi nào mang VL-4 — `phases/phase-1-vnstock-probe.md` R1.12 là ghi chú superseded; G5 nay là kiểm danh tính của D9. |
 
 - Không ghi DEC qua `decision_register.py`: luật Agent Memory Protocol của dự án đặt mọi quyết định bền vững vào AGENTS.md "Decisions" — cook thêm các
   dòng D2-D8 + dòng cửa sổ ở P1-P7 như từng phase ghi; một sổ DEC thứ hai sẽ thành nguồn song song (như plan 0b).
@@ -379,6 +396,20 @@ Quyết định chép nguyên văn lựa chọn của owner.
   thư mục quy tắc toàn cục của Antigravity (probe P1), ρ = 0.10 (P6, thay bằng ρ̂ ở Phase 3), khoá registry hạn pause Windows Update (P3), bảng mã lỗi
   vnstock (probe P1), chính sách mật khẩu laptop (đã vô hiệu bằng `PasswordNeverExpires`), `mklink /J` không cần admin (RED đầu của P1).
 - Hai quyết định owner đưa ra lúc cook, không điền trước: cặp cổng (OB3, cuối P1; đề xuất HOSE API + HNX RSS feed 3) và đường dẫn thư mục backup (OB7).
+
+**Amendment 2026-10-25 (owner approved).** D9 (AGENTS.md "Decisions", 2026-10-24: `plans/` được commit, danh tính `user:tqanh123`, email noreply) áp vào plan; mọi
+quyết định khác giữ nguyên (gồm luật pin vnstock). Thay đổi: thêm D9 vào "Quyết định đã khoá"; P1 bỏ thay đổi `.gitignore` và `test_plans_dir_is_ignored` (R1.12 thành
+ghi chú "superseded by D9"; `.gitignore` và `tests/test_repo_hygiene.py` rời "Related Code Files" của P1 và `files_to_modify` P1 trong `plan-graph.yaml`; P1 còn 15 tệp,
+13 test mới); bỏ hàng `.gitignore` của "Hợp đồng thay đổi"; sửa các dòng coi `plans/` là untracked/ignored (bullet red-team r1 trong "Thiết kế của planner",
+"Nơi chạy cook", bảng Phases P1, Ma trận test, G2 và G5 của Acceptance, Rollback P1, Risks; P1 bước 0 và 3, delta `docs/code-standards.md`, Success Criteria,
+Risk); `FINSEC_DATA_ROOT` dev = `H:\study\Project\FinSec_data` (owner tạo, ngoài clone); VL-4 ghi superseded; hàng RT8 của disposition r1 viết lại cột cuối.
+
+**Amendment 2026-10-25, lần 2 (sửa sót của cùng amendment sau một lần kiểm độc lập).** Điều kiện trước "đã merge vào `main`" (grep `Supersede[d] by D9`) ở
+"Nơi chạy cook" và P1 bước 0; kiểm `git config user.email` + `HARNESS_USER` trước commit đầu và kiểm metadata commit trong G5; G2 (và Success Criteria P1)
+allowlist theo TÊN artifacts harness thay vì cả `plans/*/artifacts/`; OB5 thêm `icacls … /deny vnprobe` cho data root dev `H:\study\Project\FinSec_data`; invariant
+`git status --porcelain` của P5 cho phép file của plan; Rollback có commit sở hữu cho artifacts ghi sau commit (P3 câu thứ tự commit, P7 bước 5 trỏ về đó) và
+sửa câu "revert không chạm `plans/`"; bỏ vế "`hs-run` đường dẫn trần đi ngược lên `plans/`" khỏi lý do "Nơi chạy cook"; cột cuối VL-4; cite RT5/LT12 theo số dòng
+mới của P1 và RT8 thêm «quote».
 
 ### Whole-Plan Consistency Sweep
 - Files reread end to end (không chỉ diff), ở main ngày 2026-10-24, sau validate: `plan.md`, `phases/phase-1-vnstock-probe.md`, `phases/phase-2-capture-poller.md`,
@@ -397,6 +428,15 @@ Quyết định chép nguyên văn lựa chọn của owner.
   cùng một luật "dữ liệu chỉ ở ngoài clone"), `capture/host.py` (module duy nhất chạm đồng hồ/ngủ/khoá/power request/lệnh hệ thống), `quant/power_rule.py`,
   `iter_backup_members`, `canary-reset`. Không thuật ngữ nghiệp vụ mới nào cần `glossary_register.py` (tên mới là định danh code).
 - Unresolved contradictions: 0.
+- Amendment 2026-10-25: reread `plan.md`, `phases/phase-1-vnstock-probe.md` và `plan-graph.yaml` toàn văn, grep `phases/phase-2..7` cho `plans/`, `.gitignore`,
+  `ls-files`, G1-G5 (không chỗ nào khác coi `plans/` là ignored); decision deltas checked: 1 (D9 thay VL-4 + phần `.gitignore` của RT8); reconciled stale
+  references: 2 ngoài danh sách của amendment — G2 và Success Criteria P1 đếm `.jsonl` tracked là 5, nay là 9 vì artifacts plan 0b được track (D9); unresolved
+  contradictions: 0. OBSERVED 2026-10-25 từ gốc worktree: `plan_graph.py … --require` → exit 0 (chỉ 3 advisory `.env.example`); `--facts` → `declared_files: 52`
+  (53 trước amendment: `.gitignore` rời P1); `git grep -n -E 'tqanh6203[t]kqn' -- .` → exit 1 (G5 không tự khớp).
+- Amendment 2026-10-25, lần 2: grep `phases/phase-1..7` + `plan.md` thêm cho `git status --porcelain`, `git add`, `verification-P`, `hs-run`, `icacls`; reconciled
+  stale references: 10 (P5 `git status --porcelain`, G2 ×2, Rollback ×2 + P3 + P7, VL-4, "Nơi chạy cook" vế `hs-run`, cite RT5/LT12/RT8); decision deltas checked: 1
+  (D9 — thêm phần email/`HARNESS_USER` mà G5 cũ không kiểm); unresolved contradictions: 0. OBSERVED 2026-10-25 từ gốc worktree: G2 mới → rỗng; `grep -c
+  "Supersede[d] by D9" phases/phase-1-vnstock-probe.md` → 1; `icacls H:\study\Project\FinSec_data` → `Authenticated Users:(I)(OI)(CI)(IO)(M)`; `declared_files` vẫn 52.
 
 ## Red-team disposition — r1
 Báo cáo `reports/from-code-reviewer-to-planner-red-team-r1-plan-review-report.md`: verdict REVISE, 4 persona (Security Adversary, Failure Mode Analyst,
@@ -412,10 +452,10 @@ Long tail không thuộc gate nhưng cũng được Accept (sửa rẻ, cùng h�
 | RT2 | H | Accept | P2 | `phases/phase-2-capture-poller.md:186` «**Watchdog trên daemon thread riêng** (red-team r1 RT2, phán quyết của main):», `phases/phase-2-capture-poller.md:150` «SourceError(source_unreachable)» | Watchdog trên daemon thread riêng gọi `os._exit(70)`; deadline tổng mỗi request; vnstock trong worker có timeout (phán quyết của main). |
 | RT3 | H | Accept | P3, P1 | `phases/phase-3-capture-deploy.md:53` «6. Accounts (D7) — tạo user cục bộ CHUẨN … capture … và», `phases/phase-1-vnstock-probe.md:89` «- tạo user Windows chuẩn cục bộ (ví dụ … vnprobe … ) và» | Main kiểm: chính sách máy dev 42 ngày. `PasswordNeverExpires` cho `capture` và `vnprobe`; chính sách laptop vẫn `[ASSUMED]` nhưng không còn ảnh hưởng. |
 | RT4 | H | Accept | P1, P3 | `phases/phase-1-vnstock-probe.md:91` «- chặn user probe khỏi clone:», `phases/phase-3-capture-deploy.md:35` «Python per-user của admin không chạy được dưới user khác); … C:\finsec\» | Main kiểm: `Authenticated Users:(M)` kế thừa trên clone và `C:\`. `icacls /deny` cho user probe; `C:\finsec` bỏ kế thừa, `capture` chỉ RX ngoài data root. |
-| RT5 | H | Accept | P1 | `phases/phase-1-vnstock-probe.md:263` «6. **Hash TRƯỚC mọi lần import vnstock (red-team r1 RT5)** — cả hai đều là tiến », `phases/phase-1-vnstock-probe.md:272` «rồi … git diff --exit-code HEAD -- AGENTS.md CLAUDE.md .agents» | Hash trước mọi lần import vnstock (trước `vnstock register`), tiến trình `python -I` mới, hash của dev user ngoài thư mục chung, cộng `git diff --exit-code`. |
+| RT5 | H | Accept | P1 | `phases/phase-1-vnstock-probe.md:255` «6. **Hash TRƯỚC mọi lần import vnstock (red-team r1 RT5)** — cả hai đều là tiến », `phases/phase-1-vnstock-probe.md:264` «rồi … git diff --exit-code HEAD -- AGENTS.md CLAUDE.md .agents» | Hash trước mọi lần import vnstock (trước `vnstock register`), tiến trình `python -I` mới, hash của dev user ngoài thư mục chung, cộng `git diff --exit-code`. |
 | RT6 | H | Accept | P1, P3 | `phases/phase-1-vnstock-probe.md:97` «- **Python cho chính user probe** (red-team r1 RT6): trong phiên … vnprobe», `phases/phase-3-capture-deploy.md:34` «1. Prerequisites — Windows 11, cắm AC, Ethernet nếu có; Python 3.13 x64 từ pytho» | Main kiểm: không có `py.exe`, Python là gói Store. Python 3.13 từ python.org cài cho chính user chạy nó; bỏ fallback uv (planner: không chép `uv.exe`). |
 | RT7 | M | Accept | P2 | `phases/phase-2-capture-poller.md:173` «- **Quota không raise** (red-team r1 RT7): vendor trả frame bị cắt +» | Bắt `UserWarning` + đọc `df.attrs`; cắt quota → outage `vendor_quota_exceeded`, không tiến con trỏ. Giới hạn: `catch_warnings` không thread-safe → đúng một worker vnstock (ghi ở R2.8). |
-| RT8 | M | Accept | P1, plan | `phases/phase-1-vnstock-probe.md:203` «**R1.12 … .gitignore … — ignore … plans/», `plan.md:304` «- G5 … git ls-files plans … → rỗng (red-team r1 RT8; … /plans/» | `/plans/` vào `.gitignore` ở P1 + test hygiene + G5; tên người ở `research/vn-disclosure-portals.md` đã thay bằng placeholder. E3 chạy lại ngay sau sửa (`[ASSUMED]` không bước harness nào cần `plans/` được track). |
+| RT8 | M | Accept | P1, plan | `phases/phase-1-vnstock-probe.md:203` «**R1.12 Superseded by D9 (owner, 2026-10-24) — P1 không chạm», `plan.md:316` «- G5 không danh tính cá nhân trong file commit (D9):» | Bản sửa `.gitignore` (`/plans/` + test hygiene) bị D9 (owner, 2026-10-24) thay thế: `plans/` được commit, P1 không chạm `.gitignore`. Rủi ro PII giờ do scrub danh tính (`user:tqanh123`, email noreply), placeholder `<insider-*>` trong `research/vn-disclosure-portals.md` và kiểm G5 xử lý. |
 | RT9 | M | Accept | P2, P6 | `phases/phase-2-capture-poller.md:219` «- **Đọc backup an toàn — … iter_backup_members(archive_path, manifest_path)», `phases/phase-6-vn-reconcile.md:47` «finsec_alpharadar.capture.backup.iter_backup_members(archive, manifest)» | Main kiểm: `extraction_filter` mặc định `None` ở 3.13.14. Đọc tar qua `iter_backup_members` (kiểm sha với manifest trước, whitelist member, không `extractall`). |
 | RT10 | M | Accept | P1, P3 | `phases/phase-1-vnstock-probe.md:79` «- **Bộ wheel riêng = nguồn cài DUY NHẤT** (research … vnstock-gen5.md», `phases/phase-3-capture-deploy.md:61` «8. Install — chép bộ wheel … $FINSEC_DATA_ROOT\wheels\win-py313\» | Bộ wheel riêng là nguồn cài duy nhất (`--no-index --find-links --require-hashes`); planner OBSERVED `pip download` đủ 6 wheel. |
 | RT11 | M | Accept | P2, P7 | `phases/phase-2-capture-poller.md:204` «atomic (tạm + … os.replace … ) cả … heartbeat.json … và», `phases/phase-7-phase0-exit-audit.md:34` «- File heartbeat đã sync: với MỖI ngày giao dịch của cửa sổ,» | Retry có giới hạn khi `os.replace` gặp `PermissionError`, DEGRADED thay vì chết; P7 kiểm file heartbeat đã sync cho từng ngày. |
@@ -434,4 +474,4 @@ Long tail không thuộc gate nhưng cũng được Accept (sửa rẻ, cùng h�
 | LT9 | L | Accept | P2 | `phases/phase-2-capture-poller.md:152` «so … clock.monotonic() … với … deadline_s … → quá hạn = … source_unreachable» | Giới hạn cỡ áp khi đọc và khi giải nén, có test gzip bom. |
 | LT10 | L | Accept | P2 | `phases/phase-2-capture-poller.md:249` «chạy — red-team r1 LT4). **Khoá một tiến trình cho mọi lệnh ghi archive/outage**» | Mọi lệnh ghi lấy `SingleInstanceLock`. |
 | LT11 | L | Accept | P2 | `phases/phase-2-capture-poller.md:264` «Lý do đúng (red-team r1 LT11): zoneinfo tìm … TZPATH … trước rồi mới tới gói» | Viết lại lý do của `tzdata` (TZPATH trước, gói sau); cận dưới là bản lock resolve được. |
-| LT12 | L | Accept | P1, P5 (và P2, P4, P6, P7) | `phases/phase-1-vnstock-probe.md:295` «- Số test do regression gate in ra, ở ĐỦ năm chỗ (red-team r1 LT12):», `phases/phase-5-alpaca-probe.md:70` «Ghi chú parser: … .env.example … → advisory đã biết. … docs/code-standards.md» | Số test ở đủ năm chỗ trong docs; sửa trích dẫn `pyproject.toml` sau khi P1 đổi file. |
+| LT12 | L | Accept | P1, P5 (và P2, P4, P6, P7) | `phases/phase-1-vnstock-probe.md:287` «- Số test do regression gate in ra, ở ĐỦ năm chỗ (red-team r1 LT12):», `phases/phase-5-alpaca-probe.md:70` «Ghi chú parser: … .env.example … → advisory đã biết. … docs/code-standards.md» | Số test ở đủ năm chỗ trong docs; sửa trích dẫn `pyproject.toml` sau khi P1 đổi file. |

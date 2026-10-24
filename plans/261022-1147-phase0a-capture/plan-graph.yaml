@@ -39,8 +39,6 @@ subtasks:
     files_to_modify:
       - pyproject.toml
       - .env.example
-      - .gitignore
-      - tests/test_repo_hygiene.py
       - AGENTS.md
       - docs/system-architecture.md
       - docs/code-standards.md

@@ -90,7 +90,7 @@ tới lúc cook — commit đúng file cook sinh ra, header của uv ghi lại l
     age (days): 42" (OBSERVED main 2026-10-22, `net accounts`; red-team r1 RT3); bằng chứng `net user vnprobe` → "Password expires Never";
   - chặn user probe khỏi clone: `icacls H:\study\Project\FinSec /deny vnprobe:(OI)(CI)(R,W,D)` — hôm nay clone và `C:\` kế thừa
     `NT AUTHORITY\Authenticated Users:(M)` (OBSERVED main 2026-10-22, `icacls`; red-team r1 RT4), nên "user riêng" không cô lập gì nếu thiếu bước này;
-    lưu output `icacls H:\study\Project\FinSec` làm bằng chứng;
+    lưu output `icacls H:\study\Project\FinSec` làm bằng chứng; cùng lệnh cho data root dev: `icacls H:\study\Project\FinSec_data /deny vnprobe:(OI)(CI)(R,W,D)` (thư mục đó cũng kế thừa `NT AUTHORITY\Authenticated Users:(I)(OI)(CI)(IO)(M)` — OBSERVED 2026-10-25, `icacls` — và giữ bộ wheel, body spike cổng, bản ghi EDGAR trước khi thành fixture; `vnprobe` không cần nó: kit và output ở `C:\finsec-probe\`); lưu output vào `C:\finsec-probe\out\<date>\ob5\`;
   - thư mục chung ngoài cả hai profile và ngoài clone, ví dụ `C:\finsec-probe\` (Modify cho cả hai user); con: `kit\` (agent copy
     `scripts/spike/vnstock_probe.py`, `requirements/vnstock/win-py313.lock` và bộ wheel `wheels\` của R1.3 — user probe không cần đọc clone), `venv\`,
     `work\` (cwd của probe), `out\<UTC-date>\`. Hash của dev user KHÔNG nằm ở đây (R1.5, RT5);
@@ -200,17 +200,10 @@ vnstock `vci:<id>`); URL cổng được chọn + `pageSize`/`max_pages`; timeou
 state, đồng hồ lệch ~6 phút); VSDC để Phase 3. Owner tự mở `https://www.hsx.vn/dieu-khoan-su-dung` (SPA, cần trình duyệt) và chép câu liên
 quan. Cook chỉ ghi dòng Decisions từ câu trả lời của chính owner trong phiên (AskUserQuestion ở main) — không bao giờ tự giả định.
 
-**R1.12 `.gitignore` — ignore `plans/` (red-team r1 RT8, phán quyết của main; owner xác nhận VL-4, 2026-10-24).** `plans/` hiện không track mà cũng không bị ignore (OBSERVED red-team r1:
-`git check-ignore -v plans/x.md` → exit 1, `git ls-files plans` → 0 dòng) và chứa email của owner (frontmatter `author:`) cùng ghi chú research; một
-`git add -A` sẽ đẩy chúng lên repo PUBLIC. Thêm NGOÀI block installer (`.gitignore:60-67` ở `c9168f0`), ngay sau block data artefacts (`.gitignore:37-48`),
-tiếng Anh (bỏ thụt khi chép):
-  ```
-  # Plans hold research notes, owner contacts and probe details; they stay local (red-team r1 RT8, 2026-10-22).
-  /plans/
-  ```
-`hs-run`/`plan_approval` đọc `plans/` từ đĩa; cook kiểm lại E3 (`hs-run plan next --plan plans/261022-1147-phase0a-capture` vẫn trả envelope hợp lệ) ngay
-sau khi sửa — `[ASSUMED]` không bước harness nào cần `plans/` được track, tới lần chạy đó. Tên người thật trong `research/vn-disclosure-portals.md:130`
-đã được thay bằng `<insider-A>`, `<insider-B>` (2026-10-22).
+**R1.12 Superseded by D9 (owner, 2026-10-24) — P1 không chạm `.gitignore`.** `plans/` được commit (D9; OBSERVED ở main `9214447`: `git ls-files plans` → 108 file),
+nên bản sửa `/plans/` + `test_plans_dir_is_ignored` của red-team r1 RT8 / VL-4 bị bỏ. Rủi ro PII mà RT8 nhắm tới giờ do D9 xử lý: danh tính harness là
+`user:tqanh123`, commit dùng email noreply, tên người thật trong `research/vn-disclosure-portals.md:130` đã thay bằng `<insider-A>`, `<insider-B>` (2026-10-22), và G5
+trong `plan.md` (Acceptance) kiểm không còn danh tính cá nhân trong file commit; file plan chỉ được add theo đường dẫn tường minh, không bao giờ `git add -A`.
 
 ## Related Code Files
 | Hành động | Tệp |
@@ -226,8 +219,6 @@ sau khi sửa — `[ASSUMED]` không bước harness nào cần `plans/` đượ
 | Create | `docs/phase0-spike-report.md` |
 | Modify | `pyproject.toml` |
 | Modify | `.env.example` |
-| Modify | `.gitignore` |
-| Modify | `tests/test_repo_hygiene.py` |
 | Modify | `AGENTS.md` |
 | Modify | `docs/system-architecture.md` |
 | Modify | `docs/code-standards.md` |
@@ -242,20 +233,21 @@ plan-graph.yaml; hàng chỉ đọc/chạy ghi `read`/`run` ở cột đầu.
 Ghi chú parser: `.env.example` có đuôi `example` không thuộc `_FILE_EXTS` (`harness/scripts/plan_graph.py:597-601`), nên
 `plan_graph.py --require` in một dòng advisory "P1 declares .env.example …" — đã biết (như plan 0b P5), không chặn.
 
-Challenge luật ">8 tệp": 17 tệp = 9 mới (2 guard/test, 2 lock, 3 spike, 1 báo cáo, 1 module) + 3 config (`pyproject.toml`, `.env.example`,
-`.gitignore`) + 1 test sửa + 4 docs. Tách thêm phase chỉ nhân
+Challenge luật ">8 tệp": 15 tệp = 9 mới (2 guard/test, 2 lock, 3 spike, 1 báo cáo, 1 module) + 2 config (`pyproject.toml`, `.env.example`)
++ 4 docs (`.gitignore` và `tests/test_repo_hygiene.py` rời bảng — R1.12, D9). Tách thêm phase chỉ nhân
 bản delta docs; guard `data_root` phải có TRƯỚC lần ghi dữ liệu có bản quyền đầu tiên (chính các probe của phase này) → giữ.
 
 ## Implementation Steps
 0. **Nơi chạy và nhánh.** Main checkout `H:\study\Project\FinSec`, sau khi PR của plan 0b đã merge: `git fetch origin` rồi
-   `git switch -c claude/phase0a-capture origin/main`; `plans/` untracked đi theo. Cài lại `.venv`: `.venv/Scripts/python -m pip install -e ".[dev]"`.
-   Đặt `FINSEC_DATA_ROOT` (dev) tới một thư mục tuyệt đối ngoài clone (ví dụ `D:\finsec-data`).
+   `git switch -c claude/phase0a-capture origin/main`; `plans/` được track trên `main` (D9) nên có sẵn trên nhánh mới. Cài lại `.venv`: `.venv/Scripts/python -m pip install -e ".[dev]"`.
+   **Điều kiện trước** (sau `git fetch origin`, trước `git switch`): amendment 2026-10-25 và lần duyệt lại đã merge vào `main`; `git show origin/main:plans/261022-1147-phase0a-capture/phases/phase-1-vnstock-probe.md | grep -c "Supersede[d] by D9"` → 1 (`[d]` để chính lệnh này không tự khớp), khác → DỪNG.
+   Đặt `FINSEC_DATA_ROOT` (dev) tới một thư mục tuyệt đối ngoài clone: thư mục owner đã tạo `H:\study\Project\FinSec_data` (OBSERVED 2026-10-25: không phải git repo); OB5 chặn `vnprobe` khỏi nó.
+   Trước commit đầu (bước 12): `git config user.email` → `52412090+tqanh123@users.noreply.github.com` và `HARNESS_USER` = `tqanh123` (D9; `plan.md` "Nơi chạy cook"), khác → DỪNG.
 1. **Tests-before (RED)** — viết `tests/test_dependency_pins.py` và `tests/test_data_root.py`; chạy
    `.venv/Scripts/python -m pytest -q tests/test_dependency_pins.py tests/test_data_root.py` → RED (lý do từng test ở "Tests Before").
 2. **Implement guard** `data_root.py` → `tests/test_data_root.py` xanh.
 3. **Lock + pin:** tạo `requirements/vnstock/pyproject.toml`, chạy lệnh compile R1.3, sửa `pyproject.toml` (R1.2) → `tests/test_dependency_pins.py`
    xanh. Tải bộ wheel vào `$FINSEC_DATA_ROOT/wheels/win-py313/` bằng `pip download --require-hashes` (R1.3).
-   Thêm `/plans/` vào `.gitignore` (R1.12) + test `test_plans_dir_is_ignored` (RED trước); kiểm lại E3 ngay sau đó.
 4. **Spike scripts:** `_spikelib.py`, `vnstock_probe.py`, `portal_probe.py`. Chạy `.venv/Scripts/python -m pytest -q tests/test_no_order_execution.py`
    (guard quét `scripts/**/*.py` — `tests/test_no_order_execution.py:59-64`) → xanh.
 5. **BLOCKED (owner) OB5** — user probe (PasswordNeverExpires), `icacls … /deny vnprobe`, Python per-user, thư mục chung; agent copy kit (R1.4); owner
@@ -301,8 +293,7 @@ bản delta docs; guard `data_root` phải có TRƯỚC lần ghi dữ liệu c�
 - **docs/code-standards.md**: dòng 85 ("No code reads environment variables yet") → `data_root.py`; Dependencies dòng 93 → pin `==` trong
   `capture` + lock hash, cấm `vnai`/4.x/vnstock3, cài chỉ bằng `--require-hashes`; Testing: số test + quy ước "spike scripts under `scripts/spike/`
   reach the network and are never collected by pytest (`testpaths = ["tests"]`); their raw output goes under `FINSEC_DATA_ROOT` only"; dòng 30 trích
-  `pyproject.toml:40-41` (`[tool.setuptools.packages.find]`) bị R1.2 làm dời — trích lại số dòng thật sau khi sửa (red-team r1 LT12); dòng 44-45
-  (Package names / `.gitignore:37-48`) thêm `/plans/` (R1.12).
+  `pyproject.toml:40-41` (`[tool.setuptools.packages.find]`) bị R1.2 làm dời — trích lại số dòng thật sau khi sửa (red-team r1 LT12).
 - **docs/project-roadmap.md**: §7 0a gạch vnstock probe (dòng 363-369) "Done <date> (plan 261022-1147, phase 1)"; §5.2 hàng `pyproject.toml`
   (dòng 246) "Pin vnstock … done <date> (`capture` extra + hash lock)"; §4 hàng vnstock (dòng 171) và hàng cổng (dòng 172): trỏ kết quả probe.
 
@@ -329,9 +320,6 @@ bản delta docs; guard `data_root` phải có TRƯỚC lần ghi dữ liệu c�
       nơi khác — không skip) từ thư mục ngoài vào repo git tạm → bị từ chối; RED.
 - [ ] `test_backup_dir_variable_uses_the_same_guard` — `resolve_external_dir(env, "FINSEC_BACKUP_DIR")` thiếu/tương đối/trong work tree → lỗi nêu đúng tên biến; RED.
 
-`tests/test_repo_hygiene.py` (thêm):
-- [ ] `test_plans_dir_is_ignored` (R1.12) — `git check-ignore -q plans/x.md` trả 0; RED (hôm nay exit 1 — OBSERVED red-team r1).
-
 ### Implement
 - Bước 2-4 ở trên.
 
@@ -349,14 +337,16 @@ bản delta docs; guard `data_root` phải có TRƯỚC lần ghi dữ liệu c�
 - Sau push: CI của commit `success` trên 3.11 + 3.13 (`gh run view <id> --json conclusion,jobs`).
 
 ## Success Criteria
-- [ ] [test] 14 test mới RED trước implement, xanh sau; cả suite xanh trong `.venv`, 0 skipped.
+- [ ] [test] 13 test mới (3 trong `tests/test_dependency_pins.py`, 10 trong `tests/test_data_root.py`) RED trước implement, xanh sau; cả suite xanh trong `.venv`, 0 skipped.
 - [ ] [test] Lệnh compile R1.3 tái lập lock: chỉ khối vnstock từ index vendor (đã OBSERVED trong scratchpad 2026-10-22; cook ghi lại kết quả của mình).
 - [ ] [manual] Output owner-run có mặt trong `C:\finsec-probe\out\<date>\`; hash `before-*` (chụp TRƯỚC `vnstock register`) == `after-*` cho cả hai user,
       `git diff --exit-code HEAD -- AGENTS.md CLAUDE.md .agents` exit 0, bằng chứng OB5 (`net user vnprobe` "Password expires Never", `icacls` có dòng deny,
       `pyvenv.cfg` `home` trong profile của `vnprobe`) (neo `manual_test_anchor.py`).
-- [ ] [invariant] Không byte dữ liệu vnstock/cổng nào vào repo: `git status --porcelain` (mặc định, KHÔNG `--ignored`; `plans/` giờ bị ignore — red-team r1 RT8)
-      chỉ liệt kê đúng các file trong bảng; `git ls-files plans` rỗng; `git ls-files | grep -iE "\.(jsonl|parquet|whl)$"` chỉ ra 5 file `.jsonl` có sẵn dưới
-      `harness/data/port-control/` (fact 7). Cook không bao giờ `git add -A`: chỉ add đúng file trong bảng.
+- [ ] [invariant] Không byte dữ liệu vnstock/cổng nào vào repo: `git status --porcelain` (mặc định, KHÔNG `--ignored`) chỉ liệt kê các file trong bảng và
+      file của plan dưới `plans/261022-1147-phase0a-capture/` (tracked từ D9: artifacts harness của cook); G2 của `plan.md`, allowlist theo TÊN:
+      `git ls-files | grep -iE "\.(jsonl|parquet|whl|sqlite|db|bin)$" | grep -vE '^harness/data/port-control/cases/[^/]+/port/ledger\.jsonl$|^plans/[^/]+/artifacts/(auto-decisions|phase-commits|record-log|phase-superseded-P[0-9]+|harness-checks-P[0-9]+)\.jsonl$'`
+      → rỗng — chỉ 5 ledger có sẵn dưới `harness/data/port-control/` (fact 7) và các tên artifacts harness đã biết lọt qua, không phải mọi `.jsonl` dưới `plans/*/artifacts/`
+      (OBSERVED 2026-10-25 ở worktree trên `9214447`: rỗng; bước đầu ra 9 dòng = 5 + 4 của plan 0b). Cook không bao giờ `git add -A`: chỉ add theo đường dẫn tường minh các file trong bảng và file của plan.
 - [ ] [manual] Báo cáo mục 1-3 điền đủ, mỗi dòng có nhãn + ngày; bảng design inputs đủ 7 mục R1.10 (neo `manual_test_anchor.py`; người đọc đối chiếu với
       `probe-summary.json` và output portal).
 - [ ] [manual] Dòng Decisions chọn cổng có trong AGENTS.md, ghi từ câu trả lời của owner (neo `manual_test_anchor.py`).
@@ -371,4 +361,4 @@ bản delta docs; guard `data_root` phải có TRƯỚC lần ghi dữ liệu c�
 | Owner chậm ở OB3/OB4a/OB5 | Trung bình × Cao (chặn cả chuỗi) | Danh sách bước owner nêu ngay lúc duyệt plan (plan.md); phase dừng rõ ràng, không giả định. |
 | Key vnstock lọt vào ngữ cảnh agent qua output CLI | Thấp × Cao | Owner tự gõ key; redact chuỗi token dài trong output trước khi ghi file. |
 | User probe sửa clone/`.venv`/hook git (ACL `Authenticated Users:(M)` kế thừa — OBSERVED main) | Thấp × Cao | `icacls … /deny vnprobe`; hash phủ `.git/hooks/*`, `.venv/**/*.pth`; hash dev user lưu trong profile dev (red-team r1 RT4, RT5). |
-| `plans/` (email owner, ghi chú research) bị `git add -A` đẩy lên repo public | Thấp × Cao | `/plans/` trong `.gitignore` + test; G5 `git ls-files plans` rỗng; tên người trong research đã thay (red-team r1 RT8). |
+| `plans/` (public từ D9) mang danh tính cá nhân, tên người, key hay dữ liệu có bản quyền | Thấp × Cao | D9: danh tính harness `user:tqanh123`, commit dùng email noreply; tên người trong research đã thay bằng `<insider-*>`; báo cáo/plan chỉ chép số đếm; G5 trong `plan.md`; add theo đường dẫn tường minh, không `git add -A` (red-team r1 RT8, thay bằng D9). |

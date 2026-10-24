@@ -86,7 +86,8 @@ plan-graph.yaml; hàng chỉ đọc/chạy ghi `read`/`run` ở cột đầu.
 3. **Tests-before:** không có hành vi mới; LOCK = toàn bộ suite (E1) và `tests/test_agents_md_paths.py`.
 4. E4 (R7.2) → E1 (R7.3) → E2 (R7.4) → E3 (R7.5). Bất kỳ cái nào FAIL → ghi OBSERVED, không ghi exit, dừng.
 5. **Delta docs** (R7.6) → **Regression gate** → một commit, ví dụ `docs: record the Phase 0 exit` + trailer; push; CI xanh. Mở PR "Ready for review"
-   và merge (merge commit, như 0b VL-2; plan này VL-2: một PR, merge sau P7) là việc sau cook, khi có review-decision PASS.
+   và merge (merge commit, như 0b VL-2; plan này VL-2: một PR, merge sau P7) là việc sau cook, khi có review-decision PASS. Artifacts ghi sau commit P7 (`verification-P7.json`, dòng verify của
+   `phase-commits.jsonl`) vào đúng một commit `chore(plans): record P7 cook artifacts` trước "Ready for review" (`plan.md` Rollback).
 
 ### Delta docs (cùng commit; tiếng Anh; có ngày)
 - **AGENTS.md**: "Roadmap" Phase 0 "(done <date>)"; Phase 1 thành "next"; "Current Status" (capture đã chạy N phiên; Phase 0 exit); "Verified Facts" thêm
