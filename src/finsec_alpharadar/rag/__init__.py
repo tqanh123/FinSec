@@ -1,3 +1,3 @@
-from .hybrid_temporal_rag import HybridTemporalRAGEngine, RetrievedPassage
+from .hybrid_temporal_rag import HybridTemporalRAGEngine, InvalidAsOfError, RetrievedPassage
 
-__all__ = ["HybridTemporalRAGEngine", "RetrievedPassage"]
+__all__ = ["HybridTemporalRAGEngine", "InvalidAsOfError", "RetrievedPassage"]

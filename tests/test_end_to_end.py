@@ -18,7 +18,7 @@ from finsec_alpharadar.connectors import (
     VnstockBCTCAdapter,
 )
 from finsec_alpharadar.domain import (
-    FinancialStatementSnapshot,
+    FinancialStatementSnapshot, IssuerType,
     MarketRegion,
     MarketTick,
     RegulatoryFiling,
@@ -38,25 +38,25 @@ def run_modular_verification() -> dict:
 
     # 1. Test US & VN Connectors
     us_tick_from_adapter = AlpacaStreamAdapter.parse_trade_and_quote(
-        {"S": "NVDA", "p": 189.50, "s": 2500, "x": "IEX"},
-        {"bp": 189.48, "ap": 189.52, "bs": 1200, "as": 800},
+        {"S": "NVDA", "p": 189.50, "s": 2500, "x": "V", "t": "2026-10-17T04:30:00.123456789Z"},
+        {"S": "NVDA", "t": "2026-10-17T04:29:59.950000Z", "bp": 189.48, "ap": 189.52, "bs": 1200, "as": 800},
     )
     vn_tick_from_adapter = SSIFastConnectAdapter.parse_market_data_message({
         "Symbol": "FPT",
-        "LastPrice": 142.5,
+        "LastPrice": 142500.0,
         "LastVol": 45000,
-        "BidPrice1": 142.4,
-        "AskPrice1": 142.6,
+        "BidPrice1": 142400.0,
+        "AskPrice1": 142600.0,
         "BidVol1": 90000,
         "AskVol1": 15000,
-        "RefPrice": 138.0,
+        "RefPrice": 138000.0,
         "Exchange": "HOSE",
         "ForeignBuyVolTotal": 125000,
         "ForeignSellVolTotal": 15000,
         "Timestamp": now_ts,
     })
     assert us_tick_from_adapter.market == MarketRegion.US
-    assert vn_tick_from_adapter.vn_ceiling_floor_proximity == (147.66, 128.34)
+    assert vn_tick_from_adapter.vn_ceiling_floor_proximity == (147660.0, 128340.0)
 
     # 2. Test MinHash Deduplicator
     dedup = MinHashDeduplicator()
@@ -83,13 +83,13 @@ def run_modular_verification() -> dict:
             symbol="FPT",
             market=MarketRegion.VN,
             timestamp=now_ts + step,
-            price=138.0 + 0.15 * step + (2.9 if is_spike else 0.0),
+            price=138_000.0 + 150.0 * step + (2_900.0 if is_spike else 0.0),
             volume=50_000.0 + 6_500.0 * math.cos(step * 0.9) if not is_spike else 115_000.0,
-            bid_price=142.8,
-            ask_price=142.9,
+            bid_price=142_800.0,
+            ask_price=142_900.0,
             bid_size=180_000.0 if is_spike else 20_000.0,
             ask_size=22_000.0 if is_spike else 19_000.0,
-            reference_price=138.0,
+            reference_price=138_000.0,
             exchange="HOSE",
             foreign_buy_volume=160_000.0 if is_spike else 15_000.0,
             foreign_sell_volume=10_000.0 if is_spike else 12_000.0,
@@ -115,7 +115,7 @@ def run_modular_verification() -> dict:
         prev_depreciation=780.0, prev_net_income=16_200.0, prev_accounts_receivable=4_600.0,
         prev_current_assets=49_000.0, prev_current_liabilities=13_200.0,
         prev_property_plant_equipment=10_800.0, prev_total_assets=78_000.0,
-        prev_long_term_debt=9_000.0, prev_shares_outstanding=24_650.0,
+        prev_long_term_debt=9_000.0, prev_shares_outstanding=24_650.0, issuer_type=IssuerType.NON_FINANCIAL,
     ))
     assert audit.altman_zone == "SAFE" and audit.piotroski_f_score == 9
 
@@ -143,7 +143,7 @@ def run_modular_verification() -> dict:
             "citation_url": "https://congbothongtin.ssc.gov.vn/fpt-q3-2026",
         }),
     ])
-    hits_vn = rag.search("FPT doanh thu CNTT Nhat Ban AI Factory", market_filter=MarketRegion.VN, reference_time=now_ts)
+    hits_vn = rag.search("FPT doanh thu CNTT Nhat Ban AI Factory", market_filter=MarketRegion.VN, as_of=now_ts)
     assert len(hits_vn) == 1 and hits_vn[0].symbol == "FPT"
 
     router = LinUCBModelRouter(["finsec-qwen3-1.7b-qlora", "gemini-3.6-flash", "gemini-4-argon-pro"])
@@ -161,6 +161,10 @@ def run_modular_verification() -> dict:
         "top_vn_rag_filing": hits_vn[0].filing_id,
         "routed_model": chosen_model,
     }
+
+
+def test_end_to_end() -> None:
+    run_modular_verification()
 
 
 if __name__ == "__main__":

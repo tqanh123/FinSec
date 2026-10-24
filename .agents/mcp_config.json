@@ -8,17 +8,17 @@
     },
     "alpaca-us": {
       "command": "uvx",
-      "args": ["alpaca-mcp-server"],
+      "args": ["--from", "alpaca-mcp-server==2.4.0", "alpaca-mcp-server"],
       "env": {
         "ALPACA_API_KEY": "${ALPACA_API_KEY}",
         "ALPACA_SECRET_KEY": "${ALPACA_SECRET_KEY}",
         "ALPACA_PAPER_TRADE": "true",
-        "ALPACA_TOOLSETS": "stock-data,options-data,corporate-actions,news,watchlists,trading"
+        "ALPACA_TOOLSETS": "stock-data,options-data,corporate-actions,news"
       }
     },
     "edgartools-us": {
       "command": "uvx",
-      "args": ["--from", "edgartools[ai]", "edgartools-mcp"],
+      "args": ["--from", "edgartools[ai]==5.62.0", "edgartools-mcp"],
       "env": {
         "EDGAR_IDENTITY": "FinSecAlphaRadar research@yourdomain.com"
       }
@@ -27,7 +27,7 @@
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/wshobson/maverick-mcp@v1.1.0",
+        "git+https://github.com/wshobson/maverick-mcp@ba170996494a139a9c611ad0ec4d69cb692ac8a3",
         "maverick-mcp",
         "--transport",
         "stdio"
@@ -35,14 +35,14 @@
     },
     "vnstock-vn": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/mrgoonie/vnstock-agent.git", "vnstock-mcp"],
+      "args": ["--from", "git+https://github.com/mrgoonie/vnstock-agent.git@e7eaf08c5bea6f99556c5b66952b9700faf7cbbf", "vnstock-mcp"],
       "env": {
         "VNSTOCK_DATA_SOURCE": "VCI"
       }
     },
     "ssi-fastconnect-vn": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/archiephan78/ssi-stock-mcp-server.git", "ssi-stock-mcp-server"],
+      "args": ["--from", "git+https://github.com/archiephan78/ssi-stock-mcp-server.git@b93442adac835ff55048bba484b402b720bc79e1", "ssi-stock-mcp-server"],
       "env": {
         "SSI_CONSUMER_ID": "${SSI_CONSUMER_ID}",
         "SSI_CONSUMER_SECRET": "${SSI_CONSUMER_SECRET}"
@@ -54,12 +54,7 @@
     },
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp@latest"],
-      "disabled": true
-    },
-    "wandb": {
-      "command": "uvx",
-      "args": ["wandb-mcp-server"],
+      "args": ["@playwright/mcp@0.0.83"],
       "disabled": true
     }
   }

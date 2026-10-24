@@ -29,11 +29,23 @@ ENV/
 *.crt
 
 # Local data & models
-data/
-models/
+/data/
+/models/
 *.bin
 *.pt
 *.safetensors
+# Data artefacts anywhere in the tree (the /data/ anchor no longer catches nested data dirs)
+*.jsonl.gz
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
 
 # IDE & Editor
 .vscode/
@@ -53,6 +65,3 @@ harness/e2e/RUN-LOG.md
 .claude/settings.json
 .claude/settings.local.json
 # <<< harness <<<
-
-# `data/` above is for local market data — keep the harness's own config dirs tracked
-!harness/**/data/

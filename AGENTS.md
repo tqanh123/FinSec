@@ -8,6 +8,18 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-24 — The plans tree is committed (plans, research, harness artifacts; it was untracked before). Harness records name the owner `user:tqanh123`, not a personal email: each clone sets `HARNESS_USER=tqanh123` (the harness adds the `user:` prefix), e.g. in the gitignored `.claude/settings.local.json`; git commits use 52412090+tqanh123@users.noreply.github.com.
+- 2026-10-21 — MCP config: the `wandb` entry is removed (not on PyPI, no signed release; Phase 7 at the earliest), and every `uvx`/`npx` server is pinned to an exact version or a 40-hex commit.
+- 2026-10-21 — Forensics guards are pulled forward from roadmap Phase 2 (§5.2, `forensics/xbrl_bctc_auditor.py` row) into Phase 0b: an undefined ratio or a non-finite input returns None with a reason, and the three scores run only for `IssuerType.NON_FINANCIAL` (financial issuers get "not applicable"; an unknown issuer type is refused). Formula corrections stay in Phase 2.
+- 2026-10-21 — VN price validation (D4): a VN `MarketTick` raises on a missing or unknown exchange, a missing reference price, or a price outside its allowed range.
+  - With `price_limits` (floor, ceiling) from the feed or the caller the check is strict; without them it uses the normal band (HOSE 7%, HNX 10%, UPCOM 15%, unrounded, around `reference_price`) widened by one tick on each side.
+  - Special sessions (first listing day, resumption after 25+ sessions, some ex-rights days, the 2026-12-28 HNX-to-HOSE transfer) must pass `price_limits`.
+  - VN prices are full VND at the domain boundary. The check assumes full VND: a tick whose price and reference are both in thousands of VND passes undetected (unit checks wait for the vnstock probe).
+- 2026-10-21 — Phase 0b foundations (plan 261021-1314-phase0b-foundations), owner choices:
+  - CI: a GitHub Actions workflow (`.github/workflows/ci.yml`) runs pytest on Python 3.11 and 3.13; the repository is public.
+  - `requires-python` is `>=3.11` (Python 3.10 reached end of life on 2026-10-01).
+  - The Alpaca MCP server runs without the `trading` and `watchlists` toolsets (`watchlists` has write operations).
+  - `codemap.yaml` (the hs-code map) is committed.
 - 2026-10-21 — All remaining roadmap §9 decisions answered; the roadmap is ADOPTED as the working plan:
   - §9.1: personal research; outputs are owner-only (demos use replayed data and derived signals).
   - §9.2: US pipeline first; VN capture-only poller from week 1; VN is the main research market from Phase 3.
@@ -30,35 +42,33 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **US sources:** Alpaca market data (paper keys); SEC EDGAR filings (8-K, 10-Q, 10-K, Form 4).
 - **VN sources:** SSI FastConnect Data; `vnstock`; consolidated financial statements (BCTC hợp nhất); board and shareholder resolutions (Nghị quyết HĐQT/ĐHĐCĐ).
 
-## Current Status (verified 2026-10-20)
-- **Prototype.** About 850 lines of numpy-only, in-memory code. There is no live connector, no database and no LLM call. No prediction has been made or scored yet.
+## Current Status (verified 2026-10-22)
+- **Prototype.** About 1,450 lines of numpy-only, in-memory code (OBSERVED 2026-10-22). There is no live connector, no database and no LLM call. No prediction has been made or scored yet.
 - **Works, smoke-tested by `tests/test_end_to_end.py`:**
   - OLS market-model CAR (`quant/event_study.py`);
-  - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); it has no zero-division guards and is not valid for banks, insurers or brokers;
+  - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); undefined ratios return None with a reason; scores run only for non-financial issuers (2026-10-22); formula corrections are Phase 2;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
+- **Tests (OBSERVED 2026-10-22).** pytest collects 274 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39721376654 (commit c9168f0): success, 267 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
 - **Stub or placeholder:**
-  - connectors are static dict parsers;
+  - connectors are static dict parsers; the Alpaca and SSI tick parsers raise on missing, null or malformed fields, and an Alpaca quote must share the trade's symbol and not postdate it (2026-10-21);
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
   - the LinUCB router picks a model that is never called;
   - `scripts/train_unsloth_slm.py` only prints a recipe;
-  - the docker-compose services (Qdrant, TimescaleDB, Redpanda) are unused.
+  - the docker-compose services (Qdrant, profile `rag`; TimescaleDB, profile `ticks`) are unused; Redpanda was removed (2026-10-22).
 - **Known bugs:**
-  - RAG gives future-dated documents full weight (`rag/hybrid_temporal_rag.py:112,138`).
   - Foreign flow is summed over a 50-tick deque (`quant/kalman_microstructure.py:99`).
-  - The VN price band is computed but never validated, and an unknown exchange silently gets 7% (`domain/models.py:44`).
   - On a cold start the router always picks the first arm (`router/linucb_bandit.py:40`).
-  - The SSI endpoint constant `wss://stream.ssi.com.vn` is wrong (see Verified Facts).
-  - pytest collects 0 tests.
+  - Extreme but finite tick values (price = volume = 1e308) pass validation and poison the shared quant engine, and a timestamp jump of about 1e103 s overflows the Kalman filter (`quant/kalman_microstructure.py:27`) into an HTTP 500 (OBSERVED 2026-10-22; quant fixes are Phase 6).
 
 ## Package Layout (`src/finsec_alpharadar/`)
-- `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`).
+- `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`, `IssuerType`); VN tick validation (D4), `price_limits`; every tick rejects non-finite numbers (2026-10-21); an unknown market or a VN price of 0 or below raises (2026-10-22).
 - `connectors/`: payload parsers for Alpaca and SEC EDGAR (`us_alpaca_edgar.py`) and for SSI FastConnect and vnstock (`vn_ssi_vnstock.py`). No network clients yet.
 - `quant/`: `MinHashDeduplicator`, `KalmanPriceFilter` + `StreamingQuantEngine` (VWAP, OBI, CUSUM, volume z-score, VN foreign net flow), `EventStudyAnalyzer` (CAR).
-- `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score.
-- `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors.
+- `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score; an issuer gate and None-with-reason guards (2026-10-22).
+- `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors. `search` requires `as_of` and ignores documents published after it (2026-10-21); this is as-of `published_at` only, not yet the point-in-time `information_time`.
 - `router/linucb_bandit.py`: disjoint LinUCB contextual bandit that chooses a model name.
-- `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`. The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
+- `api/server.py`: FastAPI REST only: `GET /health`, `POST /v1/ticks/ingest`, `GET /v1/rag/search`; required tick fields, 422 on bad input, a bilingual disclaimer on research responses (2026-10-21); `GET /v1/rag/search` takes an optional `as_of` (default: request time), echoes it, and returns 422 for a non-finite one (2026-10-21). The search always returns [] because nothing is ingested. There is no WebSocket endpoint.
 - `harness/` (repo root): vendored SDLC harness v7.3.0 (upgraded 2026-10-21), driven by `/hs:plan`, `/hs:cook`, `/hs:test` and `/hs:ship`. It reads `docs/system-architecture.md` and `docs/code-standards.md` (written 2026-10-20) before every plan and code change; keep both in sync with this file.
 
 ## Product Direction (ADOPTED 2026-10-21; detail in docs/project-roadmap.md)
@@ -96,6 +106,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - IEX-only real-time data, 30 WebSocket symbols, 200 historical calls/min. VERIFIED https://docs.alpaca.markets/docs/about-market-data-api
   - The bars `adjustment` parameter defaults to raw; request `all` for return labels. VERIFIED https://docs.alpaca.markets/reference/stockbars
   - SIP history on Basic: ASSUMED.
+- **Alpaca stream fields (2026-10-21).** `t` is RFC-3339 with 0-9 fractional digits and "Z" (VERIFIED https://docs.alpaca.markets/us/docs/real-time-stock-pricing-data); exchange code `V` is IEX (VERIFIED https://docs.alpaca.markets/us/reference/stockmetaexchanges-1); SIP quote sizes are shares since 2025-11-03 (VERIFIED https://docs.alpaca.markets/us/changelog/marketdata-bid-and-ask-size-display-change); the IEX-feed size unit is ASSUMED.
 - **SSI FastConnect Data.**
   - Needs an SSI account plus ConsumerID and ConsumerSecret (no private key).
   - REST `https://fc-data.ssi.com.vn/v2.0/Market`; streaming `https://fc-datahub.ssi.com.vn/v2.0`.
@@ -105,17 +116,24 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - HNX-listed stocks move to HOSE: last HNX day 2026-12-23, HOSE from 2026-12-28. VERIFIED (secondary press) https://vietnamnews.vn/economy/1784883/nearly-300-stocks-to-move-from-hnx-to-hose-under-market-restructuring-plan.html
   - The band for those stocks is ASSUMED.
   - FTSE secondary-emerging status is effective 2026-09-21. VERIFIED https://www.lseg.com/en/media-centre/press-releases/ftse-russell/2025/ftse-russell-country-classification-september-2025
+- **VN price limits (2026-10-21).**
+  - Ticks: HOSE stocks 10 VND below 10,000, 50 VND from 10,000 to 49,950, 100 VND from 50,000; HNX and UPCOM 100 VND. Ceilings round down and floors round up to the tick; a limit equal to the reference moves one tick. VERIFIED https://www.cts.vn/wp-content/uploads/2025/08/KRX_1.Quy-dinh-giao-dich-chung-khoan-tai-HSX.pdf and https://www.cts.vn/wp-content/uploads/2025/08/KRX_2.Quy-dinh-giao-dich-chung-khoan-tai-HNX.pdf
+  - First trading day, resumption after 25+ sessions and some ex-rights days: ±20% HOSE, ±30% HNX, ±40% UPCOM. VERIFIED (UPCOM, 2026) https://luatvietnam.vn/chung-khoan/quyet-dinh-23-qd-hdtv-2026-ban-hanh-quy-che-dang-ky-va-quan-ly-giao-dich-chung-khoan-chua-niem-yet-435227-d1.html; HOSE/HNX figures from the 2025 brochures above (the 2026 appendix was not readable).
+  - SSI X-TRADE messages carry `Ceiling`, `Floor` and `RefPrice`; the doc samples are in VND. VERIFIED https://guide.ssi.com.vn/ssi-products/fastconnect-data/streaming-data.md
 - **vnstock licence.** The Community licence allows personal, study or research use only, with no redistribution. VERIFIED https://github.com/thinh-vu/vnstock. Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
-- **`.gitignore` (OBSERVED 2026-10-20).** The unanchored `data/` and `models/` patterns ignore any directory with those names. `harness/**/data/` is re-included explicitly.
+- **`.gitignore` (OBSERVED 2026-10-22).** `/data/` and `/models/` are anchored to the repo root; data artefacts (`*.jsonl.gz`, `*.parquet`, `*.duckdb`, `*.sqlite*`, `*.db`) are ignored anywhere in the tree; `git check-ignore` no longer matches a `models/` package under the source package. With `core.autocrlf=true` the checked-out `.gitignore` is CRLF, and git reads its blank lines as an empty pattern that matches every path ending in `/`; query a file inside a directory, or read the `-v` pattern (OBSERVED 2026-10-21, Git for Windows 2.55.0).
 - **Harness install state (OBSERVED 2026-10-21).**
   - Strict verify reads the omitted-skills record in the gitignored `harness/state/`. A fresh clone or worktree therefore reports files as "missing" until you run the installer there: the default-off skills stashed in `disabled-skills/` (477 files in v7.3.0) plus `harness/state/.gitkeep`. The main checkout was installed on 2026-10-21 and passes.
-  - The pre-push transport gate lives in the shared `.git/hooks/pre-push`, which an install in the main checkout wrote on 2026-10-21. It runs for every worktree. It blocks a delete or non-fast-forward of a protected branch, and a detected secret. A missing stage receipt only warns. An install from a worktree skips this hook because there `.git` is a file.
+  - The pre-push transport gate lives in the shared `.git/hooks/pre-push`, which an install in the main checkout wrote on 2026-10-21. It runs for every worktree. It blocks a delete or non-fast-forward of a protected branch, and a detected secret. A missing stage receipt only warns. An install from a worktree skips this hook because there `.git` is a file. On Windows the gate crashes and blocks the push when the pushed diff carries non-ASCII text, because its Python reads git output as cp1252; push with `PYTHONUTF8=1` (OBSERVED 2026-10-21, Git for Windows 2.55.0, Python 3.13).
   - Claude Code hooks are OFF in this project. Desktop sessions in `.claude/worktrees/*` run hooks with `CLAUDE_PROJECT_DIR` set to the main checkout.
     - `protected_ref_guard` then reads the main checkout's branch (`main`) and refuses every `git commit` made from a worktree.
     - The main checkout's `.claude/settings.json` is therefore parked as `harness/state/claude-settings.json.harness-off`. Move it back to turn the hooks on again, once the guard reads the worktree's branch.
   - The hs plugin (`/hs:*` skills) is ON through the main checkout's gitignored `.claude/settings.local.json` (OBSERVED 2026-10-21). That file holds only `extraKnownMarketplaces` (`hs-local`, a directory source at `./harness/plugins`) and `enabledPlugins` (`"hs@hs-local": true`). The plugin ships no hooks.
     - Use `settings.local.json`, not a plugin-only `settings.json`: strict verify's hook-wiring check reads `settings.json` and fails hard when that file has no hook groups.
     - A worktree session cannot write the base repo's `.claude/`, so create or change this file from the main checkout or by hand.
+- **Python 3.10** reached end of life on 2026-10-01. VERIFIED https://devguide.python.org/versions/
+- **MCP pins (OBSERVED 2026-10-21).** maverick-mcp `ba17099` = tag v1.1.0; vnstock-agent `e7eaf08` = HEAD of 2026-04-01; ssi-stock-mcp-server `b93442a` = HEAD of 2025-08-06; alpaca-mcp-server 2.4.0; edgartools 5.62.0; @playwright/mcp 0.0.83. Remote `serverUrl` entries cannot be pinned.
+- **Compose image tags (2026-10-22).** `qdrant/qdrant:v1.19.2` and `timescale/timescaledb:2.31.0-pg16` exist on Docker Hub (HTTP 200; a made-up tag returns 404). VERIFIED https://hub.docker.com/v2/repositories/qdrant/qdrant/tags/v1.19.2 and https://hub.docker.com/v2/repositories/timescale/timescaledb/tags/2.31.0-pg16
 
 ## Engineering Rules (binding)
 - **No order execution anywhere.**
@@ -131,7 +149,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **VN.** Validate prices against the HOSE ±7% / HNX ±10% / UPCOM ±15% bands around `reference_price`, and raise on an unknown exchange.
 - **Forensics.** Altman/Beneish/Piotroski scores never apply to banks, insurers or securities firms.
 - **External facts.** Label them VERIFIED, OBSERVED or ASSUMED. Never invent API names, fields, model IDs or prices.
-- **Package names.** Do not name a package `data/` or `models/` until the `.gitignore` patterns are anchored; use `modeling/`.
+- **Package names.** Do not name a package `data/` or `models/` until the `.gitignore` patterns are anchored; use `modeling/`. (Precondition met 2026-10-22: the patterns are anchored; `modeling/` stays the planned name.)
 - **Private outputs only (§9.1, §9.8).** Outputs go only to the owner, through the private Telegram 1:1 bot or local reports; never to groups, channels or the public.
 - **Complexity gate (§9.10).** RAG, the bandit, SLM fine-tuning or a new database enter the pipeline only with a measured gain on the scoreboard or in latency. Tick streaming is scheduled for Phase 6 (§9.3).
 - **Storage (§9.9).** Raw data is append-only JSONL/Parquet; operations use SQLite (WAL); research uses DuckDB. No other database before Phase 6.
@@ -147,8 +165,16 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **End-to-end smoke check.**
   - bash: `PYTHONPATH=src python3 tests/test_end_to_end.py`
   - PowerShell: `$env:PYTHONPATH='src'; python tests/test_end_to_end.py`
-  - pytest collects 0 tests until Phase 0 adds a test wrapper.
-- **FastAPI server:** `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --reload --port 8000`. fastapi is not installed on the dev machine yet.
+- **Dev environment (2026-10-21).**
+  - bash: `python -m venv .venv`, then `.venv/Scripts/python -m pip install -e ".[dev]"`.
+  - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
+- **Tests (2026-10-21).**
+  - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-22: `source .venv/Scripts/activate && pytest -q` → 274 passed.
+  - `make test` runs `python -m pytest -q` (2026-10-22).
+- **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
+- **FastAPI server (2026-10-22).** bash: `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`; PowerShell: `$env:PYTHONPATH='src'; uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`. fastapi installs into `.venv` with the dev setup (2026-10-21).
+- **Docker (2026-10-22).** Set `POSTGRES_PASSWORD` in `.env` first (compose refuses an empty one). bash and PowerShell: `docker compose --profile ticks --profile rag up -d`; without a profile no service starts.
 - **Harness integrity:** `python3.13 harness/scripts/verify_install.py --root . --strict`. Local gate: `/hs:test`.
   - Standards docs: `python3.13 harness/scripts/scaffold_standards.py --type system-architecture --check docs/system-architecture.md`, and the same with `--type code-standards` for `docs/code-standards.md`.
   - Upgrade (Git Bash, POSIX paths): `sh install.sh /c/.../harness-vX.Y.Z.tar.gz .`. Then convert `harness/release.json` back to LF, because strict verify compares it with HEAD. Never edit `harness/manifest.json`: `kit_digest` pins its CRLF bytes.

@@ -1,0 +1,28 @@
+schema: plan-approval/v1
+plan: 261021-1314-phase0b-foundations
+plan_hash: e28bbf610433
+file_hashes:
+  plan.md: fa692d7da8f9
+  phases/phase-1-test-infra.md: 0bff654b88bc
+  phases/phase-2-tick-correctness.md: e493db896866
+  phases/phase-3-rag-as-of.md: 7bfc3ae1a841
+  phases/phase-4-forensics-guards.md: 3ecac8eb55aa
+  phases/phase-5-hygiene.md: d67afb711d28
+  plan-graph.yaml: 84f8f7bd7dea
+raw_hashes:
+  plan.md: ddb5f5dfde68
+  phases/phase-1-test-infra.md: 78f096b1edbd
+  phases/phase-2-tick-correctness.md: ace61150b597
+  phases/phase-3-rag-as-of.md: 74fecf6ef280
+  phases/phase-4-forensics-guards.md: 460ede3a89d4
+  phases/phase-5-hygiene.md: 94a5a1882606
+  plan-graph.yaml: 84f8f7bd7dea
+hash_scheme: 2
+paused: []
+author: user:tqanh123
+reviewer: user:tqanh123
+verdict: APPROVED
+rationale: Owner chon Approve + Keep (mot plan) qua AskUserQuestion 2026-10-21; red-team
+  r1 13/13 Accept, VL-1..VL-4 da propagate, consistency sweep 0 mau thuan
+ts: '2026-10-21T08:50:54.292029+00:00'
+run_seq: null
