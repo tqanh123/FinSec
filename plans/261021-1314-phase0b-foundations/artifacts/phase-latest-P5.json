@@ -1,0 +1,64 @@
+{
+  "stage": "cook",
+  "plan": "261021-1314-phase0b-foundations",
+  "checks": [
+    {
+      "name": "unit/venv-py313",
+      "status": "PASS",
+      "file": "results/P5/unit__venv-py313-109dd23a4997.xml",
+      "sha256": "109dd23a49972f8cf6e58803b67eaf0bd85177321da582b5ebead33d77ec805e",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\R4\\unit-venv313.xml"
+    },
+    {
+      "name": "unit/py311",
+      "status": "PASS",
+      "file": "results/P5/unit__py311-d812f2abf5b2.xml",
+      "sha256": "d812f2abf5b2be6f3a1b5a0cad99da187a81e6715d016c9f9bdafd0b76f0faa0",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\R4\\unit-py311.xml"
+    },
+    {
+      "name": "unit/py311-numpy126",
+      "status": "PASS",
+      "file": "results/P5/unit__py311-numpy126-498e8b00524d.xml",
+      "sha256": "498e8b00524de20e57afe7b0d052ee1d51df66eb0a83974e29faf0c18f93aa07",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\R4\\unit-py311-numpy126.xml"
+    },
+    {
+      "name": "unit/global-py313",
+      "status": "PASS",
+      "file": "results/P5/unit__global-py313-62adc2f9e167.xml",
+      "sha256": "62adc2f9e167b69d38fc37ac6b075532d8fde8ea570f7a009aa703459800d49c",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\R4\\unit-global313.xml"
+    },
+    {
+      "name": "integration/api-handlers",
+      "status": "PASS",
+      "file": "results/P5/integration__api-handlers-57edfedc7e73.xml",
+      "sha256": "57edfedc7e7316f842c8441571abbced48c722d1fa4a04167c4b59f80c5437c8",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\R4\\integration-api.xml"
+    },
+    {
+      "name": "regression/review-findings",
+      "status": "PASS",
+      "file": "results/P5/regression__review-findings-20df7dfcab0b.xml",
+      "sha256": "20df7dfcab0b434eab9e6ef83ce9b58d39f6a6ef4973d1e5ddf42d5472db377f",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\R4\\regression-review-findings.xml"
+    },
+    {
+      "name": "smoke/end-to-end",
+      "status": "PASS",
+      "file": "results/P5/smoke__end-to-end-272c254bdd00.xml",
+      "sha256": "272c254bdd0022f3a24d06e05bb3a61ac968b470cb5827ddc598d7145073656c",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\R4\\smoke.xml"
+    }
+  ],
+  "verdict": "PASS",
+  "phase": "P5",
+  "actor": "user:tqanh123",
+  "ts": "2026-10-22T04:55:26+00:00",
+  "blastRadius": {
+    "stale": true,
+    "reason": "stale"
+  },
+  "run_seq": null
+}

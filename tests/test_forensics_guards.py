@@ -3,9 +3,9 @@
 `ForensicAccountingEngine.evaluate` scores only `IssuerType.NON_FINANCIAL`: a bank, insurer or securities firm gets
 no score, and any other issuer type is refused. A score whose formula reads a non-finite field, or whose ratio is
 undefined, is None with a reason in `unavailable_reasons`; it adds no red flag, and the other scores are unaffected.
-A score that itself comes out non-finite (an overflow on a subnormal denominator, a numpy float32 score, an int sum too
-large for a float) is refused as "score_not_finite". The base snapshot is the smoke fixture of
-`tests/test_end_to_end.py` (lines 106-119) as a non-financial issuer.
+A score that itself comes out non-finite (an overflow on a subnormal denominator, a float32 quotient that overflows
+to inf, an int sum too large for a float) is refused as "score_not_finite". The base snapshot is the smoke fixture
+of `tests/test_end_to_end.py` (lines 106-119) as a non-financial issuer.
 Pure unit tests: no network, no clock.
 """
 from __future__ import annotations
@@ -276,7 +276,8 @@ def test_numpy_snapshot_scores_like_python_floats(dtype: Any) -> None:
     result = ForensicAccountingEngine.evaluate(dataclasses.replace(BASE, **numbers))
     assert result.unavailable_reasons == {} and result.red_flags == []
     assert result.altman_zone == "SAFE" and result.piotroski_f_score == 9
-    assert not result.is_manipulation_suspect  # a numpy bool, so no `is False`
+    # A numpy bool, so no `is False`; but a None flag next to a computed M must fail too.
+    assert result.is_manipulation_suspect is not None and not result.is_manipulation_suspect
     assert float(result.altman_z_score) == pytest.approx(104.189, abs=1e-2)
     assert float(result.beneish_m_score) == pytest.approx(-2.348, abs=1e-2)
 

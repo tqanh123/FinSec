@@ -1,0 +1,19 @@
+{
+  "verdict": "PASS_WITH_RISK",
+  "reviewer": "user:tqanh123",
+  "role": "reviewer",
+  "rationale": "Round-2 verdict on commit 9ba4562, the fix commit on top of the round-1 PASS_WITH_RISK review of 7092637..dca8e9d. Checked: the full diff dca8e9d..9ba4562 against round-1 findings M1, M2, L1-L7 and R1/R2, the AGENTS.md binding rules and docs/code-standards.md. .venv pytest 261 passed (run by this verdict reviewer); the dimension reviewers also report global Python 3.13 234 passed with only tests/test_api_server.py skipped and Python 3.11 261 passed; gh shows CI run 39716865556 on 9ba4562 succeeded. Independent probes (scratchpad review-r2/verdict) re-ran the round-1 counterexamples: M1 (5e-324 denominators now give score_not_finite and no red flag), M2 (a VN price of 0 with a one-tick reference returns 422), L1 (market vn refused), L3 (padded symbol and bool price return 422), L4 (an engine ValueError is now a 500; nan, inf, -inf and 1e400 as_of still 422); L2, L5 and L7 hold (no clock read in tests); R1/R2 are recorded in all three debt lists. No binding-rule violation, no order-execution or buy/sell wording added, disclaimer unchanged, no evidenced critical or high issue. Remaining confirmed findings, medium: the M1 guard checks isinstance(score, float), so numpy float32 inputs still give a NaN Altman score with a false DISTRESS red flag, or inf read as SAFE (xbrl_bctc_auditor.py:209; fix: math.isfinite on every score); system-architecture.md:27 cites lines 101-193 for score_not_finite, which is set in _try_score at 209-211; L6 only partly fixed (code-standards.md:77 still 2026-10-21 for e2b2da3 work, the :49 and :68 headers say OBSERVED 2026-10-21 over 2026-10-22 content, and the About 1,400 lines count at AGENTS.md:45 and system-architecture.md:10 is dated 2026-10-21 although src was 1,246 lines then). Low: no test reaches the Beneish score_not_finite path (an Altman-only mutant survives); two near-1e308 ints or Decimal fields still raise bare OverflowError, TypeError or ValueError from evaluate; the ingest API keeps a padded US exchange and stringifies bools, and SSI foreign volumes accept bools, contrary to the commit message; the ForensicAccountingEngine and MarketTick docstrings omit the new checks; code-standards.md:106 points to Debt notes that no longer exist; roadmap rows 245-246 lack done markers. Every remaining item needs unrealistic input or is documentation, so the verdict is PASS_WITH_RISK with these risks named.",
+  "effort": "high",
+  "reviewer_engine": "claude",
+  "reviewer_model": "claude-opus-5-5",
+  "rounds_run": 2,
+  "architecture_review": {
+    "checked": true,
+    "doc_sha": "60bdf8e60cd20b7bb38175d37c7c58cdee34b591",
+    "drift": [
+      "system-architecture.md:27 cites (lines 101-193) for the forensics None-with-reason rules including the new score_not_finite, but that check is set in _try_score at forensics/xbrl_bctc_auditor.py:209-211 (function lines 196-212), outside the cited range",
+      "system-architecture.md:10 (also AGENTS.md:45) dates the About 1,400 lines count OBSERVED 2026-10-21, but src/ was 1,246 lines at 507f8f7, the last 2026-10-21 commit; 1,430 lines arrived with e2b2da3 on 2026-10-22 and HEAD has 1,458"
+    ]
+  },
+  "run_seq": null
+}

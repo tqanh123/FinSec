@@ -1,0 +1,44 @@
+{
+  "stage": "cook",
+  "plan": "261021-1314-phase0b-foundations",
+  "checks": [
+    {
+      "name": "unit/venv-py313",
+      "status": "PASS",
+      "file": "results/P1/unit__venv-py313-f011b54ae15e.xml",
+      "sha256": "f011b54ae15e3d67166e3e91eee2ad993d03ffc881643affe860447788fa0cc3",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P1\\unit-venv313.xml"
+    },
+    {
+      "name": "unit/py311",
+      "status": "PASS",
+      "file": "results/P1/unit__py311-06cd0e2bf4c4.xml",
+      "sha256": "06cd0e2bf4c4fbb9f836f4c1c2f699026d334350a641fc110a087fd2bfc70b17",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P1\\unit-py311.xml"
+    },
+    {
+      "name": "unit/global-py313",
+      "status": "PASS",
+      "file": "results/P1/unit__global-py313-9e9148c69e7c.xml",
+      "sha256": "9e9148c69e7cdce562d5a158c4bc88b574c8472e24f82718303339749af340f1",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P1\\unit-global313.xml"
+    },
+    {
+      "name": "smoke/end-to-end-script",
+      "status": "PASS"
+    },
+    {
+      "name": "unit/hs-test-activated-venv",
+      "status": "PASS"
+    },
+    {
+      "name": "lint/standards-docs",
+      "status": "PASS"
+    }
+  ],
+  "verdict": "PASS",
+  "phase": "P1",
+  "actor": "user:tqanh123",
+  "ts": "2026-10-21T13:04:36+00:00",
+  "run_seq": null
+}

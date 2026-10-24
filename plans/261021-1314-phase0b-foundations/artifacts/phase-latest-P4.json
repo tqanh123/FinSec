@@ -1,0 +1,50 @@
+{
+  "stage": "cook",
+  "plan": "261021-1314-phase0b-foundations",
+  "checks": [
+    {
+      "name": "unit/venv-py313",
+      "status": "PASS",
+      "file": "results/P4/unit__venv-py313-70371be81a7c.xml",
+      "sha256": "70371be81a7ccea9cc5c83812a0ea2bd21dae321b65d9ba4d78c4ee7a5ed3a5d",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P4\\unit-venv313.xml"
+    },
+    {
+      "name": "unit/py311",
+      "status": "PASS",
+      "file": "results/P4/unit__py311-3db8f9faad1f.xml",
+      "sha256": "3db8f9faad1fd2620ea6cfd8f4252a529c7f0a6b9d317b06584d58a9044c3a8d",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P4\\unit-py311.xml"
+    },
+    {
+      "name": "unit/global-py313",
+      "status": "PASS",
+      "file": "results/P4/unit__global-py313-6c9dddca6d1d.xml",
+      "sha256": "6c9dddca6d1dbcb2670a283be0a8a086ad91ce89649ca20a7a19304a16a535d8",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P4\\unit-global313.xml"
+    },
+    {
+      "name": "regression/forensics-guards",
+      "status": "PASS",
+      "file": "results/P4/regression__forensics-guards-0a17027c81d1.xml",
+      "sha256": "0a17027c81d16f6602064c1f57f8e1adac58a8b894f78b43d5f1a8362ef2fb32",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P4\\regression-forensics.xml"
+    },
+    {
+      "name": "smoke/end-to-end",
+      "status": "PASS",
+      "file": "results/P4/smoke__end-to-end-eb3580fb7126.xml",
+      "sha256": "eb3580fb712627b81fac46e329a5d7f2c4b4c50ce68a33c529019c314da35ab5",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P4\\smoke.xml"
+    }
+  ],
+  "verdict": "PASS",
+  "phase": "P4",
+  "actor": "user:tqanh123",
+  "ts": "2026-10-22T02:40:26+00:00",
+  "blastRadius": {
+    "stale": true,
+    "reason": "stale"
+  },
+  "run_seq": null
+}
