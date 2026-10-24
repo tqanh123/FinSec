@@ -1,0 +1,90 @@
+# Phase DAG for plan 261021-1314-phase0b-foundations — strictly linear (P1 -> P2 -> P3 -> P4 -> P5).
+# {from: A, to: B} = A runs BEFORE B. Every phase also writes AGENTS.md and the three docs, so no pair may run in parallel.
+# files_to_* mirror each phase file's "Related Code Files" table exactly (read/run rows excluded).
+edges:
+  - {from: P1, to: P2}
+  - {from: P2, to: P3}
+  - {from: P3, to: P4}
+  - {from: P4, to: P5}
+subtasks:
+  P1:
+    file: phases/phase-1-test-infra.md
+    post: [verification-P1.json]
+    files_to_create:
+      - tests/test_no_order_execution.py
+      - tests/test_agents_md_paths.py
+      - .github/workflows/ci.yml
+      - codemap.yaml
+    files_to_modify:
+      - pyproject.toml
+      - tests/test_end_to_end.py
+      - .agents/mcp_config.json
+      - AGENTS.md
+      - docs/code-standards.md
+      - docs/system-architecture.md
+      - docs/project-roadmap.md
+  P2:
+    file: phases/phase-2-tick-correctness.md
+    post: [verification-P2.json]
+    files_to_create:
+      - src/finsec_alpharadar/connectors/errors.py
+      - tests/test_vn_price_band.py
+      - tests/test_connectors.py
+      - tests/test_api_server.py
+    files_to_modify:
+      - src/finsec_alpharadar/domain/models.py
+      - src/finsec_alpharadar/domain/__init__.py
+      - src/finsec_alpharadar/connectors/__init__.py
+      - src/finsec_alpharadar/connectors/us_alpaca_edgar.py
+      - src/finsec_alpharadar/connectors/vn_ssi_vnstock.py
+      - src/finsec_alpharadar/api/server.py
+      - tests/test_end_to_end.py
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+  P3:
+    file: phases/phase-3-rag-as-of.md
+    post: [verification-P3.json]
+    files_to_create:
+      - tests/test_rag_as_of.py
+    files_to_modify:
+      - src/finsec_alpharadar/rag/hybrid_temporal_rag.py
+      - src/finsec_alpharadar/api/server.py
+      - tests/test_end_to_end.py
+      - tests/test_api_server.py
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+  P4:
+    file: phases/phase-4-forensics-guards.md
+    post: [verification-P4.json]
+    files_to_create:
+      - tests/test_forensics_guards.py
+    files_to_modify:
+      - src/finsec_alpharadar/domain/models.py
+      - src/finsec_alpharadar/domain/__init__.py
+      - src/finsec_alpharadar/forensics/xbrl_bctc_auditor.py
+      - tests/test_end_to_end.py
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+  P5:
+    file: phases/phase-5-hygiene.md
+    post: [verification-P5.json]
+    files_to_create:
+      - tests/test_repo_hygiene.py
+    files_to_modify:
+      - .gitignore
+      - docker-compose.yml
+      - Makefile
+      - .env.example
+      - .agents/mcp_config.json
+      - .agents/rules/quant-and-market-rules.md
+      - .agents/rules/db-and-xbrl-migrations.md
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md

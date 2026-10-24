@@ -1,0 +1,57 @@
+{
+  "stage": "cook",
+  "plan": "261021-1314-phase0b-foundations",
+  "checks": [
+    {
+      "name": "unit/venv-py313",
+      "status": "PASS",
+      "file": "results/P3/unit__venv-py313-2a7c9cf118aa.xml",
+      "sha256": "2a7c9cf118aa9faf765b166e6b81e34afe2cc537bbcb13366fcf71d247cefe91",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P3\\unit-venv313.xml"
+    },
+    {
+      "name": "unit/py311",
+      "status": "PASS",
+      "file": "results/P3/unit__py311-600e16d90aa8.xml",
+      "sha256": "600e16d90aa8bac2bd027dc0611c17a3774e6197fe9f5d3605ccf6b69cff1710",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P3\\unit-py311.xml"
+    },
+    {
+      "name": "unit/global-py313",
+      "status": "PASS",
+      "file": "results/P3/unit__global-py313-bcdb97a485a4.xml",
+      "sha256": "bcdb97a485a4a0e34797e60e4719435e20461e567a4ad16cfc7608d0b721c242",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P3\\unit-global313.xml"
+    },
+    {
+      "name": "integration/api-handlers",
+      "status": "PASS",
+      "file": "results/P3/integration__api-handlers-6c3aec48c3ac.xml",
+      "sha256": "6c3aec48c3ac7f609dc0f91c90ba00d65118055d1727ce5bfd55c65607c00f0a",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P3\\integration-api.xml"
+    },
+    {
+      "name": "regression/rag-as-of",
+      "status": "PASS",
+      "file": "results/P3/regression__rag-as-of-e167e5e334e1.xml",
+      "sha256": "e167e5e334e1a0bfd769e8c9456f8e26c2a17e406b1c1874b258c76a4bc04e6c",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P3\\regression-rag.xml"
+    },
+    {
+      "name": "smoke/end-to-end",
+      "status": "PASS",
+      "file": "results/P3/smoke__end-to-end-51645a045efd.xml",
+      "sha256": "51645a045efd00dabc724ee19b6b44eec80f776c11c3122a07f5af162971dafb",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\150748de-9cc6-4fdc-ab8c-1549b8ee256d\\scratchpad\\results\\P3\\smoke.xml"
+    }
+  ],
+  "verdict": "PASS",
+  "phase": "P3",
+  "actor": "user:tqanh123",
+  "ts": "2026-10-21T15:33:16+00:00",
+  "blastRadius": {
+    "stale": true,
+    "reason": "stale"
+  },
+  "run_seq": null
+}

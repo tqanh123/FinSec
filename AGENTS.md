@@ -8,6 +8,7 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-24 — The plans tree is committed (plans, research, harness artifacts; it was untracked before). Harness records name the owner `user:tqanh123`, not a personal email: each clone sets `HARNESS_USER=tqanh123` (the harness adds the `user:` prefix), e.g. in the gitignored `.claude/settings.local.json`; git commits use 52412090+tqanh123@users.noreply.github.com.
 - 2026-10-21 — MCP config: the `wandb` entry is removed (not on PyPI, no signed release; Phase 7 at the earliest), and every `uvx`/`npx` server is pinned to an exact version or a 40-hex commit.
 - 2026-10-21 — Forensics guards are pulled forward from roadmap Phase 2 (§5.2, `forensics/xbrl_bctc_auditor.py` row) into Phase 0b: an undefined ratio or a non-finite input returns None with a reason, and the three scores run only for `IssuerType.NON_FINANCIAL` (financial issuers get "not applicable"; an unknown issuer type is refused). Formula corrections stay in Phase 2.
 - 2026-10-21 — VN price validation (D4): a VN `MarketTick` raises on a missing or unknown exchange, a missing reference price, or a price outside its allowed range.

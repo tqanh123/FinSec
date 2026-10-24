@@ -1,0 +1,55 @@
+verdict: PASS
+reviewer: user:tqanh123
+role: reviewer
+rationale: 'Round-4 verdict on commit a76e7c9 (tests, docs and one in-place engine
+  docstring; no production behaviour change), the third fix commit on top of the round-1
+  (7092637..dca8e9d), round-2 (9ba4562) and round-3 (c9168f0) PASS_WITH_RISK reviews.
+  Scope: the delta c9168f0..a76e7c9 only (6 files, +40/-14), checked against round-3
+  findings M1 and L2-L6, the AGENTS.md binding rules and docs/code-standards.md. Run
+  by this verdict reviewer: .venv pytest 274 passed (Python 3.13.14, numpy 2.5.4);
+  the py311-np126 venv (Python 3.11.16, numpy 1.26.4, fastapi 0.159.1) 274 passed;
+  gh shows CI run 39725093812 on a76e7c9 succeeded; git diff --check is clean and
+  the committed blobs are LF. The dimension reviewers also report 239 passed with
+  only tests/test_api_server.py skipped under global Python without fastapi, 274 passed
+  on py311 with numpy 2.4.6, 122 of 122 doc citations holding, both standards checks
+  conforming and strict verify_install OK. Round-3 M1 is resolved: the float32 row
+  now makes market_cap and total_liabilities both float32, and my probe gives score_not_finite
+  on numpy 1.26.4 and 2.5.4. L2 (US V accepted, iex stored as IEX, VN hose stored
+  as HOSE, empty and blank exchanges rejected) and L3 (all-float32 and all-float64
+  snapshots score like Python floats) are resolved, and the dimension mutants for
+  them are killed. L4 is accepted in decision 31868b18decb with a reason that holds:
+  the engine docstring now states that an int overflow inside a guard reports score_not_finite,
+  and a float-converting refactor would move cited lines. L5 (bool SSI foreign volumes
+  in SA:23 and CS:69) and L6 (score_not_finite in CS:51 and the test docstring) are
+  resolved. No binding rule is touched, no buy/sell wording is added, the disclaimer
+  is unchanged, and no critical, high or medium issue is evidenced. Three lows remain,
+  none blocking. (1) tests/test_forensics_guards.py:279 asserts that is_manipulation_suspect
+  is falsy, which None also satisfies: a mutant that returns None for numpy scores
+  survives (111 passed on numpy 2.5.4 and 1.26.4, with a canary killed), and asserting
+  is-not-None-and-falsy kills it (2 failed) while staying green on HEAD. (2) CS:51
+  and tests/test_forensics_guards.py:6-7 list a numpy float32 score as a score_not_finite
+  trigger, but a finite float32 score is returned (pinned by the new test); the trigger
+  is a float32 quotient that overflows to inf. Two confirmed entries describe this
+  one issue. It stays low rather than a medium misleading doc: the phrase sits inside
+  a clause already scoped to a score that itself comes out non-finite, so it is imprecise
+  rather than wrong about behaviour, and it is round 3''s own suggested wording verbatim.
+  (3) SA:23 and CS:69 omit that an int too large for a float raises a bare OverflowError
+  at connectors/vn_ssi_vnstock.py:52-53 (probe: 10**400); the documented cases are
+  true, and the omitted one is unrealistic input to a stub parser with no client.
+  Decimal snapshot fields, bool SSI foreign volumes and the R1/R2 quant risks stay
+  accepted, because their recorded reasons hold. No critical, high or medium issue
+  remains, so the rubric gives PASS; the three lows are named for follow-up.'
+effort: high
+reviewer_engine: claude
+reviewer_model: claude-opus-5-5
+rounds_run: 4
+architecture_review:
+  checked: true
+  doc_sha: 9e106c03a2c70f4946e1c828882550375705c8be
+  drift:
+  - 'system-architecture.md:23 says a null or non-numeric SSI foreign volume raises
+    a bare TypeError/ValueError and a bool is read as a number. It omits that an int
+    too large for a float raises a bare OverflowError from the same float() call at
+    connectors/vn_ssi_vnstock.py:52-53 (10**400). Docs only: the parser behaviour
+    is accepted Phase 6 debt (abe8b12005d9).'
+run_seq: null

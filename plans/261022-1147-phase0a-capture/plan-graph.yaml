@@ -1,0 +1,148 @@
+# Phase DAG for plan 261022-1147-phase0a-capture — strictly linear (P1 -> P2 -> P3 -> P4 -> P5 -> P6 -> P7).
+# {from: A, to: B} = A runs BEFORE B. Every phase writes AGENTS.md (and most write the three docs), so no pair may run
+# in parallel without a merger_owned list for those files; with one developer the gain is nil.
+# files_to_* mirror each phase file's "Related Code Files" table exactly (read/run rows excluded).
+#
+# Cross-plan edges: every phase here touches tests/, pyproject.toml or AGENTS.md, which plan
+# 261021-1314-phase0b-foundations also writes. That plan is strictly linear P1 -> P5; its P1 was the last phase to
+# write pyproject.toml and its P5 the last to write tests/ and AGENTS.md, so P5 (the chain's end, which implies P1)
+# is the single prerequisite each phase here waits on. If the 0b plan is archived before cook, rewrite each `from:`
+# to `archive/261021-1314-phase0b-foundations/P5` (one line each) rather than waiving the edge.
+edges:
+  - {from: 261021-1314-phase0b-foundations/P5, to: P1}
+  - {from: 261021-1314-phase0b-foundations/P5, to: P2}
+  - {from: 261021-1314-phase0b-foundations/P5, to: P3}
+  - {from: 261021-1314-phase0b-foundations/P5, to: P4}
+  - {from: 261021-1314-phase0b-foundations/P5, to: P5}
+  - {from: 261021-1314-phase0b-foundations/P5, to: P6}
+  - {from: 261021-1314-phase0b-foundations/P5, to: P7}
+  - {from: P1, to: P2}
+  - {from: P2, to: P3}
+  - {from: P3, to: P4}
+  - {from: P4, to: P5}
+  - {from: P5, to: P6}
+  - {from: P6, to: P7}
+subtasks:
+  P1:
+    file: phases/phase-1-vnstock-probe.md
+    post: [verification-P1.json]
+    files_to_create:
+      - src/finsec_alpharadar/data_root.py
+      - tests/test_data_root.py
+      - tests/test_dependency_pins.py
+      - requirements/vnstock/pyproject.toml
+      - requirements/vnstock/win-py313.lock
+      - scripts/spike/_spikelib.py
+      - scripts/spike/vnstock_probe.py
+      - scripts/spike/portal_probe.py
+      - docs/phase0-spike-report.md
+    files_to_modify:
+      - pyproject.toml
+      - .env.example
+      - .gitignore
+      - tests/test_repo_hygiene.py
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+  P2:
+    file: phases/phase-2-capture-poller.md
+    post: [verification-P2.json]
+    files_to_create:
+      - src/finsec_alpharadar/capture/__init__.py
+      - src/finsec_alpharadar/capture/__main__.py
+      - src/finsec_alpharadar/capture/config.py
+      - src/finsec_alpharadar/capture/record.py
+      - src/finsec_alpharadar/capture/schedule.py
+      - src/finsec_alpharadar/capture/sources.py
+      - src/finsec_alpharadar/capture/storage.py
+      - src/finsec_alpharadar/capture/poller.py
+      - src/finsec_alpharadar/capture/heartbeat.py
+      - src/finsec_alpharadar/capture/backup.py
+      - src/finsec_alpharadar/capture/audit.py
+      - src/finsec_alpharadar/capture/host.py
+      - configs/capture.toml
+      - tests/test_capture_record.py
+      - tests/test_capture_schedule.py
+      - tests/test_capture_sources.py
+      - tests/test_capture_storage.py
+      - tests/test_capture_poller.py
+      - tests/test_capture_ops.py
+      - tests/test_capture_cli.py
+      - tests/test_capture_invariants.py
+    files_to_modify:
+      - pyproject.toml
+      - .env.example
+      - tests/test_dependency_pins.py
+      - tests/test_repo_hygiene.py
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+  P3:
+    file: phases/phase-3-capture-deploy.md
+    post: [verification-P3.json]
+    files_to_create:
+      - docs/capture-runbook.md
+    files_to_modify:
+      - configs/capture.toml
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/project-roadmap.md
+  P4:
+    file: phases/phase-4-edgar-golden-test.md
+    post: [verification-P4.json]
+    files_to_create:
+      - scripts/spike/record_edgar_headers.py
+      - src/finsec_alpharadar/connectors/edgar_acceptance.py
+      - tests/test_edgar_time.py
+      - tests/fixtures/edgar_headers/
+    files_to_modify:
+      - src/finsec_alpharadar/connectors/__init__.py
+      - .gitattributes
+      - docs/phase0-spike-report.md
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+  P5:
+    file: phases/phase-5-alpaca-probe.md
+    post: [verification-P5.json]
+    files_to_create:
+      - scripts/spike/alpaca_probe.py
+    files_to_modify:
+      - .env.example
+      - tests/test_repo_hygiene.py
+      - docs/phase0-spike-report.md
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+  P6:
+    file: phases/phase-6-vn-reconcile.md
+    post: [verification-P6.json]
+    files_to_create:
+      - scripts/spike/vn_counts.py
+      - scripts/spike/vn_reconcile.py
+      - src/finsec_alpharadar/quant/power_rule.py
+      - tests/test_power_rule.py
+    files_to_modify:
+      - src/finsec_alpharadar/quant/__init__.py
+      - docs/phase0-spike-report.md
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+  P7:
+    file: phases/phase-7-phase0-exit-audit.md
+    post: [verification-P7.json]
+    # The last three entries are touched only by the window-restart/hotfix procedure (P3 R3.9) when the exit audit finds a code-caused gap.
+    files_to_modify:
+      - docs/phase0-spike-report.md
+      - AGENTS.md
+      - docs/system-architecture.md
+      - docs/code-standards.md
+      - docs/project-roadmap.md
+      - src/finsec_alpharadar/capture/
+      - configs/capture.toml
+      - tests/test_capture_*.py
