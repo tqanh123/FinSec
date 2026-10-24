@@ -1,11 +1,11 @@
 ---
 trigger: glob
 globs: "*.py, **/*.py"
-description: "Enforce deterministic quant calculations, US/VN market microstructure rules, and look-ahead bias prevention."
+description: "Pointer to the binding look-ahead, VN market and order-execution rules in AGENTS.md."
 ---
-# Quantitative & Dual-Market Microstructure Rules
-1. **No Look-Ahead Bias**: In all sliding windows, Kalman updates, and Event Study CAR calculations, strictly use timestamps `<= t_event`.
-2. **Vietnam Stock Market Specifics**:
-   - Validate price against `HOSE (+/-7%)`, `HNX (+/-10%)`, and `UPCOM (+/-15%)` bands around `reference_price`.
-   - Always include Foreign Institutional Net Flow (`foreign_buy_volume - foreign_sell_volume`) when scoring Vietnam large-cap equities (VN30).
-3. **Hybrid RAG Standards**: Always combine sparse lexical matching (BM25) with dense embeddings via Reciprocal Rank Fusion (`RRF`), rerank with late-interaction MaxSim, and apply exponential time-decay.
+# Quant & Dual-Market Rules (pointer)
+This file only points to the project contract. AGENTS.md wins where this file and AGENTS.md differ.
+- **No look-ahead:** AGENTS.md "Engineering Rules (binding)" -> "No look-ahead" and "Point-in-time contract (roadmap §5)".
+- **VN prices:** AGENTS.md "Engineering Rules (binding)" -> "VN"; the band check itself (decision D4: `price_limits`, the one-tick tolerance, special sessions) is in AGENTS.md "Decisions".
+- **No order execution:** AGENTS.md "Engineering Rules (binding)" -> "No order execution anywhere".
+- **RAG, the bandit and other optional components:** AGENTS.md "Engineering Rules (binding)" -> "Complexity gate (§9.10)". No retrieval technique is required in any file.

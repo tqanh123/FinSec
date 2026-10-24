@@ -219,9 +219,9 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `CLAUDE.md` | keep | 0 | Owner decision 2026-10-20: CLAUDE.md only imports `@AGENTS.md` and keeps the generated harness block. All project knowledge lives in AGENTS.md. |
 | `docs/system-architecture.md`, `docs/code-standards.md` | add | 0 | Done 2026-10-20 (conform to `scaffold_standards.py --check`). Required by /hs:plan and /hs:cook at Step 0 (harness/standards/README.md). They hold the as-built vs proposed architecture, the binding rules and the coding/testing conventions. |
 | `docs/project-roadmap.md` | add | 0 | This document. |
-| `src/finsec_alpharadar/domain/models.py` | fix | 0-1 | Use tz-aware datetimes. Add Event, FundamentalFact (long format, with accn and published_at), Prediction and Outcome. Raise on an unknown exchange instead of silently using 7% (line 44). Round ceiling/floor to ticks and use full VND. Replace the static `VNExchangeBand` (lines 13-16) with time-versioned exchange membership. |
-| `connectors/us_alpaca_edgar.py` | rewrite | 1 | Add a real EDGAR client: header acceptance time, at most 5 rps, User-Agent from EDGAR_IDENTITY, submissions, Form 4 via edgartools, companyfacts by accn, bulk zips. Add an Alpaca daily-bar client with `adjustment=all` and an explicit feed. Remove the `now()` fallback (line 20) and the fabricated bid/ask sizes. Data endpoints only. |
-| `connectors/vn_ssi_vnstock.py` | rewrite | 0, 3 | Add a vnstock adapter pinned to the probed version, using KBS for statements as vnstock's docs recommend. Fix the SSI endpoints now; defer the live client to Phase 6, and write per-channel parsers only after reading the R-channel spec. Remove the `now()` fallback and the BidVol/AskVol = 100 defaults. |
+| `src/finsec_alpharadar/domain/models.py` | fix | 0-1 | Use tz-aware datetimes. Add Event, FundamentalFact (long format, with accn and published_at), Prediction and Outcome. Raise on an unknown exchange instead of silently using 7% (done 2026-10-21). Round ceiling/floor to ticks and use full VND (full VND done 2026-10-21, decision D4; tick rounding still planned). Replace the static `VNExchangeBand` (lines 14-17) with time-versioned exchange membership. |
+| `connectors/us_alpaca_edgar.py` | rewrite | 1 | Add a real EDGAR client: header acceptance time, at most 5 rps, User-Agent from EDGAR_IDENTITY, submissions, Form 4 via edgartools, companyfacts by accn, bulk zips. Add an Alpaca daily-bar client with `adjustment=all` and an explicit feed. Remove the `now()` fallback and the fabricated bid/ask sizes (done 2026-10-21). Data endpoints only. |
+| `connectors/vn_ssi_vnstock.py` | rewrite | 0, 3 | Add a vnstock adapter pinned to the probed version, using KBS for statements as vnstock's docs recommend. Fix the SSI endpoints now (done 2026-10-21); defer the live client to Phase 6, and write per-channel parsers only after reading the R-channel spec. Remove the `now()` fallback and the BidVol/AskVol = 100 defaults (done 2026-10-21). |
 | `connectors/base.py` | add | 1 | SourceAdapter protocol, RawRecord, token-bucket limiter, retry with backoff, idempotent key (source, source_id). |
 | `capture/` | add | 0 | Capture-only VN disclosure poller with no parsing: raw payload, sha256, first_seen_at, outage log, heartbeat. |
 | `store/` | add | 1 | Raw archive writer, SQLite schema, DuckDB views, `as_of()`. |
@@ -235,21 +235,21 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `ledger/` | add | 2 | Append-only predictions and outcomes with mode, model_version, feature_hash and a hash chain; nightly scorer. |
 | `pipeline/__main__.py` | add | 1-4 | CLI subcommands. |
 | `notify/telegram.py` | add | 4 | Private 1:1 bot to an allowlisted chat id; digests; heartbeat. |
-| `forensics/xbrl_bctc_auditor.py` | fix | 2 | Guards for zero division and missing data (return None with a reason). Sector gate. Altman Z'' for non-manufacturers. Beneish on trade receivables only. Piotroski's dilution test ignores stock dividends and bonus shares. Mapping for Circular 99 vs Circular 200. Return the raw components as features. |
+| `forensics/xbrl_bctc_auditor.py` | fix | 2 | Guards and the sector gate done early (2026-10-22, Phase 0b); the formula items below remain Phase 2. Guards for zero division and missing data (return None with a reason). Sector gate. Altman Z'' for non-manufacturers. Beneish on trade receivables only. Piotroski's dilution test ignores stock dividends and bonus shares. Mapping for Circular 99 vs Circular 200. Return the raw components as features. |
 | `quant/kalman_microstructure.py` | defer | 6 | Known bugs are recorded: foreign flow is summed over a 50-tick deque (line 99), but fix it only after reading the SSI field semantics, because the test at tests/test_end_to_end.py:94-95 feeds increments. It is also session-blind, never validates the band, and gives OBI = ±1 on a limit lock. The volume z-score and foreign-net logic can be reused on daily bars in Phases 2-3. |
 | `quant/deduplicator.py` | keep | 0, 4 | Fix the "O(1)" docstring (it is a linear scan). Use it to collapse disclosures reposted by several sources. |
-| `rag/hybrid_temporal_rag.py` | minimal fix, then defer | 0, 5, 7 | Phase 0: add a `published_at <= as_of` filter, fix the falsy `reference_time or now` (line 112) and the age clamp (line 138), with a regression test, and label the "dense"/ColBERT legs as hash-based placeholders. Phase 5: NFC-aware Unicode tokenizer. Phase 7: real embeddings. |
+| `rag/hybrid_temporal_rag.py` | minimal fix, then defer | 0, 5, 7 | Phase 0: add a `published_at <= as_of` filter, fix the falsy `reference_time or now` and the age clamp, with a regression test, and label the "dense"/ColBERT legs as hash-based placeholders (all done 2026-10-21). Phase 5: NFC-aware Unicode tokenizer. Phase 7: real embeddings. |
 | `router/linucb_bandit.py` | remove from API | 0 | On a cold start the arms tie and the first arm always wins (line 40); no LLM is called and there is no reward. Move it to `experimental/`. |
 | `api/server.py` | rewrite | 4 | Read-only GET /v1/events, /v1/predictions, /v1/scoreboard and /v1/data-health, with pydantic models, bound to localhost. Remove the tick ingest, the empty RAG search, the bandit and the hard-coded model IDs. |
 | `scripts/train_unsloth_slm.py`, `configs/unsloth_qwen3_catalyst.yaml` | defer | 7 | Use only as a distilled extractor. Drop `abnormal_return_sign_accuracy_reward`; keep the schema and number-faithfulness rewards. |
-| `tests/test_end_to_end.py` | fix | 0 | Wrap `run_modular_verification` in `test_end_to_end()`. Add test_edgar_time, test_no_order_execution and test_agents_md_paths (Phase 0), then test_point_in_time and test_labels (Phase 1). |
-| `pyproject.toml` | fix | 0 | Add `[tool.pytest.ini_options] pythonpath = ["src"]`. Add a dev extra (pytest, hypothesis, ruff) and a research extra (pandas or polars, pyarrow, duckdb, scikit-learn; these choices are ASSUMED). Move pathway, qdrant-client and pydantic-ai to a deferred extra. Pin vnstock to the probed version. |
-| `.gitignore` | fix | 0 | Anchor `data/` and `models/` as `/data/` and `/models/`. Unanchored, they silently ignore any source package with those names (OBSERVED by git check-ignore). |
-| `docker-compose.yml` | fix | 0 | Remove redpanda. Put qdrant and timescaledb behind compose profiles. Pin image tags, bind to 127.0.0.1, read the password from env. |
-| `Makefile` | fix | 0 | Bind run-api to 127.0.0.1. Document the PowerShell equivalents. |
-| `.env.example` | fix | 0 | Drop SSI_PRIVATE_KEY_PATH. Add SSI_API_URL, SSI_STREAM_URL and ALPACA_DATA_FEED. EDGAR_IDENTITY must be a real contact. |
-| `.agents/mcp_config.json` | fix | 0 | Remove `trading` from ALPACA_TOOLSETS. Pin git refs and package versions. MCP is for exploration, never a pipeline data source. |
-| `.agents/rules/*.md` | fix | 0 | Replace rule 3 (BM25 + dense + MaxSim required in every *.py) with a pointer to AGENTS.md. Band rule: tick rounding, feed-provided bands, special days. Storage rule: NUMERIC plus published_at, with tick tables scoped to Phase 6. |
+| `tests/test_end_to_end.py` | fix | 0 | Wrap `run_modular_verification` in `test_end_to_end()`. Add test_edgar_time, test_no_order_execution and test_agents_md_paths (Phase 0), then test_point_in_time and test_labels (Phase 1). The wrapper, test_no_order_execution and test_agents_md_paths are done (2026-10-21, Phase 0b); test_edgar_time waits for Phase 0a. |
+| `pyproject.toml` | fix | 0 | Add `[tool.pytest.ini_options] pythonpath = ["src"]`. Add a dev extra (pytest, hypothesis, ruff) and a research extra (pandas or polars, pyarrow, duckdb, scikit-learn; these choices are ASSUMED). Move pathway, qdrant-client and pydantic-ai to a deferred extra. Pin vnstock to the probed version. The pytest config and the dev extra are done (2026-10-21, Phase 0b). |
+| `.gitignore` | fix | 0 | Anchor `data/` and `models/` as `/data/` and `/models/`. Unanchored, they silently ignore any source package with those names (OBSERVED by git check-ignore). Done 2026-10-22. |
+| `docker-compose.yml` | fix | 0 | Remove redpanda. Put qdrant and timescaledb behind compose profiles. Pin image tags, bind to 127.0.0.1, read the password from env. Done 2026-10-22. |
+| `Makefile` | fix | 0 | Bind run-api to 127.0.0.1. Document the PowerShell equivalents. Done 2026-10-22 (PowerShell forms in AGENTS.md). |
+| `.env.example` | fix | 0 | Drop SSI_PRIVATE_KEY_PATH and add SSI_API_URL and SSI_STREAM_URL (done 2026-10-22). Add ALPACA_DATA_FEED. EDGAR_IDENTITY must be a real contact. |
+| `.agents/mcp_config.json` | fix | 0 | Remove `trading` from ALPACA_TOOLSETS (done 2026-10-21, with `watchlists`). Pin git refs and package versions (done 2026-10-22). MCP is for exploration, never a pipeline data source. |
+| `.agents/rules/*.md` | fix | 0 | Replace rule 3 (BM25 + dense + MaxSim required in every *.py) with a pointer to AGENTS.md (done 2026-10-22: both rules now point to AGENTS.md, whose decision D4 covers feed-provided bands and special days; tick rounding stays planned). Band rule: tick rounding, feed-provided bands, special days. Storage rule: NUMERIC plus published_at, with tick tables scoped to Phase 6. |
 | `.agents/hooks.json`, `scripts/validate_command_safety.sh` | fix later | 4 | Wired for another tool. The real guards are tests and harness hooks. |
 
 ### 5.3 Resolved contradictions
@@ -374,12 +374,12 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 **0b. Foundations.**
 1. Done 2026-10-20: `docs/system-architecture.md` and `docs/code-standards.md` are written and pass `harness/scripts/scaffold_standards.py --check`. Re-check them whenever an owner decision in section 9 is answered.
 2. AGENTS.md now carries the status, proposed direction, facts and rules (done 2026-10-20). CLAUDE.md stays a bare `@AGENTS.md` import. Update AGENTS.md as each owner decision in section 9 is answered.
-3. Tests:
+3. Tests. Done 2026-10-21 (Phase 0b plan, phase 1): GitHub Actions workflow, because a public GitHub remote exists.
    - pytest config with `pythonpath`, the `test_end_to_end()` wrapper and the dev extras;
    - `tests/test_no_order_execution.py`: no TradingClient, submit_order or FC Trading imports in `src/`;
    - `tests/test_agents_md_paths.py`: every path that AGENTS.md describes as existing does exist.
-   - The local gate is `/hs:test`. Add a GitHub Actions workflow only if a GitHub remote exists (there is no `.github/` today); otherwise add a pre-commit config.
-4. Hygiene:
+   - The local gate is `/hs:test`; CI is `.github/workflows/ci.yml` (added 2026-10-21 because a public GitHub remote exists, so no pre-commit config).
+4. Hygiene. Done 2026-10-22 (Phase 0b plan, phase 5):
    - anchor the `.gitignore` patterns;
    - remove the `trading` toolset and pin the MCP refs;
    - drop SSI_PRIVATE_KEY_PATH and add the SSI URLs;
@@ -387,10 +387,10 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
    - Makefile: bind run-api to 127.0.0.1;
    - document the PowerShell commands.
 5. Correctness:
-   - the RAG as_of fix, with a regression test;
-   - `models.py` raises on an unknown exchange;
-   - connectors stop defaulting timestamps to `now()`;
-   - fix `.agents/rules` rule 3 and the band rule.
+   - the RAG as_of fix, with a regression test (done 2026-10-21);
+   - `models.py` raises on an unknown exchange (done 2026-10-21);
+   - connectors stop defaulting timestamps to `now()` (done 2026-10-21);
+   - fix `.agents/rules` rule 3 and the band rule (done 2026-10-22).
 6. VN capture-only poller (`capture/`):
    - **Schedule:** every 2-5 minutes from 08:00 to 17:30 ICT on trading days, hourly otherwise.
    - **Sources:** vnstock news/events for the seed universe, plus one official portal listing page (check its URL and robots.txt first).

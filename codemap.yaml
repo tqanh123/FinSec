@@ -1,0 +1,17 @@
+layout:
+  roots:
+  - id: src
+    path: src
+    kind: src
+scan:
+  include:
+  - '*.py'
+  exclude: []
+schema_version: 2
+project: FinSec
+import_roots:
+- src
+languages:
+  python: {}
+  typescript:
+    engine: typescript
