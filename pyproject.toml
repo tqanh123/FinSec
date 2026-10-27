@@ -22,13 +22,18 @@ prod = [
     "qdrant-client>=1.12.0",
     "psycopg[binary]>=3.2.0",
     "edgartools>=3.0.0",
-    "vnstock>=3.4.0",
     "pydantic-ai>=2.0.0",
 ]
 finetune = [
     "unsloth>=2026.4",
     "trl>=0.12.0",
     "wandb>=0.18.0",
+]
+# vnstock Gen 5 is not on PyPI (the PyPI project is quarantined with 0 files; OBSERVED 2026-10-22). It installs only from
+# the vendor index through the hash-pinned lock requirements/vnstock/win-py313.lock (AGENTS.md "Build & Verification
+# Commands"); `pip install ".[capture]"` from PyPI cannot resolve it. Never install vnai, vnstock 4.x or vnstock3.
+capture = [
+    "vnstock==5.1.0",
 ]
 # Test and lint tools. No test imports hypothesis yet; ruff is pinned only (no ruff config and no lint gate yet).
 dev = [

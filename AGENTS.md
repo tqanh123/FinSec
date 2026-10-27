@@ -8,6 +8,9 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-27 — VN capture sources (owner, plan 261022-1147, OB3): primary HOSE API listing and HNX RSS feed 3, polled in parallel; vnstock events secondary; SSC excluded (date only, server clock about 6 minutes off); VSDC deferred to Phase 3. Measurements: `docs/phase0-spike-report.md` §2.
+- 2026-10-27 — vnstock (owner, plan 261022-1147): Gen 5 is a SECONDARY VN source; the official portals carry the capture, and a vnstock failure is a logged source outage. vnstock runs only in a hash-pinned environment outside the clone, under a separate Windows user on the dev machine (the probe) or the capture user on the laptop; agent instruction files are hashed before and after every first import.
+- 2026-10-27 — External data root: raw captures and spike output live under the absolute path in FINSEC_DATA_ROOT, outside the clone by default; finsec_alpharadar.data_root refuses a root inside a git work tree unless git ignores it.
 - 2026-10-24 — The plans tree is committed (plans, research, harness artifacts; it was untracked before). Harness records name the owner `user:tqanh123`, not a personal email: each clone sets `HARNESS_USER=tqanh123` (the harness adds the `user:` prefix), e.g. in the gitignored `.claude/settings.local.json`; git commits use 52412090+tqanh123@users.noreply.github.com.
 - 2026-10-21 — MCP config: the `wandb` entry is removed (not on PyPI, no signed release; Phase 7 at the earliest), and every `uvx`/`npx` server is pinned to an exact version or a 40-hex commit.
 - 2026-10-21 — Forensics guards are pulled forward from roadmap Phase 2 (§5.2, `forensics/xbrl_bctc_auditor.py` row) into Phase 0b: an undefined ratio or a non-finite input returns None with a reason, and the three scores run only for `IssuerType.NON_FINANCIAL` (financial issuers get "not applicable"; an unknown issuer type is refused). Formula corrections stay in Phase 2.
@@ -49,7 +52,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); undefined ratios return None with a reason; scores run only for non-financial issuers (2026-10-22); formula corrections are Phase 2;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
-- **Tests (OBSERVED 2026-10-22).** pytest collects 274 tests from `tests/`; all pass in `.venv` (Python 3.13) and on 3.11, and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39721376654 (commit c9168f0): success, 267 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
+- **Tests (OBSERVED 2026-10-27).** pytest collects 287 tests from `tests/`; all pass in `.venv` (Python 3.13), and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39721376654 (commit c9168f0): success, 267 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
 - **Stub or placeholder:**
   - connectors are static dict parsers; the Alpaca and SSI tick parsers raise on missing, null or malformed fields, and an Alpaca quote must share the trade's symbol and not postdate it (2026-10-21);
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
@@ -63,6 +66,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 
 ## Package Layout (`src/finsec_alpharadar/`)
 - `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`, `IssuerType`); VN tick validation (D4), `price_limits`; every tick rejects non-finite numbers (2026-10-21); an unknown market or a VN price of 0 or below raises (2026-10-22).
+- `data_root.py`: guard of the external data root (2026-10-27). `resolve_data_root` reads `FINSEC_DATA_ROOT` and requires an absolute path; it resolves links first, then refuses a path inside a git work tree unless `git check-ignore` says git ignores it. `resolve_external_dir` applies the same guard to any other variable.
 - `connectors/`: payload parsers for Alpaca and SEC EDGAR (`us_alpaca_edgar.py`) and for SSI FastConnect and vnstock (`vn_ssi_vnstock.py`). No network clients yet.
 - `quant/`: `MinHashDeduplicator`, `KalmanPriceFilter` + `StreamingQuantEngine` (VWAP, OBI, CUSUM, volume z-score, VN foreign net flow), `EventStudyAnalyzer` (CAR).
 - `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score; an issuer gate and None-with-reason guards (2026-10-22).
@@ -120,7 +124,25 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Ticks: HOSE stocks 10 VND below 10,000, 50 VND from 10,000 to 49,950, 100 VND from 50,000; HNX and UPCOM 100 VND. Ceilings round down and floors round up to the tick; a limit equal to the reference moves one tick. VERIFIED https://www.cts.vn/wp-content/uploads/2025/08/KRX_1.Quy-dinh-giao-dich-chung-khoan-tai-HSX.pdf and https://www.cts.vn/wp-content/uploads/2025/08/KRX_2.Quy-dinh-giao-dich-chung-khoan-tai-HNX.pdf
   - First trading day, resumption after 25+ sessions and some ex-rights days: ±20% HOSE, ±30% HNX, ±40% UPCOM. VERIFIED (UPCOM, 2026) https://luatvietnam.vn/chung-khoan/quyet-dinh-23-qd-hdtv-2026-ban-hanh-quy-che-dang-ky-va-quan-ly-giao-dich-chung-khoan-chua-niem-yet-435227-d1.html; HOSE/HNX figures from the 2025 brochures above (the 2026 appendix was not readable).
   - SSI X-TRADE messages carry `Ceiling`, `Floor` and `RefPrice`; the doc samples are in VND. VERIFIED https://guide.ssi.com.vn/ssi-products/fastconnect-data/streaming-data.md
-- **vnstock licence.** The Community licence allows personal, study or research use only, with no redistribution. VERIFIED https://github.com/thinh-vu/vnstock. Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
+- **vnstock licence.** The Community licence allows personal, study or research use only, with no redistribution. VERIFIED https://github.com/thinh-vu/vnstock
+- **vnstock distribution (OBSERVED 2026-10-22).**
+  - The PyPI project `vnstock` is quarantined (0 files); Gen 5 installs only from https://vnstocks.com/api/packages.
+  - Every release below 5.1.0 is yanked on the vendor index.
+  - Each Gen 5 release stops serving data 365 days after publication (`VNSTOCK_RELEASE_EXPIRED`). VERIFIED https://vnstocks.com/docs/vnstock/cai-dat
+  - Pinned `==5.1.0` in the `capture` extra, installed only through `requirements/vnstock/win-py313.lock` (2026-10-27).
+- **vnstock 5.1.0 behaviour (OBSERVED 2026-10-26, Community tier; detail in `docs/phase0-spike-report.md` §1).**
+  - The package is usable until 2027-10-17.
+  - `news()` is removed (`VNSTOCK_FEATURE_REMOVED`). `events(source="kbs")` fails (`VNSTOCK_KBS_COMPANY_SHAPE`). `events(source="vci")` works, with a unique string `id` per symbol; `public_date` carries a time of day in only 21-36% of rows.
+  - `ohlcv()` returns adjusted prices in thousands of VND, with history capped at the last 2,920 calendar days (oldest 2018-10-25) and 20,000 one-minute candles per call.
+  - Delisted symbols still return events and bars.
+  - 50 calls at down to a 0.5 s cadence gave no throttle signal.
+- **Phase 3 blocker (OBSERVED 2026-10-26).** vnstock Gen 5 serves adjusted prices only: the `ohlcv` signature has no adjustment parameter and no raw-bar source was found. Roadmap §6.3 needs raw bars, and the source is still open.
+- **VN disclosure portals (OBSERVED 2026-10-27).**
+  - HOSE API listing: JSON with `id`; `postedDate` is a pseudo-UTC epoch, so subtract 7 h.
+  - HNX RSS feed 3: 100 items with `guid` and second precision. Headers take 40-49 s during the session.
+  - robots.txt: HNX and SSC have none (404); `www.hsx.vn` allows all.
+  - SSC server clock is about 6 minutes off.
+  - Detail in `docs/phase0-spike-report.md` §2.
 - **`.gitignore` (OBSERVED 2026-10-22).** `/data/` and `/models/` are anchored to the repo root; data artefacts (`*.jsonl.gz`, `*.parquet`, `*.duckdb`, `*.sqlite*`, `*.db`) are ignored anywhere in the tree; `git check-ignore` no longer matches a `models/` package under the source package. With `core.autocrlf=true` the checked-out `.gitignore` is CRLF, and git reads its blank lines as an empty pattern that matches every path ending in `/`; query a file inside a directory, or read the `-v` pattern (OBSERVED 2026-10-21, Git for Windows 2.55.0).
 - **Harness install state (OBSERVED 2026-10-21).**
   - Strict verify reads the omitted-skills record in the gitignored `harness/state/`. A fresh clone or worktree therefore reports files as "missing" until you run the installer there: the default-off skills stashed in `disabled-skills/` (477 files in v7.3.0) plus `harness/state/.gitkeep`. The main checkout was installed on 2026-10-21 and passes.
@@ -167,11 +189,15 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
 - **Tests (2026-10-21).**
   - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
-  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-22: `source .venv/Scripts/activate && pytest -q` → 274 passed.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-27: `source .venv/Scripts/activate && pytest -q` → 287 passed.
   - `make test` runs `python -m pytest -q` (2026-10-22).
 - **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
 - **FastAPI server (2026-10-22).** bash: `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`; PowerShell: `$env:PYTHONPATH='src'; uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`. fastapi installs into `.venv` with the dev setup (2026-10-21).
 - **Docker (2026-10-22).** Set `POSTGRES_PASSWORD` in `.env` first (compose refuses an empty one). bash and PowerShell: `docker compose --profile ticks --profile rag up -d`; without a profile no service starts.
+- **vnstock environment (2026-10-27).** Never `pip install vnstock` from PyPI and never import vnstock under the dev user.
+  - Lock: `requirements/vnstock/win-py313.lock`, compiled in `requirements/vnstock/` with `uv pip compile pyproject.toml --generate-hashes --emit-index-annotation --python-platform x86_64-pc-windows-msvc --python-version 3.13 --index-strategy first-index -o win-py313.lock` (only vnstock comes from the vendor index).
+  - Install, offline and hash-checked, into a venv outside the clone owned by the probe or capture user: `python -I -m pip install --require-hashes --no-deps --no-index --find-links <wheels dir> -r win-py313.lock`.
+- **Spikes (2026-10-27).** `scripts/spike/` scripts reach the network, are never collected by pytest, and need `FINSEC_DATA_ROOT`. The portal probe runs with `.venv/Scripts/python scripts/spike/portal_probe.py --rounds 12 --interval 300` during trading hours. `scripts/spike/vnstock_probe.py` runs only under the probe user with `python -I`.
 - **Harness integrity:** `python3.13 harness/scripts/verify_install.py --root . --strict`. Local gate: `/hs:test`.
   - Standards docs: `python3.13 harness/scripts/scaffold_standards.py --type system-architecture --check docs/system-architecture.md`, and the same with `--type code-standards` for `docs/code-standards.md`.
   - Upgrade (Git Bash, POSIX paths): `sh install.sh /c/.../harness-vX.Y.Z.tar.gz .`. Then convert `harness/release.json` back to LF, because strict verify compares it with HEAD. Never edit `harness/manifest.json`: `kit_digest` pins its CRLF bytes.
