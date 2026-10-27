@@ -1,7 +1,8 @@
-"""vnstock is pinned only in the `capture` extra and installs only through the hash-pinned lock (plan 261022-1147, phase 1).
+"""vnstock is pinned only in the `capture` extra and installs only through the hash-pinned lock (plan 261022-1147, phase 1);
+tzdata is an unconditional core dependency (phase 2, R2.16).
 
 Reads `pyproject.toml`, `requirements/vnstock/pyproject.toml` and `requirements/vnstock/win-py313.lock` as text or with
-`tomllib`. Nothing is resolved or installed: no network, no clock, no subprocess.
+`tomllib`, and loads two zones with `zoneinfo`. Nothing is resolved or installed: no network, no clock, no subprocess.
 """
 from __future__ import annotations
 
@@ -9,6 +10,9 @@ import re
 import tomllib
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCK_PROJECT = REPO_ROOT / "requirements" / "vnstock" / "pyproject.toml"
@@ -123,3 +127,19 @@ def test_lock_project_routes_only_vnstock_to_the_vendor_index() -> None:
     assert lock_project["project"]["dependencies"] == [_capture_pin()]
     repo_tool = _load_toml(REPO_ROOT / "pyproject.toml").get("tool", {})
     assert "uv" not in repo_tool, "the repo pyproject.toml must not carry [tool.uv]"
+
+
+def test_tzdata_is_an_unconditional_core_dependency() -> None:
+    # zoneinfo reads TZPATH before the tzdata package, and Windows has no system IANA database, so every Windows
+    # environment needs the package; Linux CI would hide its absence (red-team r1 LT11). No marker, no version bound.
+    dependencies = _load_toml(REPO_ROOT / "pyproject.toml")["project"].get("dependencies", [])
+    tzdata = [req.strip() for req in dependencies if _requirement_name(req) == "tzdata"]
+    assert tzdata == ["tzdata"], f"[project].dependencies must hold exactly the bare requirement 'tzdata', got {tzdata}"
+
+
+def test_zoneinfo_loads_new_york_and_ho_chi_minh() -> None:
+    for key in ("America/New_York", "Asia/Ho_Chi_Minh"):
+        try:
+            ZoneInfo(key)
+        except ZoneInfoNotFoundError:
+            pytest.fail(f'{key} is missing: install tzdata: .venv/Scripts/python -m pip install -e ".[dev]"')

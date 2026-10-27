@@ -5,25 +5,45 @@
     {
       "name": "unit/full-suite",
       "status": "PASS",
-      "file": "results/P1/unit__full-suite-05c153c468bf.xml",
-      "sha256": "05c153c468bfe58495bea6083016acc31d9f8fe21b0b08171f00beff4c1b56c6",
-      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\5388f5e4-a5ae-4bbf-9e4b-0a1ab0bb4ff5\\scratchpad\\p1-full-suite.xml"
+      "file": "results/P2/unit__full-suite-ae2d5281c970.xml",
+      "sha256": "ae2d5281c9705231245cfff904c0f29ef0466c243faf91dfb056fef76d2715c3",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\5388f5e4-a5ae-4bbf-9e4b-0a1ab0bb4ff5\\scratchpad\\p2-full-suite.xml"
     },
     {
       "name": "smoke/end-to-end",
       "status": "PASS",
-      "file": "results/P1/smoke__end-to-end-710303cc1098.xml",
-      "sha256": "710303cc10980f957523605fa63a27416f4a83790bf6977f1d0d9ae2ec5422f4",
-      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\5388f5e4-a5ae-4bbf-9e4b-0a1ab0bb4ff5\\scratchpad\\p1-e2e.xml"
+      "file": "results/P2/smoke__end-to-end-774baf887457.xml",
+      "sha256": "774baf8874578c4d634c7c4bf3474c38acccf553df21aeee00d5a7c798db20f6",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\5388f5e4-a5ae-4bbf-9e4b-0a1ab0bb4ff5\\scratchpad\\p2-e2e.xml"
     }
   ],
   "verdict": "PASS",
-  "phase": "P1",
+  "phase": "P2",
   "actor": "user:tqanh123",
-  "ts": "2026-10-27T06:15:27+00:00",
+  "ts": "2026-10-27T09:43:27+00:00",
   "blastRadius": {
-    "unavailable": true,
-    "reason": "none of the 23 file(s) in scope (default subjects) is a module the code graph measures: .env.example, AGENTS.md, docs/code-standards.md, docs/phase0-spike-report.md, docs/project-roadmap.md … +18 more"
+    "reverseDeps": {
+      "tests/test_data_root.py": [],
+      "tests/test_dependency_pins.py": [],
+      "tests/test_repo_hygiene.py": []
+    },
+    "testsTouched": [
+      "tests/test_capture_cli.py",
+      "tests/test_capture_invariants.py",
+      "tests/test_capture_ops.py",
+      "tests/test_capture_poller.py",
+      "tests/test_capture_record.py",
+      "tests/test_capture_schedule.py",
+      "tests/test_capture_sources.py",
+      "tests/test_capture_storage.py",
+      "tests/test_data_root.py",
+      "tests/test_dependency_pins.py",
+      "tests/test_repo_hygiene.py",
+      "tests/test_agents_md_paths.py",
+      "tests/test_no_order_execution.py"
+    ],
+    "basis": "code.importers + code.tests_reached (hs_run_facts.engine), default subjects",
+    "snapshot": "20261027-131605-af1f596f"
   },
   "run_seq": null
 }

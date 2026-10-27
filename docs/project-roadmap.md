@@ -223,7 +223,7 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `connectors/us_alpaca_edgar.py` | rewrite | 1 | Add a real EDGAR client: header acceptance time, at most 5 rps, User-Agent from EDGAR_IDENTITY, submissions, Form 4 via edgartools, companyfacts by accn, bulk zips. Add an Alpaca daily-bar client with `adjustment=all` and an explicit feed. Remove the `now()` fallback and the fabricated bid/ask sizes (done 2026-10-21). Data endpoints only. |
 | `connectors/vn_ssi_vnstock.py` | rewrite | 0, 3 | Add a vnstock adapter pinned to the probed version, using KBS for statements as vnstock's docs recommend. Fix the SSI endpoints now (done 2026-10-21); defer the live client to Phase 6, and write per-channel parsers only after reading the R-channel spec. Remove the `now()` fallback and the BidVol/AskVol = 100 defaults (done 2026-10-21). |
 | `connectors/base.py` | add | 1 | SourceAdapter protocol, RawRecord, token-bucket limiter, retry with backoff, idempotent key (source, source_id). |
-| `capture/` | add | 0 | Capture-only VN disclosure poller with no parsing: raw payload, sha256, first_seen_at, outage log, heartbeat. |
+| `capture/` | add | 0 | Capture-only VN disclosure poller with no parsing: raw payload, sha256, first_seen_at, outage log, heartbeat. Built 2026-10-27 (plan 261022-1147, phase 2); deployed in phase 3. |
 | `store/` | add | 1 | Raw archive writer, SQLite schema, DuckDB views, `as_of()`. |
 | `refdata/` | add | 1, 3 | Security master (permanent id, ticker, CIK, exchange, valid_from/valid_to); exchange membership including the 2026-12-28 transfer; versioned sectors; corporate actions. Every join goes through it as of the event date. |
 | `calendar/` | add | 1, 3 | XNYS sessions (the exchange_calendars package is ASSUMED suitable). VN sessions derived from VN-Index bar dates, future holidays from HoSE notices, and regime flags. |
@@ -391,7 +391,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
    - `models.py` raises on an unknown exchange (done 2026-10-21);
    - connectors stop defaulting timestamps to `now()` (done 2026-10-21);
    - fix `.agents/rules` rule 3 and the band rule (done 2026-10-22).
-6. VN capture-only poller (`capture/`):
+6. VN capture-only poller (`capture/`). Built 2026-10-27; sources: HOSE API listing + HNX RSS feed 3 (owner, OB3) + vnstock events (Gen 5 Community has no `news()`):
    - **Schedule:** every 2-5 minutes from 08:00 to 17:30 ICT on trading days, hourly otherwise.
    - **Sources:** vnstock news/events for the seed universe, plus one official portal listing page (check its URL and robots.txt first).
    - **Stored:** raw payload, raw_sha256, and first_seen_at (UTC, from an NTP-synced host).

@@ -8,6 +8,9 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-27 — VN capture schedule (owner, D5): every 2-5 min from 08:00 to 17:30 ICT on trading days and hourly otherwise, per source in configs/capture.toml; a gap is a missed schedule: no successful poll by the second scheduled due time after the last one, plus the maximum poll duration.
+- 2026-10-27 — Capture heartbeat and backup (owner, D3): a heartbeat JSON and nightly backups (tar.gz of closed UTC days, an SQLite snapshot and a sha256 manifest) go to a cloud-synced folder on the laptop; the owner checks the heartbeat from a phone; no new alert channel before Phase 4.
+- 2026-10-27 — tzdata is an unconditional core dependency: zoneinfo reads TZPATH before the tzdata package, and Windows has no system IANA database, so the dev .venv and the laptop need the package (Linux CI uses the system zone files). No minimum version is required.
 - 2026-10-27 — VN capture sources (owner, plan 261022-1147, OB3): primary HOSE API listing and HNX RSS feed 3, polled in parallel; vnstock events secondary; SSC excluded (date only, server clock about 6 minutes off); VSDC deferred to Phase 3. Measurements: `docs/phase0-spike-report.md` §2.
 - 2026-10-27 — vnstock (owner, plan 261022-1147): Gen 5 is a SECONDARY VN source; the official portals carry the capture, and a vnstock failure is a logged source outage. vnstock runs only in a hash-pinned environment outside the clone, under a separate Windows user on the dev machine (the probe) or the capture user on the laptop; agent instruction files are hashed before and after every first import.
 - 2026-10-27 — External data root: raw captures and spike output live under the absolute path in FINSEC_DATA_ROOT, outside the clone by default; finsec_alpharadar.data_root refuses a root inside a git work tree unless git ignores it.
@@ -46,13 +49,14 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **VN sources:** SSI FastConnect Data; `vnstock`; consolidated financial statements (BCTC hợp nhất); board and shareholder resolutions (Nghị quyết HĐQT/ĐHĐCĐ).
 
 ## Current Status (verified 2026-10-22)
-- **Prototype.** About 1,450 lines of numpy-only, in-memory code (OBSERVED 2026-10-22). There is no live connector, no database and no LLM call. No prediction has been made or scored yet.
+- **Prototype.** About 1,450 lines of numpy-only, in-memory code (OBSERVED 2026-10-22), plus the VN capture poller (2026-10-27). The capture poller is the only network client in `src/` and its SQLite state the only database; there is no LLM call. No prediction has been made or scored yet.
+- **VN capture poller built (2026-10-27), not deployed yet** (`capture/`; the laptop deployment is plan 261022-1147 phase 3). A dev dry run on 2026-10-27 captured both portals (HOSE 40 then 20 items, HNX 100); two new HOSE items were first seen 23-52 s after their posted time (OBSERVED 2026-10-27).
 - **Works, smoke-tested by `tests/test_end_to_end.py`:**
   - OLS market-model CAR (`quant/event_study.py`);
   - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); undefined ratios return None with a reason; scores run only for non-financial issuers (2026-10-22); formula corrections are Phase 2;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
-- **Tests (OBSERVED 2026-10-27).** pytest collects 287 tests from `tests/`; all pass in `.venv` (Python 3.13), and the global Python without fastapi skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39721376654 (commit c9168f0): success, 267 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
+- **Tests (OBSERVED 2026-10-27).** pytest collects 455 tests from `tests/`; all pass in `.venv` (Python 3.13), and the global Python without fastapi passes 420 and skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39721376654 (commit c9168f0): success, 267 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
 - **Stub or placeholder:**
   - connectors are static dict parsers; the Alpaca and SSI tick parsers raise on missing, null or malformed fields, and an Alpaca quote must share the trade's symbol and not postdate it (2026-10-21);
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
@@ -67,6 +71,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 ## Package Layout (`src/finsec_alpharadar/`)
 - `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`, `IssuerType`); VN tick validation (D4), `price_limits`; every tick rejects non-finite numbers (2026-10-21); an unknown market or a VN price of 0 or below raises (2026-10-22).
 - `data_root.py`: guard of the external data root (2026-10-27). `resolve_data_root` reads `FINSEC_DATA_ROOT` and requires an absolute path; it resolves links first, then refuses a path inside a git work tree unless `git check-ignore` says git ignores it. `resolve_external_dir` applies the same guard to any other variable.
+- `capture/`: the VN capture-only poller (2026-10-27): HOSE API, HNX RSS feed 3 and vnstock events sources; raw record schema v1 (append-only JSONL plus blobs), SQLite WAL state, outage log, `pit_quality`, heartbeat, nightly backup and the exit `audit`. It imports only the stdlib at import time (vnstock lazily, inside its source), and only `capture/host.py` reads the clock or sleeps. Schema and on-disk layout: `docs/system-architecture.md` "Raw capture record schema v1".
 - `connectors/`: payload parsers for Alpaca and SEC EDGAR (`us_alpaca_edgar.py`) and for SSI FastConnect and vnstock (`vn_ssi_vnstock.py`). No network clients yet.
 - `quant/`: `MinHashDeduplicator`, `KalmanPriceFilter` + `StreamingQuantEngine` (VWAP, OBI, CUSUM, volume z-score, VN foreign net flow), `EventStudyAnalyzer` (CAR).
 - `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score; an issuer gate and None-with-reason guards (2026-10-22).
@@ -189,7 +194,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
 - **Tests (2026-10-21).**
   - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
-  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-27: `source .venv/Scripts/activate && pytest -q` → 287 passed.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-27: `source .venv/Scripts/activate && pytest -q` → 455 passed.
   - `make test` runs `python -m pytest -q` (2026-10-22).
 - **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
 - **FastAPI server (2026-10-22).** bash: `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`; PowerShell: `$env:PYTHONPATH='src'; uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`. fastapi installs into `.venv` with the dev setup (2026-10-21).
@@ -198,6 +203,12 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Lock: `requirements/vnstock/win-py313.lock`, compiled in `requirements/vnstock/` with `uv pip compile pyproject.toml --generate-hashes --emit-index-annotation --python-platform x86_64-pc-windows-msvc --python-version 3.13 --index-strategy first-index -o win-py313.lock` (only vnstock comes from the vendor index).
   - Install, offline and hash-checked, into a venv outside the clone owned by the probe or capture user: `python -I -m pip install --require-hashes --no-deps --no-index --find-links <wheels dir> -r win-py313.lock`.
 - **Spikes (2026-10-27).** `scripts/spike/` scripts reach the network, are never collected by pytest, and need `FINSEC_DATA_ROOT`. The portal probe runs with `.venv/Scripts/python scripts/spike/portal_probe.py --rounds 12 --interval 300` during trading hours. `scripts/spike/vnstock_probe.py` runs only under the probe user with `python -I`.
+- **Capture (2026-10-27).** After pulling the capture change, rerun `pip install -e ".[dev]"` (tzdata became a core dependency).
+  - `run`, `once`, `heartbeat` and `backup` need `FINSEC_DATA_ROOT` and `FINSEC_BACKUP_DIR` (absolute, existing, outside the clone or git-ignored); `audit` reads neither.
+  - bash: `.venv/Scripts/python -m finsec_alpharadar.capture once --all`; the other commands are `run`, `heartbeat`, `backup --day YYYY-MM-DD`, `audit --state <state-<d>.sqlite> --from YYYY-MM-DD --to YYYY-MM-DD [--days trading|all] [--require-days 5] [--out report.json]`, `check-root` and `canary-reset`. `--config <path>`, after the command, replaces `configs/capture.toml`.
+  - PowerShell: `.\.venv\Scripts\python -m finsec_alpharadar.capture once --all`, and the same commands.
+  - Exit codes: 0 ok; 1 audit failed or a backup did not verify; 2 usage or config error (including `backup` of an open UTC day and `audit` on a live WAL state); 3 another capture process holds the lock; 4 a directory inside an unignored work tree.
+  - `audit` reads a snapshot (`state-<d>.sqlite` from `backup`), never the live state.
 - **Harness integrity:** `python3.13 harness/scripts/verify_install.py --root . --strict`. Local gate: `/hs:test`.
   - Standards docs: `python3.13 harness/scripts/scaffold_standards.py --type system-architecture --check docs/system-architecture.md`, and the same with `--type code-standards` for `docs/code-standards.md`.
   - Upgrade (Git Bash, POSIX paths): `sh install.sh /c/.../harness-vX.Y.Z.tar.gz .`. Then convert `harness/release.json` back to LF, because strict verify compares it with HEAD. Never edit `harness/manifest.json`: `kit_digest` pins its CRLF bytes.
