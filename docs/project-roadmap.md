@@ -242,7 +242,7 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `router/linucb_bandit.py` | remove from API | 0 | On a cold start the arms tie and the first arm always wins (line 40); no LLM is called and there is no reward. Move it to `experimental/`. |
 | `api/server.py` | rewrite | 4 | Read-only GET /v1/events, /v1/predictions, /v1/scoreboard and /v1/data-health, with pydantic models, bound to localhost. Remove the tick ingest, the empty RAG search, the bandit and the hard-coded model IDs. |
 | `scripts/train_unsloth_slm.py`, `configs/unsloth_qwen3_catalyst.yaml` | defer | 7 | Use only as a distilled extractor. Drop `abnormal_return_sign_accuracy_reward`; keep the schema and number-faithfulness rewards. |
-| `tests/test_end_to_end.py` | fix | 0 | Wrap `run_modular_verification` in `test_end_to_end()`. Add test_edgar_time, test_no_order_execution and test_agents_md_paths (Phase 0), then test_point_in_time and test_labels (Phase 1). The wrapper, test_no_order_execution and test_agents_md_paths are done (2026-10-21, Phase 0b); test_edgar_time waits for Phase 0a. |
+| `tests/test_end_to_end.py` | fix | 0 | Wrap `run_modular_verification` in `test_end_to_end()`. Add test_edgar_time (done 2026-10-28), test_no_order_execution and test_agents_md_paths (Phase 0), then test_point_in_time and test_labels (Phase 1). The wrapper, test_no_order_execution and test_agents_md_paths are done (2026-10-21, Phase 0b); test_edgar_time waits for Phase 0a. |
 | `pyproject.toml` | fix | 0 | Add `[tool.pytest.ini_options] pythonpath = ["src"]`. Add a dev extra (pytest, hypothesis, ruff) and a research extra (pandas or polars, pyarrow, duckdb, scikit-learn; these choices are ASSUMED). Move pathway, qdrant-client and pydantic-ai to a deferred extra. Pin vnstock to the probed version. The pytest config and the dev extra are done (2026-10-21, Phase 0b). The vnstock pin is done 2026-10-27 (`capture` extra `==5.1.0` plus the hash lock `requirements/vnstock/win-py313.lock`). |
 | `.gitignore` | fix | 0 | Anchor `data/` and `models/` as `/data/` and `/models/`. Unanchored, they silently ignore any source package with those names (OBSERVED by git check-ignore). Done 2026-10-22. |
 | `docker-compose.yml` | fix | 0 | Remove redpanda. Put qdrant and timescaledb behind compose profiles. Pin image tags, bind to 127.0.0.1, read the password from env. Done 2026-10-22. |
@@ -324,7 +324,7 @@ Portfolio-level metrics (decile spread, calendar-time Sharpe after costs, deflat
 ### 6.4 Leakage checklist (each item is a pytest)
 
 1. Every feature row has `available_at` < decision time: `information_time` for R1, entry time for the drift labels.
-2. EDGAR time golden test on the four pinned accessions, including one EST-period filing. Session-classifier tests cover 06:00, 12:00-16:00 and after-16:00 ET acceptances.
+2. EDGAR time golden test on the four pinned accessions, including one EST-period filing. Session-classifier tests cover 06:00, 12:00-16:00 and after-16:00 ET acceptances. Done 2026-10-28 (holidays in Phase 1).
 3. XBRL fundamentals:
    - an XBRL fact is used only if its accn was accepted at or before entry;
    - Frames are never used for history;
@@ -355,7 +355,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 **Goal.** Every load-bearing fact probed, the repo honest and testable, and VN capture running.
 
 **0a. Verification spike (2-3 days).** Results go into the "Verified Facts" section of AGENTS.md, with dates.
-- **EDGAR time golden test:** `tests/test_edgar_time.py`, with recorded fixtures for the four accessions in section 2.1.
+- **EDGAR time golden test:** `tests/test_edgar_time.py`, with recorded fixtures for the four accessions in section 2.1. Done 2026-10-28.
 - **Alpaca probe with the paper keys:**
   - SPY daily bars for 2017 with feed=sip on the Basic plan;
   - `adjustment=all` vs raw on a known split date;

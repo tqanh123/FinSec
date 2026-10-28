@@ -93,7 +93,23 @@ Politeness: at least 5 s between requests to one host, and a neutral User-Agent 
 
 ## 4. EDGAR
 
-Pending (phase 4).
+Recorded on 2026-10-28 by `scripts/spike/record_edgar_headers.py` with a declared User-Agent (2 requests/s, 9 requests including one 404 and one
+full-text search). Fixtures and manifest: `tests/fixtures/edgar_headers/`; golden test: `tests/test_edgar_time.py`. OBSERVED 2026-10-28.
+
+| Accession | Form | Raw `<ACCEPTANCE-DATETIME>` | Information time (UTC) | Tag in `.hdr.sgml` | CIK folder |
+|---|---|---|---|---|---|
+| 0000320193-26-000018 | 8-K | `20260730163028` | 2026-07-30T20:30:28Z (EDT) | yes | 320193 |
+| 0001140361-26-040127 | 4 | `20261019183255` | 2026-10-19T22:32:55Z (EDT) | yes | 320193 (issuer; agent folder 1140361 gave 404) |
+| 0000320193-26-000020 | 10-Q | `20260731060102` | 2026-07-31T10:01:02Z (EDT) | yes | 320193 |
+| 0000320193-26-000005 | 8-K | `20260129163033` | 2026-01-29T21:30:33Z (EST) | yes | 320193 |
+
+- The `-index-headers.html` file carries the header twice (an HTML comment with raw tags and a `<PRE>` block with the escaped tag and the
+  space dialect); both copies agree on all four.
+- The submissions-JSON `acceptanceDateTime` read as UTC is 4 h (EDT) or 5 h (EST) later than the header time on all four (DERIVED from
+  roadmap §2.1).
+- The Form 4's issuer CIK came from EDGAR full-text search (`efts.sec.gov/LATEST/search-index`), which listed the reporting owner
+  0002100523 and the issuer 0000320193. The owner's name and address are `REDACTED` in the committed fixtures (D8); the owner CIK stays.
+- A User-Agent without a contact gets HTTP 403 "Undeclared Automated Tool" (OBSERVED 2026-10-22, research `edgar-header.md` §4).
 
 ## 5. Alpaca
 

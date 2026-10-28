@@ -8,6 +8,7 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-28 — Form 4 fixtures (owner, D8): the reporting owner's name, address and phone are replaced with REDACTED; the CIK and <ACCEPTANCE-DATETIME> stay untouched; the manifest keeps sha256_original and sha256_committed.
 - 2026-10-28 — Phase 0 exit window (owner, D4): the poller runs 5 consecutive trading sessions on the laptop with a heartbeat each day and no unlogged gap; the laptop clone, venv and configs/capture.toml are frozen until the exit audit; a process restart on the same SHA is a logged outage, while deploying a new SHA (a hotfix) restarts the 5-session count; changes go only through the window-restart/hotfix procedure in docs/capture-runbook.md, and the newest dated "capture window started/restarted <date> at <sha>" line wins.
 - 2026-10-28 — Capture laptop account (owner, D7): a dedicated local standard user "capture" (password never expires) with Sysinternals Autologon (the password is stored as an LSA secret that an administrator can decrypt; accepted), the scheduled task runs as that user with logon type Password, vnstock is registered under that user, the cloud sync client runs in that session, and %USERPROFILE%\.vnstock is excluded from every synced folder.
 - 2026-10-27 — VN capture schedule (owner, D5): every 2-5 min from 08:00 to 17:30 ICT on trading days and hourly otherwise, per source in configs/capture.toml; a gap is a missed schedule: no successful poll by the second scheduled due time after the last one, plus the maximum poll duration.
@@ -58,7 +59,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); undefined ratios return None with a reason; scores run only for non-financial issuers (2026-10-22); formula corrections are Phase 2;
   - MinHash dedup (`quant/deduplicator.py`); it is a linear scan, not O(1);
   - streaming VWAP/OBI/CUSUM/volume z-score (`quant/kalman_microstructure.py`).
-- **Tests (OBSERVED 2026-10-28).** pytest collects 472 tests from `tests/`; all pass in `.venv` (Python 3.13), and the global Python without fastapi passes 437 and skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39721376654 (commit c9168f0): success, 267 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
+- **Tests (OBSERVED 2026-10-28).** pytest collects 535 tests from `tests/`, including the EDGAR golden test; all pass in `.venv` (Python 3.13), and the global Python without fastapi passes 500 and skips only `tests/test_api_server.py`. `.github/workflows/ci.yml` runs them on 3.11 and 3.13 for pull requests and pushes to `main`; CI run 39721376654 (commit c9168f0): success, 267 passed on Python 3.11 and 3.13 (OBSERVED 2026-10-22).
 - **Stub or placeholder:**
   - connectors are static dict parsers; the Alpaca and SSI tick parsers raise on missing, null or malformed fields, and an Alpaca quote must share the trade's symbol and not postdate it (2026-10-21);
   - RAG "dense" and ColBERT vectors are per-token hash vectors with no semantics;
@@ -75,7 +76,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - `domain/models.py`: data schemas (`MarketRegion`, `MarketTick` with spread and VN ceiling/floor, `RegulatoryFiling`, `FinancialStatementSnapshot`, `IssuerType`); VN tick validation (D4), `price_limits`; every tick rejects non-finite numbers (2026-10-21); an unknown market or a VN price of 0 or below raises (2026-10-22).
 - `data_root.py`: guard of the external data root (2026-10-27). `resolve_data_root` reads `FINSEC_DATA_ROOT` and requires an absolute path; it resolves links first, then refuses a path inside a git work tree unless `git check-ignore` says git ignores it. `resolve_external_dir` applies the same guard to any other variable.
 - `capture/`: the VN capture-only poller (2026-10-27): HOSE API, HNX RSS feed 3 and vnstock events sources; raw record schema v1 (append-only JSONL plus blobs), SQLite WAL state, outage log, `pit_quality`, heartbeat, nightly backup and the exit `audit`. It imports only the stdlib at import time (vnstock lazily, inside its source), and only `capture/host.py` reads the clock or sleeps. Schema and on-disk layout: `docs/system-architecture.md` "Raw capture record schema v1".
-- `connectors/`: payload parsers for Alpaca and SEC EDGAR (`us_alpaca_edgar.py`) and for SSI FastConnect and vnstock (`vn_ssi_vnstock.py`). No network clients yet.
+- `connectors/`: payload parsers for Alpaca and SEC EDGAR (`us_alpaca_edgar.py`) and for SSI FastConnect and vnstock (`vn_ssi_vnstock.py`). No network clients yet. `edgar_acceptance.py` (2026-10-28) turns the header acceptance time into tz-aware UTC and raises instead of guessing (format, calendar, DST gap or fold, EDGAR hours), and classifies US session buckets.
 - `quant/`: `MinHashDeduplicator`, `KalmanPriceFilter` + `StreamingQuantEngine` (VWAP, OBI, CUSUM, volume z-score, VN foreign net flow), `EventStudyAnalyzer` (CAR).
 - `forensics/xbrl_bctc_auditor.py`: Altman Z-Score, 8-variable Beneish M-Score, 9-point Piotroski F-Score; an issuer gate and None-with-reason guards (2026-10-22).
 - `rag/hybrid_temporal_rag.py`: BM25 + Reciprocal Rank Fusion + exponential time decay + a sentence-level disclosure diff. The dense and MaxSim legs use placeholder hash vectors. `search` requires `as_of` and ignores documents published after it (2026-10-21); this is as-of `published_at` only, not yet the point-in-time `information_time`.
@@ -111,8 +112,10 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 - **Phase 7 (optional):** SLM distillation, bandit routing, semantic RAG.
 
 ## Verified Facts (add a source and a date to every new fact)
-- **EDGAR time (OBSERVED 2026-10-20).** The data.sec.gov submissions JSON `acceptanceDateTime` ends in "Z" but did not match UTC on four accessions in the research pass. The JSON side was re-checked on 2026-10-20; the Phase 0 golden test settles the header side.
+- **EDGAR time (OBSERVED 2026-10-20).** The data.sec.gov submissions JSON `acceptanceDateTime` ends in "Z" but did not match UTC on four accessions in the research pass. The JSON side was re-checked on 2026-10-20; the header side was settled on 2026-10-28 by `tests/test_edgar_time.py`.
   - Rule: the filing header `<ACCEPTANCE-DATETIME>`, read as America/New_York, is the information time. The JSON value is for discovery only.
+  - Header values (OBSERVED 2026-10-28, recorded fixtures in `tests/fixtures/edgar_headers/`): 8-K 0000320193-26-000018 `20260730163028` = 2026-07-30T20:30:28Z (EDT); Form 4 0001140361-26-040127 `20261019183255` = 2026-10-19T22:32:55Z (EDT); 10-Q 0000320193-26-000020 `20260731060102` = 2026-07-31T10:01:02Z (EDT); 8-K 0000320193-26-000005 `20260129163033` = 2026-01-29T21:30:33Z (EST). Every `.hdr.sgml` and `-index-headers.html` carries the tag. The JSON value read as UTC is 4 h (EDT) or 5 h (EST) late on all four (DERIVED).
+  - The Form 4 is not under the filer agent's CIK folder 1140361 (HTTP 404) but under the issuer's, 320193 (OBSERVED 2026-10-28). A User-Agent without a contact gets HTTP 403 "Undeclared Automated Tool" (OBSERVED 2026-10-22).
   - Fair access: at most 10 requests/s with a declared User-Agent. VERIFIED https://www.sec.gov/os/accessing-edgar-data
 - **Alpaca Basic.**
   - IEX-only real-time data, 30 WebSocket symbols, 200 historical calls/min. VERIFIED https://docs.alpaca.markets/docs/about-market-data-api
@@ -197,7 +200,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - PowerShell: `python -m venv .venv`, then `.\.venv\Scripts\python -m pip install -e ".[dev]"`.
 - **Tests (2026-10-21).**
   - bash: `.venv/Scripts/python -m pytest -q`; PowerShell: `.\.venv\Scripts\python -m pytest -q`.
-  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-28: `source .venv/Scripts/activate && pytest -q` → 472 passed.
+  - `/hs:test` runs bare `pytest`, so activate the venv first in the same shell: `source .venv/Scripts/activate` (bash) or `.\.venv\Scripts\Activate.ps1` (PowerShell). OBSERVED 2026-10-28: `source .venv/Scripts/activate && pytest -q` → 535 passed.
   - `make test` runs `python -m pytest -q` (2026-10-22).
 - **CI (2026-10-21).** `.github/workflows/ci.yml` runs the tests on Python 3.11 and 3.13 for pull requests and pushes to `main`.
 - **FastAPI server (2026-10-22).** bash: `PYTHONPATH=src uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`; PowerShell: `$env:PYTHONPATH='src'; uvicorn finsec_alpharadar.api.server:app --host 127.0.0.1 --port 8000 --reload`. fastapi installs into `.venv` with the dev setup (2026-10-21).

@@ -2,3 +2,5 @@
 # ships sh scripts (harness/bin/hs-*, pre-push hook) — never convert its line
 # endings, even under core.autocrlf=true.
 harness/** -text
+# Recorded SEC headers are compared byte-for-byte with tests/fixtures/edgar_headers/manifest.json — never convert their line endings.
+tests/fixtures/edgar_headers/** -text
