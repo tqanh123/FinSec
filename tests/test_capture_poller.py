@@ -877,6 +877,24 @@ def test_backward_clock_step_does_not_stall_polling(tmp_path: Path) -> None:
     assert len(fetcher.requests) == 3
 
 
+def test_hose_after_a_gap_longer_than_the_lookback_recovers_on_the_next_poll(tmp_path: Path) -> None:
+    clock = FakeClock(T0 - timedelta(days=30))
+    cfg = _hose_cfg()
+    fetcher = ScriptedFetcher(clock, _hose([5]), _hose([6, 5]), _hose([7, 6, 5]))
+    rig = Rig(tmp_path, clock, _config(cfg), {cfg.name: HoseNewsApiSource(cfg, fetcher, sleeper=FakeSleeper(clock))})
+    rig.poller.startup()
+    rig.poller.run_cycle()
+    clock.advance(30 * 86400)  # the laptop was off for a month
+    rig.poller.run_cycle()
+    clock.advance(180)
+    rig.poller.run_cycle()
+    statuses = [p.status for p in rig.state.polls("hose_news_api")]
+    assert statuses == ["ok", "ok", "ok"], "the lookback cap is a note, so last_ok moves on and the next poll is normal"
+    starts = [dict(r.params)["startDate"] for r in fetcher.requests]
+    assert starts[1] == "2026-10-20" and starts[2] == "2026-10-27"
+    assert rig.pit("hose_news_api")["7"] is PitQuality.FIRST_SEEN
+
+
 def test_startup_survives_a_malformed_line_in_the_middle_of_the_archive(tmp_path: Path) -> None:
     clock = FakeClock()
     rig, _ = _rss_rig(tmp_path, clock, _rss(["1"]))

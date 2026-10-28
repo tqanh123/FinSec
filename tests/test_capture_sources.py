@@ -707,15 +707,15 @@ def test_hose_first_poll_just_after_midnight_still_covers_yesterday() -> None:
     assert (params["startDate"], params["endDate"]) == ("2026-10-27", "2026-10-28")
 
 
-def test_hose_lookback_is_capped_and_reported_as_coverage_overflow() -> None:
+def test_hose_lookback_is_capped_and_noted_on_an_ok_poll() -> None:
     long_ago = T0 - timedelta(days=30)
     source, fetcher, _ = _hose(_response(_hose_body([7])))
     result = source.poll(_ctx(last_ok_at=long_ago))
     params = dict(fetcher.requests[0].params)
     assert params["startDate"] == "2026-10-20", "seven ICT days back at most"
     assert [item.source_id for item in result.items] == ["7"], "the items found are still captured"
-    assert result.outage_kind is OutageKind.COVERAGE_OVERFLOW
-    assert json.loads(result.detail or "{}") == {"reason": "lookback_cap", "days": 7}
+    assert result.outage_kind is None, "an outage would keep last_ok stale and cap every later poll too"
+    assert json.loads(result.detail or "{}") == {"lookback_cap_days": 7, "unasked_before": "2026-10-20"}
 
 
 def test_hose_entry_that_is_not_strict_json_is_skipped_and_noted() -> None:

@@ -413,7 +413,7 @@ def _hose_entries(body: bytes) -> list[dict[str, Any]]:
 # HOSE shows an item 23-52 s after its posted time (OBSERVED 2026-10-27): a poll this soon after ICT midnight can miss an
 # item of the day before, so the next poll still asks for that day.
 HOSE_VISIBILITY_MARGIN = timedelta(minutes=5)
-HOSE_MAX_LOOKBACK_DAYS = 7  # a longer gap is a coverage overflow, not a request for weeks of listing
+HOSE_MAX_LOOKBACK_DAYS = 7  # a longer gap is noted in polls.detail, not a request for weeks of listing
 
 
 class HoseNewsApiSource:
@@ -478,8 +478,9 @@ class HoseNewsApiSource:
         else:
             if ctx.last_ok_at is not None:  # nothing to overlap with on a first poll: its items are late anyway
                 return _noted(collector, OutageKind.COVERAGE_OVERFLOW, skipped, reason="page_cap", pages=cfg.max_pages)
-        if capped:
-            return _noted(collector, OutageKind.COVERAGE_OVERFLOW, skipped, reason="lookback_cap", days=HOSE_MAX_LOOKBACK_DAYS)
+        if capped:  # a note on an ok poll, not an outage: an outage keeps last_ok stale, so every later poll would cap too.
+            # The gap itself is already an outage (process_down, ...) and its items are late by the gap deadline.
+            return _noted(collector, None, skipped, lookback_cap_days=HOSE_MAX_LOOKBACK_DAYS, unasked_before=start.isoformat())
         return _noted(collector, None, skipped)
 
 
