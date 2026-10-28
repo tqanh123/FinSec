@@ -933,3 +933,18 @@ def test_missed_backup_days_are_caught_up_oldest_first(tmp_path: Path) -> None:
     rig.poller.startup()
     rig.poller.run_forever(lambda: clock.now() >= T0 + timedelta(seconds=200))
     assert done == [date(2026, 10, 23), date(2026, 10, 26)]
+
+
+def test_backup_that_returns_without_a_verified_row_is_throttled(tmp_path: Path) -> None:
+    # `run_backup` reports a failed verification by returning, not raising: without a `backups` row the day is retried
+    # no sooner than heartbeat_every_s, not at every loop.
+    clock = FakeClock()
+    calls: list[date] = []
+
+    def unverified(day: date, now: datetime) -> None:
+        calls.append(day)
+
+    rig, _ = _rss_rig(tmp_path, clock, _rss(["1"]), _rss(["1"]), backup_fn=unverified)
+    rig.poller.startup()
+    rig.poller.run_forever(lambda: clock.now() >= T0 + timedelta(seconds=200))
+    assert calls == [date(2026, 10, 26)]

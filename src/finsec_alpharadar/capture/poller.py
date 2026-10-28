@@ -606,8 +606,9 @@ class Poller:
         return next((day for day in sorted(days) if self.state.backup_row(day) is None), None)
 
     def _maybe_backup(self, now: datetime, mono: float) -> bool:
-        """Back up one closed UTC day per call, oldest first, once local time passed `backup_at_local`. A failed try is
-        repeated no sooner than `heartbeat_every_s` later; after a success the next missing day follows at once."""
+        """Back up one closed UTC day per call, oldest first, once local time passed `backup_at_local`. A try that leaves
+        no `backups` row is repeated no sooner than `heartbeat_every_s` later; after a verified one the next missing day
+        follows at once."""
         if self.backup_fn is None or self.schedule.local(now).time() < self.config.schedule.backup_at_local:
             return False
         day = self._backup_due_day(now)
@@ -616,8 +617,9 @@ class Poller:
         if self._last_backup_try_mono is not None and mono - self._last_backup_try_mono < self.config.schedule.heartbeat_every_s:
             return False
         backup_fn = self.backup_fn
-        ok = self._run_component("backup", lambda: backup_fn(day, now), now)
-        self._last_backup_try_mono = None if ok else mono
+        self._run_component("backup", lambda: backup_fn(day, now), now)
+        # Success is the `backups` row, not the absence of an exception: `run_backup` returns on a failed verification.
+        self._last_backup_try_mono = None if self.state.backup_row(day) is not None else mono
         return True
 
     def _sleep_s(self, now: datetime, mono: float) -> float:
