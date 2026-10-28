@@ -272,7 +272,11 @@ def _sources(state: StateReader, config: CaptureConfig, schedule: Schedule, now:
         polls = state.polls(cfg.name, since=since, until=now + timedelta(microseconds=1))
         last_ok = state.last_poll(cfg.name, status="ok")
         last_ok_at = last_ok.finished_at if last_ok is not None else None
-        if last_ok_at is not None and cfg.kind is not SourceKind.VNSTOCK_EVENTS and now > schedule.gap_deadline(last_ok_at, cfg):
+        # Without any ok poll the deadline runs from the first poll, so a source blocked since deployment reads DOWN
+        # (code review F10); with no poll at all there is nothing to judge yet.
+        first = state.first_poll(cfg.name) if last_ok_at is None else None
+        anchor = last_ok_at if last_ok_at is not None else (first.started_at if first is not None else None)
+        if anchor is not None and cfg.kind is not SourceKind.VNSTOCK_EVENTS and now > schedule.gap_deadline(anchor, cfg):
             down.append(f"down:{cfg.name}")
         out[cfg.name] = {
             "kind": cfg.kind.value,

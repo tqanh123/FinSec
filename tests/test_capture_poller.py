@@ -850,3 +850,68 @@ def test_state_lists_polls_in_a_window(tmp_path: Path) -> None:
     assert len(rig.state.polls()) == 2 and len(rig.state.polls(RSS, since=T0 + timedelta(seconds=1))) == 1
     assert rig.state.polls(RSS, until=T0) == [] and len(rig.state.polls(RSS, status="ok")) == 2
     assert rig.state.backup_row(date(2026, 10, 26)) is None
+
+
+# ---------------------------------------------------------------- code review fixes (2026-10-28)
+
+
+def test_backward_clock_step_does_not_stall_polling(tmp_path: Path) -> None:
+    # The task starts with a fast RTC, then w32time steps the wall clock back an hour (code review F2).
+    clock = FakeClock()
+    rig, fetcher = _rss_rig(tmp_path, clock, _rss(["1"]), _rss(["1", "2"]), _rss(["1", "2", "3"]))
+    rig.poller.startup()
+    rig.poller.run_cycle()
+    clock.advance(180)
+    rig.poller.run_cycle()
+    assert rig.pit(RSS)["2"] is PitQuality.FIRST_SEEN
+
+    clock.step_wall(-3600)
+    rig.poller.tick()
+    clock.advance(30)
+    report = rig.poller.run_cycle()
+    assert [p.source for p in report.polls] == [RSS], "a last poll that lies in the future does not block the schedule"
+    assert rig.pit(RSS)["3"] is PitQuality.LATE, "the last ok poll lies in the future: nothing watched the gap"
+    assert rig.poller._sleep_s(clock.now(), clock.monotonic()) == pytest.approx(30.0), "no busy loop after the step"
+    clock.advance(30)
+    assert rig.poller.run_cycle().polls == (), "the newest poll (by insertion), not the latest timestamp, sets the next due"
+    assert len(fetcher.requests) == 3
+
+
+def test_startup_survives_a_malformed_line_in_the_middle_of_the_archive(tmp_path: Path) -> None:
+    clock = FakeClock()
+    rig, _ = _rss_rig(tmp_path, clock, _rss(["1"]))
+    rig.poller.startup()
+    rig.poller.run_cycle()
+    rig.poller.tick()
+    [path] = (tmp_path / "raw" / RSS).glob("*.jsonl")
+    with path.open("ab") as handle:  # garbage, then a later good line: not a torn tail
+        handle.write(b"\x00" * 32 + b"\n")
+        handle.write(path.read_bytes().split(b"\n")[0] + b"\n")
+    rig.crash()
+
+    clock.advance(180)
+    restarted, _ = _rss_rig(tmp_path, clock, _rss(["1", "2"]))
+    report = restarted.poller.startup()
+    assert report.reconcile.malformed_lines == 1
+    assert [p.status for p in restarted.poller.run_cycle().polls] == ["ok"]
+
+
+def test_missed_backup_days_are_caught_up_oldest_first(tmp_path: Path) -> None:
+    # The laptop was off over a backup time: every closed UTC day with archive files and no backup row is backed up,
+    # oldest first, not only yesterday (code review F9).
+    clock = FakeClock()
+    done: list[date] = []
+    rig: Rig
+
+    def backup(day: date, now: datetime) -> None:
+        done.append(day)
+        rig.state.record_backup(day, "0" * 64, now)
+
+    rig, _ = _rss_rig(tmp_path, clock, _rss(["1"]), _rss(["1"]), backup_fn=backup)
+    for day in ("2026-10-23", "2026-10-25"):
+        (tmp_path / "raw" / RSS).mkdir(parents=True, exist_ok=True)
+        (tmp_path / "raw" / RSS / f"{day}.jsonl").write_bytes(b"")
+    rig.state.record_backup(date(2026, 10, 25), "1" * 64, T0 - timedelta(days=1))
+    rig.poller.startup()
+    rig.poller.run_forever(lambda: clock.now() >= T0 + timedelta(seconds=200))
+    assert done == [date(2026, 10, 23), date(2026, 10, 26)]

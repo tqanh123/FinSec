@@ -209,6 +209,14 @@ def test_canonical_item_bytes_ignore_key_order() -> None:
         canonical_item_bytes({"x": float("nan")})  # strict JSON only
 
 
+def test_canonical_item_bytes_refuse_a_lone_surrogate() -> None:
+    # `json.loads` accepts a lone surrogate escape (a title cut inside a surrogate pair); UTF-8 cannot encode it, and the
+    # error must stay a `CaptureRecordError` so the sources classify it (code review F4).
+    for payload in ({"title": "AAA \ud83d"}, "<item>\ud83d</item>"):
+        with pytest.raises(CaptureRecordError):
+            canonical_item_bytes(payload)
+
+
 def test_capture_code_digest_ignores_crlf(tmp_path: Path) -> None:
     lf, crlf, changed = tmp_path / "lf", tmp_path / "crlf", tmp_path / "changed"
     for directory in (lf, crlf, changed):

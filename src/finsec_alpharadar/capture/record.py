@@ -98,15 +98,16 @@ def canonical_item_bytes(payload: Any) -> bytes:
     """The bytes `raw_sha256` and `byte_count` of an item are computed from.
 
     A str (an RSS `<item>` fragment) is its UTF-8 encoding; any other value is strict compact JSON with sorted keys and
-    non-ASCII kept raw. NaN or infinity raises `CaptureRecordError`. Nothing is Unicode-normalized.
+    non-ASCII kept raw. NaN, infinity or a lone surrogate (no UTF-8 form) raises `CaptureRecordError`. Nothing is
+    Unicode-normalized.
     """
-    if isinstance(payload, str):
-        return payload.encode("utf-8")
     try:
+        if isinstance(payload, str):
+            return payload.encode("utf-8")
         text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError) as err:
+        return text.encode("utf-8")
+    except (TypeError, ValueError) as err:  # UnicodeEncodeError is a ValueError
         raise CaptureRecordError(f"item payload is not strict JSON: {type(err).__name__}") from err
-    return text.encode("utf-8")
 
 
 def sha256_hex(data: bytes) -> str:

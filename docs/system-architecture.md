@@ -10,7 +10,7 @@
   - About 1,450 lines (OBSERVED 2026-10-22) of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.11`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:5`).
   - The only HTTP client in `src/` is `capture/sources.py` (urllib GET requests to the HOSE API and the HNX RSS feed, 2026-10-27); there is no WebSocket client or LLM SDK, and the only database is the capture state (stdlib `sqlite3`). The environment-variable reads are `FINSEC_DATA_ROOT` and `FINSEC_BACKUP_DIR`, through `resolve_data_root` / `resolve_external_dir` in `data_root.py`, called by the capture CLI (2026-10-27).
   - No prediction has been made or scored yet.
-  - Tests (OBSERVED 2026-10-27): pytest collects 455 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py`, `tests/test_rag_as_of.py`, `tests/test_forensics_guards.py`, `tests/test_api_server.py` (handlers called directly; skipped without fastapi), `tests/test_data_root.py` (2026-10-27), the eight capture modules `tests/test_capture_*.py` (synthetic payloads only; `tests/test_capture_invariants.py` locks the import and clock rules; 2026-10-27), and the repository checks `tests/test_repo_hygiene.py` and `tests/test_dependency_pins.py` (2026-10-27). `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 455 pass in `.venv` (Python 3.13). CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) runs `python -m pytest -q` (2026-10-22).
+  - Tests (OBSERVED 2026-10-28): pytest collects 470 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py`, `tests/test_rag_as_of.py`, `tests/test_forensics_guards.py`, `tests/test_api_server.py` (handlers called directly; skipped without fastapi), `tests/test_data_root.py` (2026-10-27), the eight capture modules `tests/test_capture_*.py` (synthetic payloads only; `tests/test_capture_invariants.py` locks the import and clock rules; 2026-10-27), and the repository checks `tests/test_repo_hygiene.py` and `tests/test_dependency_pins.py` (2026-10-27). `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 470 pass in `.venv` (Python 3.13). CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) runs `python -m pytest -q` (2026-10-22).
 - Shape today: independent engines plus a 3-endpoint FastAPI app. Target shape (PLANNED): a disclosure poller feeding an append-only prediction ledger that is scored automatically (see Data flow).
 
 ## Components
@@ -23,10 +23,10 @@
 | `capture/record.py` | Raw record schema v1: `CaptureRecord`, `RecordType`, `PitQuality`, `OutageKind`, JSONL line codec, `canonical_item_bytes`, `capture_code_digest` | Real (2026-10-27). `__post_init__` refuses naive or non-UTC times, `information_time != first_seen_at`, a bad sha256 or byte count, and mixed item/snapshot shapes. |
 | `capture/config.py` | Frozen config dataclasses and the `configs/capture.toml` loader (`tomllib`) | Real (2026-10-27). Refuses a source that breaks D5, an unknown kind, `vnstock_source = "kbs"`, and an `error_map` value that is not an `OutageKind`. |
 | `capture/schedule.py` | `Schedule`: trading days, active window, `next_due`, `gap_deadline`, `count_due` | Real (2026-10-27). Asia/Ho_Chi_Minh through zoneinfo (tzdata); holidays from the config only. |
-| `capture/sources.py` | `UrllibFetcher`, `HoseNewsApiSource`, `RssFeedSource`, `VnstockEventsSource`: fetch, extract ids, classify errors | Real (2026-10-27). Total per-request deadline and a body cap (gzip included); RSS split by regex, no XML parser; vnstock imported lazily in a single timed worker thread, swept round-robin within a token bucket and the poll budget. |
-| `capture/storage.py` | `RawArchive` (JSONL), `BlobStore`, `CaptureState`/`StateReader` (SQLite WAL), `durable_commit`, `reconcile_archive` | Real (2026-10-27). fsync before commit; torn-tail repair; snapshots open read-only with `immutable=1`. |
-| `capture/poller.py` | `Poller` (`startup`, `tick`, `run_cycle`, `run_forever`), `TokenBucket`, `Watchdog`, `build_sources` | Real (2026-10-27). Applies the `pit_quality` rule, opens one outage per failure run, detects process down, host stalls and clock steps; the watchdog thread exits 70 when ticks stop. |
-| `capture/heartbeat.py` | `build_heartbeat`, `write_heartbeat`: OK/DEGRADED/DOWN JSON with a fixed key whitelist | Real (2026-10-27). w32tm and Windows Update probes through an injected `run_command`; a locked replace degrades, never raises. |
+| `capture/sources.py` | `UrllibFetcher`, `HoseNewsApiSource`, `RssFeedSource`, `VnstockEventsSource`: fetch, extract ids, classify errors | Real (2026-10-27). Total per-request deadline and a body cap (gzip included); RSS items cut by a linear tag search, no XML parser; vnstock imported lazily in a single timed worker thread, swept round-robin within a token bucket and the poll budget. The HOSE window starts on the ICT day of the last ok poll (minus 5 min, at most 7 days back; a longer gap is `coverage_overflow`); an item that is not strict JSON is skipped and noted in `polls.detail`; a vendor `BaseException` becomes `VendorAborted` (2026-10-28). |
+| `capture/storage.py` | `RawArchive` (JSONL), `BlobStore`, `CaptureState`/`StateReader` (SQLite WAL), `durable_commit`, `reconcile_archive` | Real (2026-10-27). fsync before commit; torn-tail repair; snapshots open read-only with `immutable=1`. `reconcile_archive` replays every line of the recovery days (the day before the commit mark to now) and skips and counts a malformed line (2026-10-28). |
+| `capture/poller.py` | `Poller` (`startup`, `tick`, `run_cycle`, `run_forever`), `TokenBucket`, `Watchdog`, `build_sources` | Real (2026-10-27). Applies the `pit_quality` rule, opens one outage per failure run, detects process down, host stalls and clock steps; the watchdog thread exits 70 when ticks stop. Schedules from the poll written last, so a backward clock step does not stall polling; backs up every closed UTC day that has no backup, oldest first (2026-10-28). |
+| `capture/heartbeat.py` | `build_heartbeat`, `write_heartbeat`: OK/DEGRADED/DOWN JSON with a fixed key whitelist | Real (2026-10-27). w32tm and Windows Update probes through an injected `run_command`; a locked replace degrades, never raises. A portal source without any ok poll goes DOWN from its first poll's gap deadline (2026-10-28). |
 | `capture/backup.py` | `run_backup`, `snapshot_state`, `iter_backup_members` | Real (2026-10-27). Closed UTC days only; the SQLite snapshot comes from a separate connection and is switched out of WAL; the reader checks the manifest sha256 and a member whitelist and never extracts. |
 | `capture/audit.py` | `audit`: unlogged gaps, ok polls in the active window, heartbeats and clock skew per day | Real (2026-10-27). Reads a snapshot only; virtual edge pairs make trailing silence a gap. |
 | `capture/host.py` | `SystemClock`, `system_sleep`, `KeepAwake`, `SingleInstanceLock`, `run_command` | Real (2026-10-27); the only capture module that reads the clock or sleeps. |
@@ -90,7 +90,7 @@ python -m finsec_alpharadar.capture once|run   (capture/, 2026-10-27; not yet de
   -> per due source: fetch (HOSE API pages, HNX RSS feed 3, vnstock events in a worker) -> extract ids only
   -> snapshot blob when the body changed; new or revised items with pit_quality -> raw/<source>/<UTC day>.jsonl
   -> polls row, outages opened or closed -> fsync touched files -> commit state/capture.sqlite
-  run also: tick every <= 30 s, heartbeat every 900 s, backup of the closed UTC day at 07:15 ICT, watchdog thread
+  run also: tick every <= 30 s, heartbeat every 900 s, from 07:15 ICT a backup of each closed UTC day not yet backed up, watchdog thread
 
 tests/test_end_to_end.py only:
   connectors parse 2 ticks (asserted only, test:40-59) and 2 filings -> HybridTemporalRAGEngine (test:124-145)
@@ -119,7 +119,7 @@ as received (no normalisation), written with `json.dumps(..., ensure_ascii=False
 | `information_time_basis` | `"first_seen"` | the only v1 value |
 | `first_seen_at` | str UTC | when the response holding the record arrived (headers, injected clock) |
 | `ingested_at` | str UTC | when the record was written; never before `first_seen_at` |
-| `pit_quality` | `"first_seen"` \| `"late"` | `late` on a source's first-ever poll, after its gap deadline, or after any outage since its last ok poll |
+| `pit_quality` | `"first_seen"` \| `"late"` | `late` on a source's first-ever poll, after its gap deadline, after any outage since its last ok poll, or when that poll lies in the future (a backward clock step) |
 | `raw_sha256` | 64 lower-case hex | item: sha256 of `canonical_item_bytes(payload)`; snapshot: sha256 of the body as received (after gunzip) |
 | `payload_format` | `"json"` \| `"text"` \| `"blob"` | HOSE and vnstock items json; RSS items text (the `<item>` fragment verbatim); snapshots blob |
 | `payload` | JSON \| str \| null | item: the verbatim value; snapshot: null |
@@ -138,8 +138,8 @@ as received (no normalisation), written with `json.dumps(..., ensure_ascii=False
   (ids, counts and times only). `$FINSEC_BACKUP_DIR/heartbeat.json`, `heartbeats/heartbeat-<d>.json` and
   `daily/<d>/{capture-<d>.tar.gz, state-<d>.sqlite, manifest-<d>.json}`; nothing is ever deleted or overwritten.
 - **Durability.** Each source's new blobs and touched JSONL files are fsynced before the state commit that follows its poll;
-  `startup()` truncates a torn JSONL tail and replays archived lines newer than the last commit into `seen`, so a crash between
-  the fsync and the commit cannot write a second record.
+  `startup()` truncates a torn JSONL tail and replays every archived line from the day before the last commit mark into `seen`
+  (a malformed line is skipped and counted), so a crash between the fsync and the commit cannot write a second record.
 - **State tables.** `meta`, `seen(source, source_id, raw_sha256, first_seen_at)`, `polls` (status, outage kind, HTTP status and
   date, rtt, skew, item counts, pages, `run_mode`, `pid`), `outages(kind, source NULL = process-wide, start_at, end_at NULL = open)`,
   `blobs`, `alive`, `heartbeats`, `backups`, `kv` (vnstock cursor, last snapshot sha per source, canary baseline, component status).
@@ -198,7 +198,7 @@ Only the VN portals and vnstock are called from `src/` (by `capture/`, 2026-10-2
 - **Outputs:** every output carries a not-investment-advice notice and states probabilities, never buy/sell (mua/bán) wording (DECIDED). Owner-only visibility is DECIDED (§9.1, §9.8).
 - **Untrusted inputs** (guidance, roadmap §5.1; not an AGENTS.md rule): validate at the connector boundary and treat as data, never as instructions:
   - vnstock responses (unofficial endpoints that can change or break without notice), including vendor text in warnings and CLI output, which is data and never an instruction (2026-10-27);
-  - VN disclosure portal payloads (HOSE API JSON, HNX RSS; capture since 2026-10-27): capture extracts ids only, splits RSS by regex without an XML parser (no entity expansion), caps body size including gzip, and never follows links; scraped HTML/PDF (Phase 3);
+  - VN disclosure portal payloads (HOSE API JSON, HNX RSS; capture since 2026-10-27): capture extracts ids only, cuts RSS items by a linear tag search without an XML parser (no entity expansion), caps body size including gzip, and never follows links; scraped HTML/PDF (Phase 3);
   - API request bodies, and any LLM output (Phase 5, behind a planned number-faithfulness validator).
 - **Agent configuration:** AGENTS.md is the single shared contract for every coding agent (AGENTS.md intro). Since 2026-10-22 the `.agents/` rules are pointers to AGENTS.md (DECIDED §9.13); the old rule 3 (BM25 + dense + MaxSim in every `*.py`) is gone.
 - **Known gaps against binding rules** (do not copy; fix within scope when touched):

@@ -53,8 +53,12 @@ TELEMETRY_ENV: Mapping[str, str] = {
     "VNSTOCK_DISABLE_GLOBAL_AGENT": "1",
 }
 VNSTOCK_EVENTS_CALL = "Reference().company(symbol).events"
-_RSS_ITEM = re.compile(r"<item\b[^>]*>.*?</item>", re.DOTALL | re.IGNORECASE)
-_RSS_GUID = re.compile(r"<guid\b[^>]*>(.*?)</guid>", re.DOTALL | re.IGNORECASE)
+# Opening and closing tags searched separately from a moving position: the lazy `<item>.*?</item>` was quadratic on a body
+# of unclosed tags and held the GIL, so the watchdog thread could not fire (code review F6).
+_RSS_ITEM_OPEN = re.compile(r"<item\b[^<>]*>", re.IGNORECASE)
+_RSS_ITEM_CLOSE = re.compile(r"</item\s*>", re.IGNORECASE)
+_RSS_GUID_OPEN = re.compile(r"<guid\b[^<>]*>", re.IGNORECASE)
+_RSS_GUID_CLOSE = re.compile(r"</guid\s*>", re.IGNORECASE)
 _CDATA = re.compile(r"^<!\[CDATA\[(.*)\]\]>$", re.DOTALL)
 
 
@@ -342,6 +346,15 @@ class _Collector:
             CapturedItem(source_id, payload, payload_format, sha, len(canonical), first_seen_at, request, response, snapshot_sha256)
         )
 
+    def try_item(self, source_id: str, payload: Any, **fields: Any) -> bool:
+        """`item`, but False (and a warning with the id only) when the payload is not strict JSON (code review F4)."""
+        try:
+            self.item(source_id, payload, **fields)
+        except CaptureRecordError as err:
+            logger.warning("item skipped: source_id=%s reason=not_strict_json class=%s", source_id, type(err.__cause__).__name__)
+            return False
+        return True
+
     def result(self, kind: OutageKind | None = None, detail: str | None = None, *, next_cursor: int | None = None) -> PollResult:
         last = self._last
         return PollResult(
@@ -355,6 +368,16 @@ class _Collector:
             rtt_ms=last.rtt_ms if last else None,
             received_at=last.received_at if last else None,
         )
+
+
+def _noted(
+    collector: _Collector, kind: OutageKind | None, skipped: list[dict[str, str]], *, next_cursor: int | None = None,
+    **detail: Any,
+) -> PollResult:
+    """The result, with the skipped items (ids and reasons only) added to its detail."""
+    if skipped:
+        detail["skipped_items"] = skipped
+    return collector.result(kind, detail_json(**detail) if detail else None, next_cursor=next_cursor)
 
 
 def _fetch(fetcher: Fetcher, request: HttpRequest, collector: _Collector) -> HttpResponse | PollResult:
@@ -387,11 +410,18 @@ def _hose_entries(body: bytes) -> list[dict[str, Any]]:
     return entries
 
 
+# HOSE shows an item 23-52 s after its posted time (OBSERVED 2026-10-27): a poll this soon after ICT midnight can miss an
+# item of the day before, so the next poll still asks for that day.
+HOSE_VISIBILITY_MARGIN = timedelta(minutes=5)
+HOSE_MAX_LOOKBACK_DAYS = 7  # a longer gap is a coverage overflow, not a request for weeks of listing
+
+
 class HoseNewsApiSource:
     """HOSE disclosure listing (`securitiesType/0`): JSON pages of `page_size`, ICT dates, paging while a page is all new.
 
-    `startDate` is yesterday (ICT) only on the first poll of an ICT day (no ok poll yet, or the last one on an earlier
-    ICT day), so items posted between the last poll of a day and midnight are not missed (red-team r1 RT13).
+    `startDate` is the ICT day of the last ok poll minus `HOSE_VISIBILITY_MARGIN` (yesterday without one), at most
+    `HOSE_MAX_LOOKBACK_DAYS` back, so no day between two ok polls goes unasked after a gap (red-team r1 RT13; code
+    review F1). An entry that is not strict JSON is skipped and noted; the page snapshot keeps its bytes.
     """
 
     def __init__(self, config: SourceConfig, fetcher: Fetcher, *, sleeper: Sleeper) -> None:
@@ -401,17 +431,22 @@ class HoseNewsApiSource:
         self._fetcher = fetcher
         self._sleeper = sleeper
 
-    def _dates(self, ctx: PollContext) -> tuple[date, date]:
+    def _dates(self, ctx: PollContext) -> tuple[date, date, bool]:
+        """(startDate, endDate, capped): capped when the lookback limit cut the window short."""
         zone = local_zone()
         today = ctx.now.astimezone(zone).date()
-        first_of_day = ctx.last_ok_at is None or ctx.last_ok_at.astimezone(zone).date() < today
-        return (today - timedelta(days=1) if first_of_day else today), today
+        if ctx.last_ok_at is None:
+            return today - timedelta(days=1), today, False
+        wanted = min((ctx.last_ok_at - HOSE_VISIBILITY_MARGIN).astimezone(zone).date(), today)
+        earliest = today - timedelta(days=HOSE_MAX_LOOKBACK_DAYS)
+        return max(wanted, earliest), today, wanted < earliest
 
     def poll(self, ctx: PollContext) -> PollResult:
         cfg = self.config
         assert cfg.url is not None and cfg.page_size is not None  # checked in __init__
-        start, end = self._dates(ctx)
+        start, end, capped = self._dates(ctx)
         collector = _Collector()
+        skipped: list[dict[str, str]] = []
         for page_index in range(1, cfg.max_pages + 1):
             if page_index > 1:
                 self._sleeper(cfg.min_request_spacing_s)
@@ -428,27 +463,46 @@ class HoseNewsApiSource:
             page = collector.page(request, answer)
             try:
                 entries = _hose_entries(answer.body)
-                for entry in entries:
-                    collector.item(
-                        str(entry["id"]), entry, first_seen_at=answer.received_at, request=page.request,
-                        response=page.response, snapshot_sha256=page.sha256,
-                    )
-            except (_InvalidPayload, CaptureRecordError) as err:
-                reason = err.reason if isinstance(err, _InvalidPayload) else "not_strict_json"
-                return collector.result(OutageKind.SOURCE_INVALID_PAYLOAD, detail_json(reason=reason, page=page_index))
+            except _InvalidPayload as err:
+                return collector.result(OutageKind.SOURCE_INVALID_PAYLOAD, detail_json(reason=err.reason, page=page_index))
+            for entry in entries:
+                source_id = str(entry["id"])
+                if not collector.try_item(
+                    source_id, entry, first_seen_at=answer.received_at, request=page.request,
+                    response=page.response, snapshot_sha256=page.sha256,
+                ):
+                    skipped.append({"id": source_id, "reason": "not_strict_json"})
             all_new = bool(entries) and not any(ctx.is_known(str(entry["id"])) for entry in entries)
             if not all_new or len(entries) < cfg.page_size:
-                return collector.result()
-        if ctx.last_ok_at is None:  # nothing to overlap with yet: the first poll's items are late anyway
-            return collector.result()
-        return collector.result(OutageKind.COVERAGE_OVERFLOW, detail_json(reason="page_cap", pages=cfg.max_pages))
+                break
+        else:
+            if ctx.last_ok_at is not None:  # nothing to overlap with on a first poll: its items are late anyway
+                return _noted(collector, OutageKind.COVERAGE_OVERFLOW, skipped, reason="page_cap", pages=cfg.max_pages)
+        if capped:
+            return _noted(collector, OutageKind.COVERAGE_OVERFLOW, skipped, reason="lookback_cap", days=HOSE_MAX_LOOKBACK_DAYS)
+        return _noted(collector, None, skipped)
+
+
+def rss_item_fragments(text: str) -> list[str]:
+    """Every `<item ...>...</item>` fragment, in linear time; an item without a closing tag ends the list."""
+    fragments: list[str] = []
+    position = 0
+    while (opening := _RSS_ITEM_OPEN.search(text, position)) is not None:
+        closing = _RSS_ITEM_CLOSE.search(text, opening.end())
+        if closing is None:
+            break
+        fragments.append(text[opening.start() : closing.end()])
+        position = closing.end()
+    return fragments
 
 
 def _guid(fragment: str) -> str | None:
-    match = _RSS_GUID.search(fragment)
-    if match is None:
+    """The text of the first `<guid>`, or None when it has no closing tag."""
+    opening = _RSS_GUID_OPEN.search(fragment)
+    closing = _RSS_GUID_CLOSE.search(fragment, opening.end()) if opening is not None else None
+    if opening is None or closing is None:
         return None
-    text = match.group(1).strip()
+    text = fragment[opening.end() : closing.start()].strip()
     cdata = _CDATA.match(text)
     if cdata is not None:
         text = cdata.group(1).strip()
@@ -477,7 +531,7 @@ class RssFeedSource:
             text = answer.body.decode("utf-8")
         except UnicodeDecodeError:
             return collector.result(OutageKind.SOURCE_INVALID_PAYLOAD, detail_json(reason="not_utf8"))
-        fragments = _RSS_ITEM.findall(text)
+        fragments = rss_item_fragments(text)
         if not fragments:
             return collector.result(OutageKind.SOURCE_INVALID_PAYLOAD, detail_json(reason="no_items"))
         guids: list[str] = []
@@ -504,6 +558,10 @@ class VendorWorkerBusy(TimeoutError):
     """The previous vendor call timed out and its thread is still running."""
 
 
+class VendorAborted(RuntimeError):
+    """A vendor call raised a `BaseException` that is not an `Exception` (SystemExit, KeyboardInterrupt, ...)."""
+
+
 class VendorWorker:
     """Runs one vendor call at a time on a daemon thread and waits at most `timeout_s` for it.
 
@@ -526,8 +584,10 @@ class VendorWorker:
         def target() -> None:
             try:
                 box["value"] = fn()
-            except BaseException as err:  # handed to the caller's thread below, never swallowed
+            except Exception as err:  # handed to the caller's thread below, never swallowed
                 box["error"] = err
+            except BaseException as err:  # sys.exit() in a vendor gate must not end capture (code review F7)
+                box["error"] = VendorAborted(f"vendor call raised {type(err).__name__}")
 
         thread = threading.Thread(target=target, name="capture-vendor-call", daemon=True)
         self._thread = thread
@@ -655,6 +715,7 @@ class VnstockEventsSource:
         if self._worker.busy:
             return collector.result(OutageKind.SOURCE_UNREACHABLE, detail_json(reason="vendor_worker_busy"), next_cursor=cursor)
         symbol_errors: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
         notes: dict[str, Any] = {}
         start = self._clock.monotonic()
         done = 0
@@ -688,7 +749,7 @@ class VnstockEventsSource:
                 kind = cfg.error_map.get(code, OutageKind.SOURCE_UNREACHABLE) if isinstance(code, str) else OutageKind.SOURCE_UNREACHABLE
                 return collector.result(kind, error_detail(err, symbol=symbol), next_cursor=position)
             first_seen_at = self._clock.now()
-            invalid = self._collect_rows(collector, symbol, answer, first_seen_at)
+            invalid = self._collect_rows(collector, symbol, answer, first_seen_at, skipped)
             if invalid is not None:
                 return collector.result(OutageKind.SOURCE_INVALID_PAYLOAD, detail_json(reason=invalid, symbol=symbol), next_cursor=position)
             hits = self._quota_hit(answer)
@@ -698,11 +759,13 @@ class VnstockEventsSource:
             done += 1
         if symbol_errors:
             notes["symbol_errors"] = symbol_errors
-        detail = detail_json(**notes) if notes else None
-        return collector.result(None, detail, next_cursor=(cursor + done) % len(symbols))
+        return _noted(collector, None, skipped, next_cursor=(cursor + done) % len(symbols), **notes)
 
-    def _collect_rows(self, collector: _Collector, symbol: str, answer: _VendorAnswer, first_seen_at: datetime) -> str | None:
-        """Add the rows as items; returns a reason when the frame is not a list of rows with an id."""
+    def _collect_rows(
+        self, collector: _Collector, symbol: str, answer: _VendorAnswer, first_seen_at: datetime, skipped: list[dict[str, str]]
+    ) -> str | None:
+        """Add the rows as items; returns a reason when the frame is not a list of rows with an id. A row that is not
+        strict JSON is skipped and noted in `skipped`, so one bad row cannot hold the cursor (code review F4)."""
         if not isinstance(answer.rows, list):
             return "rows_not_a_list"
         request = {
@@ -715,11 +778,9 @@ class VnstockEventsSource:
             row_id = row.get("id") if isinstance(row, dict) else None
             if isinstance(row_id, bool) or not isinstance(row_id, (str, int)) or not str(row_id).strip():
                 return "row_without_id"
-            try:
-                collector.item(
-                    f"{self.config.vnstock_source}:{row_id}", row, first_seen_at=first_seen_at, request=request,
-                    response=response, snapshot_sha256=None,
-                )
-            except CaptureRecordError:
-                return "not_strict_json"
+            source_id = f"{self.config.vnstock_source}:{row_id}"
+            if not collector.try_item(
+                source_id, row, first_seen_at=first_seen_at, request=request, response=response, snapshot_sha256=None,
+            ):
+                skipped.append({"id": source_id, "reason": "not_strict_json"})
         return None

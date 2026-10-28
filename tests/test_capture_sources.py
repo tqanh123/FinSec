@@ -681,3 +681,111 @@ def test_vnstock_sweep_stops_at_the_poll_budget() -> None:
     unbounded = _vnstock(slow, clock=clock, symbols_per_poll=4, vendor_call_timeout_s=140.0)
     asked.clear()
     assert unbounded.poll(_ctx(cursor=0)).detail is None and len(asked) == 4, "no budget given: the whole sweep runs"
+
+
+# ---------------------------------------------------------------- code review fixes (2026-10-28)
+
+
+def test_hose_window_reaches_back_to_the_last_ok_day_after_a_multi_day_gap() -> None:
+    monday = datetime(2026, 10, 26, 2, 0, tzinfo=timezone.utc)  # 09:00 ICT
+    friday_close = datetime(2026, 10, 23, 9, 0, tzinfo=timezone.utc)  # 16:00 ICT
+    source, fetcher, _ = _hose(_response(_hose_body([5, 4]), at=monday))
+    result = source.poll(_ctx(now=monday, last_ok_at=friday_close))
+    params = dict(fetcher.requests[0].params)
+    assert (params["startDate"], params["endDate"]) == ("2026-10-23", "2026-10-26"), "Friday evening and Saturday too"
+    assert result.outage_kind is None
+
+
+def test_hose_first_poll_just_after_midnight_still_covers_yesterday() -> None:
+    # HOSE shows an item 23-52 s after its posted time (OBSERVED 2026-10-27): the poll at 00:00:30 ICT can miss an item
+    # posted at 23:59:50, so the next poll still asks for yesterday.
+    last_ok = datetime(2026, 10, 27, 17, 0, 30, tzinfo=timezone.utc)  # 00:00:30 ICT on 2026-10-28
+    now = last_ok + timedelta(minutes=60)
+    source, fetcher, _ = _hose(_response(_hose_body([]), at=now))
+    source.poll(_ctx(now=now, last_ok_at=last_ok))
+    params = dict(fetcher.requests[0].params)
+    assert (params["startDate"], params["endDate"]) == ("2026-10-27", "2026-10-28")
+
+
+def test_hose_lookback_is_capped_and_reported_as_coverage_overflow() -> None:
+    long_ago = T0 - timedelta(days=30)
+    source, fetcher, _ = _hose(_response(_hose_body([7])))
+    result = source.poll(_ctx(last_ok_at=long_ago))
+    params = dict(fetcher.requests[0].params)
+    assert params["startDate"] == "2026-10-20", "seven ICT days back at most"
+    assert [item.source_id for item in result.items] == ["7"], "the items found are still captured"
+    assert result.outage_kind is OutageKind.COVERAGE_OVERFLOW
+    assert json.loads(result.detail or "{}") == {"reason": "lookback_cap", "days": 7}
+
+
+def test_hose_entry_that_is_not_strict_json_is_skipped_and_noted() -> None:
+    # A title cut inside a UTF-16 surrogate pair parses as a lone surrogate, which has no UTF-8 encoding.
+    body = (b'{"success": true, "data": {"list": [{"id": 3, "title": "AAA \\ud83d"}, {"id": 2, "title": "BBB"},'
+            b' {"id": 1, "title": "CCC"}]}}')
+    source, _, _ = _hose(_response(body))
+    result = source.poll(_ctx({"1"}))
+    assert result.outage_kind is None, "one bad entry must not black out the source"
+    assert [item.source_id for item in result.items] == ["2", "1"]
+    assert len(result.pages) == 1 and result.pages[0].body == body, "the page snapshot keeps the skipped entry's bytes"
+    assert json.loads(result.detail or "{}") == {"skipped_items": [{"id": "3", "reason": "not_strict_json"}]}
+
+
+def test_vnstock_row_that_is_not_strict_json_is_skipped_and_the_cursor_moves_on() -> None:
+    def call_events(symbol: str, vendor_source: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        rows = _rows(symbol, [f"{symbol.lower()}-1", f"{symbol.lower()}-2"])
+        if symbol == "AAA":
+            rows[0]["title"] = "\ud83d"
+        return rows, {}
+
+    result = _vnstock(call_events).poll(_ctx(cursor=0))
+    assert result.outage_kind is None
+    assert [item.source_id for item in result.items] == ["vci:aaa-2", "vci:bbb-1", "vci:bbb-2"]
+    assert result.next_cursor == 2, "the sweep goes past the symbol with the bad row"
+    detail = json.loads(result.detail or "{}")
+    assert detail["skipped_items"] == [{"id": "vci:aaa-1", "reason": "not_strict_json"}]
+
+
+def test_rss_items_are_cut_in_linear_time() -> None:
+    # A body of unclosed `<item>` tags made the old lazy regex quadratic while holding the GIL, so the watchdog thread
+    # could not fire (code review F6). Run in a child process so a regression fails on the timeout instead of hanging.
+    import subprocess
+    import sys
+
+    script = (
+        "from finsec_alpharadar.capture.sources import rss_item_fragments\n"
+        "body = '<rss><channel>' + '<item><title>x</title>' * 200_000 + '</channel></rss>'\n"
+        "assert rss_item_fragments(body) == []\n"
+        "assert rss_item_fragments('<ITEM a=\"1\"><guid>9</guid></Item><item><guid>8</guid></item>') == "
+        "['<ITEM a=\"1\"><guid>9</guid></Item>', '<item><guid>8</guid></item>']\n"
+    )
+    import os
+    from pathlib import Path
+
+    import finsec_alpharadar
+
+    src = str(Path(finsec_alpharadar.__file__).resolve().parent.parent)  # the child does not get pytest's `pythonpath`
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (src, os.environ.get("PYTHONPATH"))))}
+    completed = subprocess.run(
+        [sys.executable, "-X", "utf8", "-c", script], capture_output=True, text=True, timeout=60, env=env
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+
+
+def test_rss_guid_of_an_unclosed_tag_is_none_and_the_item_is_invalid() -> None:
+    body = "<rss><channel><item><title>AAA</title><guid>1</guid></item><item><guid>2<guid>3</item></channel></rss>"
+    source = RssFeedSource(_rss_config(), FakeFetcher(_response(body.encode("utf-8"), content_type="application/rss+xml")))
+    result = source.poll(_ctx(set()))
+    assert [item.source_id for item in result.items] == ["1"]
+    assert result.outage_kind is OutageKind.SOURCE_INVALID_PAYLOAD
+    assert json.loads(result.detail or "{}") == {"reason": "item_without_guid", "items": 1}
+
+
+def test_vendor_base_exception_becomes_an_outage_not_an_exit() -> None:
+    def exits(symbol: str, vendor_source: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        raise SystemExit(1)  # a vendor licence or expiry gate that calls sys.exit()
+
+    worker = VendorWorker()
+    result = _vnstock(exits, worker=worker).poll(_ctx(cursor=0))
+    worker.join_current()
+    assert result.outage_kind is OutageKind.SOURCE_UNREACHABLE and result.next_cursor == 0
+    assert json.loads(result.detail or "{}")["class"] == "VendorAborted"

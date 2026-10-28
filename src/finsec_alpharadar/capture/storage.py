@@ -172,6 +172,17 @@ class RawArchive:
     def files_for_day(self, day: date) -> list[Path]:
         return [p for p in (self.path_for(s, day) for s in self.source_names()) if p.is_file()]
 
+    def days(self) -> list[date]:
+        """Every UTC day that has a file of any source, oldest first."""
+        found: set[date] = set()
+        for source in self.source_names():
+            for path in (self.root / "raw" / source).glob("*.jsonl"):
+                try:
+                    found.add(date.fromisoformat(path.stem))
+                except ValueError:
+                    continue
+        return sorted(found)
+
     @staticmethod
     def read_records(path: Path) -> Iterator[CaptureRecord]:
         """Every record of a file, split on b"\\n" only; a malformed line raises `CaptureRecordError`."""
@@ -314,6 +325,7 @@ class ReconcileReport:
     records_scanned: int
     seen_added: int
     snapshots_restored: int
+    malformed_lines: int = 0
 
 
 _SCHEMA = """
@@ -426,6 +438,7 @@ class StateReader:
         since: datetime | None = None,
         until: datetime | None = None,
         order: str = "ASC",
+        by_insertion: bool = False,
         limit: int | None = None,
     ) -> list[PollRow]:
         clauses: list[str] = []
@@ -440,7 +453,8 @@ class StateReader:
                 clauses.append(clause)
                 params.append(value)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        query = f"SELECT id, {', '.join(_POLL_COLUMNS)} FROM polls{where} ORDER BY started_at {order}, id {order}"
+        key = "id" if by_insertion else f"started_at {order}, id"
+        query = f"SELECT id, {', '.join(_POLL_COLUMNS)} FROM polls{where} ORDER BY {key} {order}"
         if limit is not None:
             query += f" LIMIT {int(limit)}"
         rows: list[PollRow] = []
@@ -453,6 +467,17 @@ class StateReader:
     def last_poll(self, source: str, *, status: str | None = None) -> PollRow | None:
         """The poll of `source` with the latest `started_at` (optionally only "ok" or "error"), or None."""
         rows = self._select_polls(source, status=status, order="DESC", limit=1)
+        return rows[0] if rows else None
+
+    def newest_poll(self, source: str, *, status: str | None = None) -> PollRow | None:
+        """The poll of `source` written last (optionally only "ok" or "error"), or None. The scheduler reads this one:
+        after a backward clock step the latest `started_at` lies in the future and would hold the schedule (code review F2)."""
+        rows = self._select_polls(source, status=status, order="DESC", by_insertion=True, limit=1)
+        return rows[0] if rows else None
+
+    def first_poll(self, source: str) -> PollRow | None:
+        """The oldest poll of `source` by insertion, or None."""
+        rows = self._select_polls(source, by_insertion=True, limit=1)
         return rows[0] if rows else None
 
     def polls(
@@ -666,23 +691,46 @@ def durable_commit(archive: RawArchive, state: CaptureState, *, at: datetime) ->
     return synced
 
 
-def reconcile_archive(archive: RawArchive, state: CaptureState, *, now: datetime) -> ReconcileReport:
-    """Replay archive lines ingested after `meta.last_commit_at` into `seen` and the last snapshot sha per source into `kv`.
-
-    Without a commit mark the two most recent UTC days (up to `now`) are scanned. Does not commit: the caller's startup
-    commits once it has finished.
-    """
-    since = state.last_commit_at()
+def recovery_days(since: datetime | None, now: datetime) -> list[date]:
+    """The UTC days a restart repairs and replays: from the day before the last commit mark (or before `now` without one)
+    to `now`. A day before the mark too, because another command (`heartbeat`, `backup`) can commit after a crash of
+    `run` and move the mark past its orphaned lines, across midnight as well (code review F5)."""
     last_day = now.astimezone(timezone.utc).date()
-    first_day = since.date() if since is not None else last_day - timedelta(days=1)
-    scanned = added = restored = 0
+    mark_day = min(since.astimezone(timezone.utc).date(), last_day) if since is not None else last_day
+    first_day = mark_day - timedelta(days=1)
+    return [first_day + timedelta(days=n) for n in range((last_day - first_day).days + 1)]
+
+
+def _tolerant_records(path: Path) -> tuple[list[CaptureRecord], int]:
+    """The records of a file and the number of lines that do not parse (logged by count, never by content)."""
+    records: list[CaptureRecord] = []
+    malformed = 0
+    for line in path.read_bytes().split(b"\n"):
+        if not line:
+            continue
+        try:
+            records.append(CaptureRecord.from_json_line(line))
+        except (CaptureRecordError, UnicodeDecodeError):
+            malformed += 1
+    if malformed:
+        logger.warning("archive has malformed lines: file=%s/%s lines=%d", path.parent.name, path.name, malformed)
+    return records, malformed
+
+
+def reconcile_archive(archive: RawArchive, state: CaptureState, *, now: datetime) -> ReconcileReport:
+    """Replay every archive line of the `recovery_days` into `seen` and the last snapshot sha per source into `kv`.
+
+    Every line, not only those ingested after the commit mark: the mark follows the wall clock and other commands, and
+    `add_seen` is idempotent (code review F5). A malformed line is skipped and counted, so one bad line in the middle
+    of a file cannot stop every restart (code review F3). Does not commit: the caller's startup commits when done.
+    """
+    scanned = added = restored = malformed = 0
     latest_snapshot: dict[str, CaptureRecord] = {}
-    day = first_day
-    while day <= last_day:
+    for day in recovery_days(state.last_commit_at(), now):
         for path in archive.files_for_day(day):
-            for record in archive.read_records(path):
-                if since is not None and record.ingested_at <= since:
-                    continue
+            records, bad = _tolerant_records(path)
+            malformed += bad
+            for record in records:
                 scanned += 1
                 if record.record_type is RecordType.SNAPSHOT:
                     previous = latest_snapshot.get(record.source)
@@ -690,11 +738,10 @@ def reconcile_archive(archive: RawArchive, state: CaptureState, *, now: datetime
                         latest_snapshot[record.source] = record
                 elif state.add_seen(record.source, record.source_id, record.raw_sha256, record.first_seen_at):
                     added += 1
-        day += timedelta(days=1)
     for source, record in latest_snapshot.items():
         if state.get_kv(snapshot_kv_key(source)) != record.raw_sha256:
             state.set_kv(snapshot_kv_key(source), record.raw_sha256)
             restored += 1
     if scanned:
         logger.info("archive reconciled: records=%d seen_added=%d snapshots_restored=%d", scanned, added, restored)
-    return ReconcileReport(scanned, added, restored)
+    return ReconcileReport(scanned, added, restored, malformed)

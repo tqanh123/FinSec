@@ -67,6 +67,7 @@ from finsec_alpharadar.capture.storage import (
     ReconcileReport,
     durable_commit,
     reconcile_archive,
+    recovery_days,
     snapshot_kv_key,
 )
 
@@ -340,14 +341,7 @@ class Poller:
 
     def startup(self) -> StartupReport:
         now = self.clock.now()
-        since = self.state.last_commit_at()
-        last_day = now.astimezone(timezone.utc).date()
-        day = since.date() if since is not None else last_day - timedelta(days=1)
-        days: list[date] = []
-        while day <= last_day:
-            days.append(day)
-            day += timedelta(days=1)
-        cuts = self.archive.repair_tails(days)
+        cuts = self.archive.repair_tails(recovery_days(self.state.last_commit_at(), now))
         bytes_cut = sum(cuts.values())
         reconcile = reconcile_archive(self.archive, self.state, now=now)
 
@@ -362,7 +356,10 @@ class Poller:
         if alive is not None:
             down_s = (now - alive.last_alive_at).total_seconds()
             if down_s > self.config.schedule.alive_threshold_s:
-                detail = detail_json(down_s=down_s, bytes_cut=bytes_cut, files_repaired=len(cuts), previous_pid=alive.pid)
+                detail = detail_json(
+                    down_s=down_s, bytes_cut=bytes_cut, files_repaired=len(cuts), malformed_lines=reconcile.malformed_lines,
+                    previous_pid=alive.pid,
+                )
                 process_down_id = self.state.open_outage(
                     OutageKind.PROCESS_DOWN, None, start_at=alive.last_alive_at, detected_at=now, detail=detail
                 )
@@ -403,9 +400,16 @@ class Poller:
 
     # ------------------------------------------------------------ one cycle
 
+    def _next_due(self, cfg: SourceConfig, now: datetime) -> datetime:
+        """When `cfg` is next due: now without a poll, or when its newest poll lies in the future (a backward clock
+        step; waiting for the wall clock to catch up would stall capture without any signal, code review F2)."""
+        last = self.state.newest_poll(cfg.name)
+        if last is None or last.started_at > now:
+            return now
+        return self.schedule.next_due(last.started_at, cfg)
+
     def _is_due(self, cfg: SourceConfig, now: datetime) -> bool:
-        last = self.state.last_poll(cfg.name)
-        return last is None or self.schedule.next_due(last.started_at, cfg) <= now
+        return self._next_due(cfg, now) <= now
 
     def run_cycle(self, *, all_sources: bool = False) -> CycleReport:
         """Poll every enabled source that is due (or every one with `all_sources`), ticking after each source."""
@@ -463,8 +467,9 @@ class Poller:
 
     def _pit_quality(self, cfg: SourceConfig, last_ok: datetime | None, t: datetime) -> PitQuality:
         """R2.6: late when the source never had an ok poll, the gap deadline passed, or any outage of the source or of
-        the whole process intersects (last ok, t]."""
-        if last_ok is None or t > self.schedule.gap_deadline(last_ok, cfg):
+        the whole process intersects (last ok, t]. Late too when the last ok poll lies after `t` (a backward clock step):
+        the wall clock cannot tell how long nothing watched the source."""
+        if last_ok is None or last_ok > t or t > self.schedule.gap_deadline(last_ok, cfg):
             return PitQuality.LATE
         return PitQuality.LATE if self.state.outages_between(cfg.name, last_ok, t) else PitQuality.FIRST_SEEN
 
@@ -476,7 +481,7 @@ class Poller:
     def _poll_source(self, cycle_id: str, cfg: SourceConfig, source: CaptureSource) -> SourcePollSummary:
         name = cfg.name
         started_at = self.clock.now()
-        last_ok_row = self.state.last_poll(name, status="ok")
+        last_ok_row = self.state.newest_poll(name, status="ok")
         # The anchor is the ok poll's finished_at: it is >= the end_at of an outage that poll closed, so the next poll
         # does not intersect that outage again ("late once").
         last_ok = last_ok_row.finished_at if last_ok_row is not None else None
@@ -593,28 +598,33 @@ class Poller:
         self._run_component("heartbeat", lambda: heartbeat_fn(now), now)
         return True
 
+    def _backup_due_day(self, now: datetime) -> date | None:
+        """The oldest closed UTC day without a `backups` row: the day that just closed, or one with archive files that a
+        downtime over the backup time skipped (code review F9). None when every one is backed up."""
+        yesterday = now.astimezone(timezone.utc).date() - timedelta(days=1)
+        days = {day for day in self.archive.days() if day <= yesterday} | {yesterday}
+        return next((day for day in sorted(days) if self.state.backup_row(day) is None), None)
+
     def _maybe_backup(self, now: datetime, mono: float) -> bool:
-        """Back up the UTC day that just closed, once local time passed `backup_at_local` and no `backups` row exists.
-        A failed try is repeated no sooner than `heartbeat_every_s` later."""
+        """Back up one closed UTC day per call, oldest first, once local time passed `backup_at_local`. A failed try is
+        repeated no sooner than `heartbeat_every_s` later; after a success the next missing day follows at once."""
         if self.backup_fn is None or self.schedule.local(now).time() < self.config.schedule.backup_at_local:
             return False
-        day = now.astimezone(timezone.utc).date() - timedelta(days=1)
-        if self.state.backup_row(day) is not None:
+        day = self._backup_due_day(now)
+        if day is None:
             return False
         if self._last_backup_try_mono is not None and mono - self._last_backup_try_mono < self.config.schedule.heartbeat_every_s:
             return False
         backup_fn = self.backup_fn
-        self._last_backup_try_mono = mono
-        self._run_component("backup", lambda: backup_fn(day, now), now)
+        ok = self._run_component("backup", lambda: backup_fn(day, now), now)
+        self._last_backup_try_mono = None if ok else mono
         return True
 
     def _sleep_s(self, now: datetime, mono: float) -> float:
         """Until the next due source or heartbeat, in steps of at most `loop_tick_s`."""
         wait = self.config.schedule.loop_tick_s
         for cfg, _ in self._sources:
-            last = self.state.last_poll(cfg.name)
-            due = now if last is None else self.schedule.next_due(last.started_at, cfg)
-            wait = min(wait, (due - now).total_seconds())
+            wait = min(wait, (self._next_due(cfg, now) - now).total_seconds())
         if self.heartbeat_fn is not None and self._next_heartbeat_mono is not None:
             wait = min(wait, self._next_heartbeat_mono - mono)
         return max(0.0, wait)

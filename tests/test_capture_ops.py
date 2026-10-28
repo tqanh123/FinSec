@@ -243,11 +243,23 @@ def test_status_ok_degraded_down_rules(tmp_path: Path) -> None:
     _poll(fresh, HOSE, T0 - timedelta(seconds=60), status="error")
     fresh.open_outage(OutageKind.SOURCE_UNREACHABLE, HOSE, start_at=T0 - timedelta(seconds=60), detected_at=T0, detail=None)
     beat = _heartbeat(fresh, config, tmp_path / "fresh")
-    assert beat["status"] == "DEGRADED", "a source that never had an ok poll has no deadline: not DOWN, but its outage shows"
+    assert beat["status"] == "DEGRADED", "a source whose first poll is recent is not DOWN yet, but its outage shows"
     assert beat["reasons"] == ["open_outage:source_unreachable:hose_news_api", "no_backup_yet"]
     assert beat["sources"][HOSE]["last_ok_at"] is None and beat["sources"][HOSE]["age_s"] is None
     assert beat["canary"]["baseline_at"] is None, "no baseline yet (only `run` takes one): reported, not degraded"
 
+
+def test_source_that_never_had_an_ok_poll_goes_down_after_its_first_poll(tmp_path: Path) -> None:
+    # A WAF that answers 403 from the first deployment on must read DOWN, not DEGRADED forever (code review F10).
+    config = _config()
+    state = _state(tmp_path)
+    _poll(state, HOSE, T0 - timedelta(seconds=60), status="error")
+    later = T0 + timedelta(minutes=20)  # past the gap deadline anchored on that first poll
+    _poll(state, RSS, later - timedelta(seconds=30))
+    _poll(state, HOSE, later - timedelta(seconds=30), status="error")
+    beat = _heartbeat(state, config, tmp_path, later)
+    assert beat["status"] == "DOWN" and f"down:{HOSE}" in beat["reasons"] and f"down:{RSS}" not in beat["reasons"]
+    assert beat["sources"][HOSE]["last_ok_at"] is None
 
 def test_skew_median_and_max(tmp_path: Path) -> None:
     config = _config()

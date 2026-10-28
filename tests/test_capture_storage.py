@@ -240,7 +240,8 @@ def test_startup_reconciles_archived_records_into_seen(root: Path) -> None:
     state = CaptureState(state_path)
     assert not state.is_seen("hose_news_api", "2", new_item.raw_sha256)
     report = reconcile_archive(archive, state, now=T0 + timedelta(minutes=5))
-    assert (report.records_scanned, report.seen_added, report.snapshots_restored) == (2, 1, 1)
+    # Every line of the recovery days is replayed, committed ones too: `add_seen` is idempotent (code review F5).
+    assert (report.records_scanned, report.seen_added, report.snapshots_restored) == (3, 1, 1)
     assert state.is_seen("hose_news_api", "2", new_item.raw_sha256)
     assert state.get_kv(snapshot_kv_key("hose_news_api")) == snapshot.raw_sha256
     again = reconcile_archive(archive, state, now=T0 + timedelta(minutes=5))
@@ -364,3 +365,49 @@ def test_poll_alive_kv_and_blob_rows_round_trip(root: Path) -> None:
     with sqlite3.connect(root / "state" / "capture.sqlite") as check:
         assert check.execute("SELECT COUNT(*) FROM polls").fetchone() == (2,)
     check.close()
+
+
+# ---------------------------------------------------------------- code review fixes (2026-10-28)
+
+
+def test_reconcile_ignores_a_commit_mark_moved_by_another_command(root: Path) -> None:
+    # `capture heartbeat` or `backup` commits between a crash of `run` and its restart; the mark then lies past the
+    # orphaned lines, and on another UTC day when the crash came just before midnight (code review F5).
+    archive = RawArchive(root, syncer=RecordingSyncer())
+    state = CaptureState(root / "state" / "capture.sqlite")
+    before_midnight = datetime(2026, 10, 27, 23, 59, 50, tzinfo=timezone.utc)
+    orphan = _item("hose_news_api", "1", at=before_midnight)
+    later = _item("hose_news_api", "2", at=T0 + timedelta(seconds=10))
+    archive.append(orphan)
+    archive.sync()
+    state.commit(before_midnight + timedelta(minutes=5))  # a foreign commit on the next UTC day
+    report = reconcile_archive(archive, state, now=before_midnight + timedelta(minutes=10))
+    assert report.seen_added == 1 and state.is_seen("hose_news_api", "1", orphan.raw_sha256)
+
+    archive.append(later)
+    archive.sync()
+    state.commit(T0 + timedelta(minutes=1))  # the same within one day: a mark after the line, nothing in `seen`
+    fresh = CaptureState(root / "state" / "other.sqlite")
+    fresh.commit(T0 + timedelta(minutes=1))
+    assert reconcile_archive(archive, fresh, now=T0 + timedelta(minutes=2)).seen_added == 2
+    assert fresh.is_seen("hose_news_api", "2", later.raw_sha256)
+    fresh.close()
+    state.close()
+
+
+def test_reconcile_skips_and_counts_a_malformed_line_in_the_middle(root: Path, caplog: pytest.LogCaptureFixture) -> None:
+    archive = RawArchive(root, syncer=RecordingSyncer())
+    state = CaptureState(root / "state" / "capture.sqlite")
+    first, second = _item("hose_news_api", "1"), _item("hose_news_api", "2", at=T0 + timedelta(seconds=5))
+    path = archive.append(first)
+    archive.sync()
+    with path.open("ab") as handle:  # a page of zeros left by a power loss, then a later page that did reach the disk
+        handle.write(b"\x00" * 64 + b"\n")
+    archive.append(second)
+    archive.sync()
+    with caplog.at_level("WARNING"):
+        report = reconcile_archive(archive, state, now=T0 + timedelta(minutes=1))
+    assert (report.seen_added, report.malformed_lines) == (2, 1)
+    assert state.is_seen("hose_news_api", "2", second.raw_sha256)
+    assert "malformed" in caplog.text and "\x00" not in caplog.text
+    state.close()
