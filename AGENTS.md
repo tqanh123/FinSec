@@ -8,6 +8,8 @@ This file is the single shared contract for every coding agent in this repo (Cla
 - Date every status or fact line you add or change. Label external facts VERIFIED (URL), OBSERVED (date) or ASSUMED.
 
 ## Decisions (owner; newest first)
+- 2026-10-28 — Phase 0 exit window (owner, D4): the poller runs 5 consecutive trading sessions on the laptop with a heartbeat each day and no unlogged gap; the laptop clone, venv and configs/capture.toml are frozen until the exit audit; a process restart on the same SHA is a logged outage, while deploying a new SHA (a hotfix) restarts the 5-session count; changes go only through the window-restart/hotfix procedure in docs/capture-runbook.md, and the newest dated "capture window started/restarted <date> at <sha>" line wins.
+- 2026-10-28 — Capture laptop account (owner, D7): a dedicated local standard user "capture" (password never expires) with Sysinternals Autologon (the password is stored as an LSA secret that an administrator can decrypt; accepted), the scheduled task runs as that user with logon type Password, vnstock is registered under that user, the cloud sync client runs in that session, and %USERPROFILE%\.vnstock is excluded from every synced folder.
 - 2026-10-27 — VN capture schedule (owner, D5): every 2-5 min from 08:00 to 17:30 ICT on trading days and hourly otherwise, per source in configs/capture.toml; a gap is a missed schedule: no successful poll by the second scheduled due time after the last one, plus the maximum poll duration.
 - 2026-10-27 — Capture heartbeat and backup (owner, D3): a heartbeat JSON and nightly backups (tar.gz of closed UTC days, an SQLite snapshot and a sha256 manifest) go to a cloud-synced folder on the laptop; the owner checks the heartbeat from a phone; no new alert channel before Phase 4.
 - 2026-10-27 — tzdata is an unconditional core dependency: zoneinfo reads TZPATH before the tzdata package, and Windows has no system IANA database, so the dev .venv and the laptop need the package (Linux CI uses the system zone files). No minimum version is required.
@@ -50,7 +52,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
 
 ## Current Status (verified 2026-10-22)
 - **Prototype.** About 1,450 lines of numpy-only, in-memory code (OBSERVED 2026-10-22), plus the VN capture poller (2026-10-27). The capture poller is the only network client in `src/` and its SQLite state the only database; there is no LLM call. No prediction has been made or scored yet.
-- **VN capture poller built (2026-10-27), not deployed yet** (`capture/`; the laptop deployment is plan 261022-1147 phase 3). A dev dry run on 2026-10-27 captured both portals (HOSE 40 then 20 items, HNX 100); two new HOSE items were first seen 23-52 s after their posted time (OBSERVED 2026-10-27).
+- **VN capture poller built (2026-10-27), not deployed yet** (`capture/`; the laptop deployment is plan 261022-1147 phase 3). VN capture runbook and final config committed (2026-10-28); laptop deployment per `docs/capture-runbook.md`. A dev dry run on 2026-10-27 captured both portals (HOSE 40 then 20 items, HNX 100); two new HOSE items were first seen 23-52 s after their posted time (OBSERVED 2026-10-27).
 - **Works, smoke-tested by `tests/test_end_to_end.py`:**
   - OLS market-model CAR (`quant/event_study.py`);
   - Altman/Beneish/Piotroski (`forensics/xbrl_bctc_auditor.py`); undefined ratios return None with a reason; scores run only for non-financial issuers (2026-10-22); formula corrections are Phase 2;
@@ -210,6 +212,7 @@ FinSec AlphaRadar is a research and alerting platform. It aims to turn real-time
   - PowerShell: `.\.venv\Scripts\python -m finsec_alpharadar.capture once --all`, and the same commands.
   - Exit codes: 0 ok; 1 audit failed or a backup did not verify; 2 usage or config error (including `backup` of an open UTC day and `audit` on a live WAL state); 3 another capture process holds the lock; 4 a directory inside an unignored work tree.
   - `audit` reads a snapshot (`state-<d>.sqlite` from `backup`), never the live state.
+- **Capture deployment (2026-10-28).** The laptop setup, tasks, burn-in, exit window and hotfix procedure are in `docs/capture-runbook.md`. Burn-in and window checks run on the dev machine against the backup snapshot: `.venv/Scripts/python -m finsec_alpharadar.capture audit --state <backup-mirror>/daily/<d>/state-<d>.sqlite --from <d0> --to <d1> --days all --require-days 1` (5 trading days and `--days trading` for the exit).
 - **Harness integrity:** `python3.13 harness/scripts/verify_install.py --root . --strict`. Local gate: `/hs:test`.
   - Standards docs: `python3.13 harness/scripts/scaffold_standards.py --type system-architecture --check docs/system-architecture.md`, and the same with `--type code-standards` for `docs/code-standards.md`.
   - Upgrade (Git Bash, POSIX paths): `sh install.sh /c/.../harness-vX.Y.Z.tar.gz .`. Then convert `harness/release.json` back to LF, because strict verify compares it with HEAD. Never edit `harness/manifest.json`: `kit_digest` pins its CRLF bytes.

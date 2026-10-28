@@ -86,7 +86,7 @@ GET /v1/rag/search      (server.py:104-130)
      always [] because nothing ingests into the app's engine
   -> {"routed_model", "router_ucb_scores", "results", "as_of", "disclaimer"}
 
-python -m finsec_alpharadar.capture once|run   (capture/, 2026-10-27; not yet deployed)
+python -m finsec_alpharadar.capture once|run   (capture/, 2026-10-27; laptop deployment per docs/capture-runbook.md, 2026-10-28)
   -> per due source: fetch (HOSE API pages, HNX RSS feed 3, vnstock events in a worker) -> extract ids only
   -> snapshot blob when the body changed; new or revised items with pit_quality -> raw/<source>/<UTC day>.jsonl
   -> polls row, outages opened or closed -> fsync touched files -> commit state/capture.sqlite
@@ -183,6 +183,7 @@ Only the VN portals and vnstock are called from `src/` (by `capture/`, 2026-10-2
     - no throttle at a 0.5 s cadence;
     - `news()` removed, and `events(source="kbs")` broken.
   - VN disclosure portals (Phase 2 capture, DECIDED 2026-10-27): HOSE API listing plus HNX RSS feed 3 (`docs/phase0-spike-report.md` §2), polled by `capture/sources.py` (2026-10-27).
+- **Cloud sync folder** (OneDrive or Google Drive, secondary account; D3): on the capture laptop `FINSEC_BACKUP_DIR` holds the heartbeat, the nightly backups and the owner's evidence files (`ops/`); the dev machine reads the same folder to run the audit (`docs/capture-runbook.md`, 2026-10-28). Free quota is 5 GB.
 - **tzdata** (core dependency since 2026-10-27, no version bound): Windows has no system IANA database, so zoneinfo needs the package for Asia/Ho_Chi_Minh and America/New_York.
 - **Telegram Bot API**: the alert channel (DECIDED §9.8; built in Phase 4). It is not in AGENTS.md "Verified Facts"; see roadmap §4 for its source.
 - **LLM providers**: none called. The model IDs in `api/server.py:20` and `tests/test_end_to_end.py:149` are unverified. Provider choice is deferred to the Phase 5 gate (DECIDED §9.11); extraction starts rule-based.
@@ -194,6 +195,7 @@ Only the VN portals and vnstock are called from `src/` (by `capture/`, 2026-10-2
   - No authentication, rate limit or request model: the body is an untyped dict (`server.py:82`), and a missing or invalid field returns 422 (since 2026-10-21); extreme but finite values still reach the quant engine (Known gaps).
   - Any caller of `POST /v1/ticks/ingest` mutates shared in-memory engine state.
 - **Secrets:** keys live in `.env` (gitignored, `.gitignore:20`; `*.pem` and `*.key` ignored at lines 26-27). `src/` reads only `FINSEC_DATA_ROOT` and `FINSEC_BACKUP_DIR` (capture CLI through `data_root.py`, 2026-10-27); the capture request descriptors store header names, never values. Guidance (roadmap §4, §8; not an AGENTS.md rule): never commit keys, and never put secrets or personal data in prompts, URLs or logs.
+- **Capture laptop (D7, 2026-10-28; `docs/capture-runbook.md`):** the poller runs under a local standard user `capture` through Task Scheduler (logon type Password) from a clone and venv that `capture` can only read and execute; it writes only the data root and the backup folder. Autologon stores that user's password as an LSA secret an administrator can decrypt (accepted, D7). The sync client uses a secondary cloud account; the vnstock key store stays outside every synced folder.
 - **Order-execution boundary (DECIDED):** no trading client in `src/`; keep `ALPACA_PAPER_TRADE=true` (`.env.example:4`); no `trading` MCP toolset; never register SSI FC Trading. `tests/test_no_order_execution.py` enforces this (since 2026-10-21).
 - **Outputs:** every output carries a not-investment-advice notice and states probabilities, never buy/sell (mua/bán) wording (DECIDED). Owner-only visibility is DECIDED (§9.1, §9.8).
 - **Untrusted inputs** (guidance, roadmap §5.1; not an AGENTS.md rule): validate at the connector boundary and treat as data, never as instructions:

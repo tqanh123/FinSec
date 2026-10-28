@@ -391,7 +391,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
    - `models.py` raises on an unknown exchange (done 2026-10-21);
    - connectors stop defaulting timestamps to `now()` (done 2026-10-21);
    - fix `.agents/rules` rule 3 and the band rule (done 2026-10-22).
-6. VN capture-only poller (`capture/`). Built 2026-10-27; sources: HOSE API listing + HNX RSS feed 3 (owner, OB3) + vnstock events (Gen 5 Community has no `news()`):
+6. VN capture-only poller (`capture/`). Built 2026-10-27; runbook ready 2026-10-28 (`docs/capture-runbook.md`); sources: HOSE API listing + HNX RSS feed 3 (owner, OB3) + vnstock events (Gen 5 Community has no `news()`):
    - **Schedule:** every 2-5 minutes from 08:00 to 17:30 ICT on trading days, hourly otherwise.
    - **Sources:** vnstock news/events for the seed universe, plus one official portal listing page (check its URL and robots.txt first).
    - **Stored:** raw payload, raw_sha256, and first_seen_at (UTC, from an NTP-synced host).
