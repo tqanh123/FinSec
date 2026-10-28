@@ -15,6 +15,9 @@ Labels: VERIFIED (a source), OBSERVED (seen on the dev machine, with a date), AS
 - **Shells.** "Admin PowerShell" means Windows PowerShell 5.1 started with "Run as administrator". Never run `powercfg` from Git
   Bash: MSYS rewrites `/a` into a path (OBSERVED 2026-10-22). Always write `sc.exe`, never `sc`: in PowerShell 5.1 `sc` is an
   alias of `Set-Content`.
+- **Order.** The sections follow the plan's numbering, not the order of work. Do them in this order: 6.1 (create `capture`),
+  1.3 (sign in as `capture`, install Python), 1.4 (folders, rights, clone), 2, 3, 4, 5, 6.2-6.4, 7, 8, 9, 10, 11, 12, 13, then
+  14.
 - **Fixed paths** (used everywhere below; change them only by editing this runbook first):
 
 | Path | What | Who may write |
@@ -159,7 +162,8 @@ uploads only after someone signs in, so the phone sees a stale heartbeat after e
 2. `%USERPROFILE%\.vnstock` (the encrypted vnstock key store, research `vnstock-gen5.md` §1) must never be inside a synced folder.
    It is at the profile root, outside OneDrive, by default; do not add it to any backup or sync selection.
 3. Make the same folder readable on the dev machine: sign the secondary cloud account in there too, or share the folder with the
-   main account. Tell the agent the dev-side path; the agent calls it `<backup-mirror>`.
+   main account. Tell the agent the dev-side path; the agent calls it `<backup-mirror>`. With OneDrive Files On-Demand, mark
+   `daily` and `ops` "Always keep on this device" on the dev machine, so the audit opens real files, not placeholders.
 
 ## 8. Install (OWNER)
 
@@ -180,7 +184,14 @@ icacls C:\finsec\venv /grant "capture:(OI)(CI)M"
 C:\finsec\venv\Scripts\python -I -m pip install --require-hashes --no-deps --no-index --find-links C:\finsec\wheels -r C:\finsec\app\requirements\vnstock\win-py313.lock
 ```
 
-4. Admin PowerShell, back to read-only: `icacls C:\finsec\venv /grant:r "capture:(OI)(CI)RX"`.
+4. Admin PowerShell, back to read-only. `capture` created the files, so it owns them and could grant itself write again; take
+   ownership first (red-team r1 RT4):
+
+```powershell
+takeown /F C:\finsec\venv /R /A /D Y | Out-Null
+icacls C:\finsec\venv /grant:r "capture:(OI)(CI)RX"
+```
+
 5. Expected: `type C:\finsec\venv\pyvenv.cfg` shows `home = C:\Users\capture\AppData\Local\Programs\Python\Python313`. Never
    `pip install -e` the repository: capture runs from the clone through `PYTHONPATH` (section 10).
 
@@ -388,7 +399,7 @@ the same SHA (reboot, crash, task restart) logs `process_down` by itself; a logg
 | Cloud quota full | heartbeat or backup files stop updating on the phone | cloud storage page | free space in the secondary account; local data is intact | `backup_write_failed` / `heartbeat_write_failed` in the heartbeat |
 | Clock off by more than 60 s | heartbeat skew; stripchart | `w32tm /query /status /verbose` | `w32tm /resync /rediscover`; check UDP 123 | `clock_step` when the clock steps |
 | Disk below 10 GB | heartbeat `disk_low` | `Get-PSDrive C` | free space; never delete capture data | heartbeat reason |
-| vnstock release expired or yanked | `vendor_release_expired` / `vendor_unavailable` | `ops\capture.log` | reinstall from `C:\finsec\wheels` (no index needed); if the release itself expired, run portals only (below) | vnstock source outage; the portals carry the capture (D2) |
+| vnstock release expired or yanked | `vendor_release_expired` / `vendor_unavailable` | `ops\capture.log` | reinstall from `C:\finsec\wheels` (no index needed) inside the section 8 steps 2-4; if the release itself expired, run portals only (below) | vnstock source outage; the portals carry the capture (D2) |
 | `capture` password expired or changed | task and Autologon fail after a reboot | `net user capture` | see below | `process_down` once the task runs again |
 | vnstock "device limit" | `register` refused | https://vnstocks.com/account?section=devices | remove an old device, then `register` again | vnstock source outage meanwhile |
 
@@ -396,7 +407,8 @@ the same SHA (reboot, crash, task restart) logs `process_down` by itself; a logg
   (and the same for `EventLogExport`), run Autologon again through its window, then check `net user capture` shows
   "Password expires Never". Never type the password as a literal.
 - **Portals-only venv** (vnstock 5.1.0 stops serving data after 2027-10-17): copy the `tzdata==...` block, with every `--hash`, from
-  the lock into `C:\finsec\tzdata-only.txt`, install it with the same `--no-index --find-links C:\finsec\wheels` command, and set
+  the lock into `C:\finsec\tzdata-only.txt`, install it into a recreated `C:\finsec\venv` with the same `--no-index --find-links C:\finsec\wheels`
+  command inside the section 8 steps 2-4, and set
   `vnstock_events` `enabled = false` through the hotfix procedure (a command of this form installed `tzdata==2026.5` from the wheel
   set and loaded `ZoneInfo('Asia/Ho_Chi_Minh')`, OBSERVED 2026-10-22). Re-pinning vnstock is planned maintenance: log it as an outage.
 
