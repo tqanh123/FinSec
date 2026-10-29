@@ -7,3 +7,12 @@
   done_ts: ''
   source_ref: plans/261022-1147-phase0a-capture code review F8 (2026-10-28)
   actor: user:tqanh123
+- id: BL-002
+  text: 'vn_reconcile.py go-no-go: count_trading_days subtracts only the holidays in configs/capture.toml, which lists one (2026-11-24); the VN market holidays of 2024-08-15..2026-10-30 (about 20 weekdays: Tet, 30/4-1/5, 2/9, Hung Kings, New Year) are counted as sessions, so R1 N and L run about 4% high (MDE 0.031 to about 0.032, tier unchanged). Fix: a VN exchange calendar (Phase 3 trading calendar) or the holiday list in the counting rule.'
+  type: bug
+  priority: P3
+  status: open
+  created_ts: '2026-10-29T18:43:16.609004+00:00'
+  done_ts: ''
+  source_ref: plans/261022-1147-phase0a-capture phase 6 final review C7 (2026-10-30)
+  actor: user:tqanh123

@@ -121,6 +121,7 @@ Every prediction is written to an append-only ledger before its outcome exists, 
 - Detecting IC 0.03 at t = 2 needs about 4,400 effectively independent events.
 - VN30 alone gives roughly 960 earnings events over 8 years, which detects only IC of about 0.065 or more.
 - Events cluster on deadline days, so N_eff < N. CIs therefore use a date-clustered block bootstrap.
+- t = 2 is the detection threshold at about 50% power; the 80%-power MDE (t = 2.8) is reported as a sensitivity line only. The rule is coded in `quant/power_rule.py` and its first VN go/no-go (2026-10-30, all counts DERIVED) is in `docs/phase0-spike-report.md` §6.4: R1 on HOSE portal history and D2 BCTC are GO with LIMITED floors, D2 NQ HĐQT is not counted yet, D4 is NO-GO.
 
 **Research universe.** A point-in-time rule computed from our own data, recomputed monthly:
 - US: the top ~500 common stocks by trailing 60-session dollar ADV.
@@ -368,8 +369,8 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
   - delisted coverage;
   - adjusted series on 5 known ex-dates.
 - **SSI:** confirm the owner's account status. Read the R-channel spec for the foreign-flow field names and whether they are session-cumulative.
-- **VN timestamps:** hand-check 30 VN disclosures, comparing portal posting time with vnstock time.
-- **Output:** a counts table (events per type per year, share with intraday timestamps) and a go/no-go per VN target against the power rule.
+- **VN timestamps:** hand-check 30 VN disclosures, comparing portal posting time with vnstock time. Partly done 2026-10-30 (`docs/phase0-spike-report.md` §6.3): a scripted match from portal history compared 16 of the 30 (all HOSE; the HNX items carry no symbol) by date only, because recent vnstock events carry no time of day; detection latency waits for the capture window.
+- **Output:** a counts table (events per type per year, share with intraday timestamps) and a go/no-go per VN target against the power rule. Done 2026-10-30: `docs/phase0-spike-report.md` §6.2 and §6.4.
 
 **0b. Foundations.**
 1. Done 2026-10-20: `docs/system-architecture.md` and `docs/code-standards.md` are written and pass `harness/scripts/scaffold_standards.py --check`. Re-check them whenever an owner decision in section 9 is answered.
@@ -476,6 +477,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 **Exit.**
 - CAR tables for at least 3 VN event types with N, N_eff and power, rebuilt from raw data by one command.
 - The sensitivity of results to exact vs inferred timestamps is reported.
+- The go/no-go of D2 and R1-VN is rerun on N counted from the portals (BCTC and NQ HĐQT; vnstock events carry neither) with the measured rho, replacing the DERIVED Phase 0 counts (2026-10-30). R1-VN counts only events with a portal posting time: vnstock events are date-only from 2023 (OBSERVED 2026-10-29).
 - The unit and band sanity check passes on 5 known ex-dates.
 
 ### Phase 4: VN scoreboard, daily live loop, private alerts (3-4 weeks)
@@ -497,6 +499,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 - Matured predictions are scored automatically.
 - Live vs backtest Brier is reported.
 - Detection latency on the hand-checked sample: p50 under 5 minutes US, under 10 minutes VN.
+- D4 is expected to stay NO-GO through Phase 4: it counts only forward capture (N = 0 at the Phase 0 go/no-go, 2026-10-30).
 
 **Owner checkpoint after Phase 4.** Choose Phase 5, Phase 6, both, or stop and write up the results.
 

@@ -1,0 +1,64 @@
+{
+  "stage": "cook",
+  "plan": "261022-1147-phase0a-capture",
+  "checks": [
+    {
+      "name": "unit/full-suite",
+      "status": "PASS",
+      "file": "results/P6/unit__full-suite-8e0251001aee.xml",
+      "sha256": "8e0251001aeeb01b2e8158818d1d024434fb7578349f94118547a7e3554d9087",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\5388f5e4-a5ae-4bbf-9e4b-0a1ab0bb4ff5\\scratchpad\\p6-junit-venv.xml"
+    },
+    {
+      "name": "smoke/end-to-end",
+      "status": "PASS",
+      "file": "results/P6/smoke__end-to-end-3436f74b0c50.xml",
+      "sha256": "3436f74b0c508616e66b83cfa335d3cf263cebe8d2a7d743cab5b32909e3fc44",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\5388f5e4-a5ae-4bbf-9e4b-0a1ab0bb4ff5\\scratchpad\\p6-junit-e2e.xml"
+    }
+  ],
+  "verdict": "PASS",
+  "phase": "P6",
+  "actor": "user:tqanh123",
+  "ts": "2026-10-29T18:45:01+00:00",
+  "blastRadius": {
+    "reverseDeps": {
+      "tests/test_capture_cli.py": [],
+      "tests/test_capture_invariants.py": [],
+      "tests/test_capture_ops.py": [],
+      "tests/test_capture_poller.py": [],
+      "tests/test_capture_record.py": [],
+      "tests/test_capture_schedule.py": [],
+      "tests/test_capture_sources.py": [],
+      "tests/test_capture_storage.py": [],
+      "tests/test_data_root.py": [],
+      "tests/test_dependency_pins.py": [],
+      "tests/test_edgar_time.py": [],
+      "tests/test_record_edgar_headers.py": [],
+      "tests/test_repo_hygiene.py": []
+    },
+    "testsTouched": [
+      "tests/test_capture_cli.py",
+      "tests/test_capture_invariants.py",
+      "tests/test_capture_ops.py",
+      "tests/test_capture_poller.py",
+      "tests/test_capture_record.py",
+      "tests/test_capture_schedule.py",
+      "tests/test_capture_sources.py",
+      "tests/test_capture_storage.py",
+      "tests/test_data_root.py",
+      "tests/test_dependency_pins.py",
+      "tests/test_edgar_time.py",
+      "tests/test_power_rule.py",
+      "tests/test_record_edgar_headers.py",
+      "tests/test_repo_hygiene.py",
+      "tests/test_vn_counts.py",
+      "tests/test_vn_reconcile.py",
+      "tests/test_agents_md_paths.py",
+      "tests/test_no_order_execution.py"
+    ],
+    "basis": "code.importers + code.tests_reached (hs_run_facts.engine), default subjects",
+    "snapshot": "20261028-171640-7d8abe2a"
+  },
+  "run_seq": null
+}

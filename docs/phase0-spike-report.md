@@ -117,7 +117,60 @@ Pending (phase 5).
 
 ## 6. VN reconcile, counts, go/no-go
 
-Pending (phase 6).
+Phase 6 (2026-10-28 to 2026-10-30). The 5-session capture window has not opened (the laptop is not deployed), so every stratum of the sample comes from portal history and detection latency is not measured (`window_not_open`). Tables hold aggregates only.
+
+### 6.1 Runs
+
+- **Sample (OBSERVED 2026-10-28).** `vn_reconcile.py sample`: 30 disclosures from the HOSE API listing (2026-10-27 and 2026-10-28) and HNX RSS feed 3, 8 history requests. Strata: BCTC 5 HOSE + 5 HNX, NQ HĐQT 5 + 5, insider registration 6 HOSE + 4 HNX (HNX had 4; HOSE topped up one).
+- **Counts (OBSERVED 2026-10-29).** `vn_counts.py events` under `vnprobe`, vnstock 5.1.0 from the lock (`events(source="vci")`), 143 symbols = 130 of today's VN100 + HNX30 members (group names ASSUMED) plus 13 sample symbols not in them; not point-in-time (survivorship not handled). Two runs, merged with `vn_counts.py merge` (no vendor call; run in `.venv` with `python -I` under the dev user):
+  - run r2 (30 calls/min): 120 symbols, then a `NetworkError VNSTOCK_SOURCE_UNAVAILABLE` at PVC that both retries (30 s, 90 s) also hit; it ended at 20:45 ICT;
+  - run r3 (15 calls/min), started 4 h 21 min later: the remaining 23 symbols, PVC included, no error;
+  - the merge: 143/143 symbols, 146 calls, quota 99% left before and after.
+- **Discarded run (OBSERVED 2026-10-28).** A first run, by the script before the retry was added, stopped after 30 symbols on the same error code (no retry). It ran on vnstock 5.2.1, which pip had installed into the probe venv between the `universe` and `events` steps, outside the lock. The owner reinstalled 5.1.0 from the lock on 2026-10-29; the installed files match the locked wheel's RECORD (121 files, OBSERVED 2026-10-30).
+- **Open.** No `vnstock_probe.py hash` manifest was taken around the 5.2.1 import or the reinstall, and the agent cannot read the `vnprobe` home, so the D6 agent-file check for that episode is still owed by the owner.
+
+### 6.2 Counts (vnstock vci events, 143 issuers, OBSERVED 2026-10-29)
+
+| Group | Docs | Events | Issuers | Share with a time of day | Dates |
+|---|---|---|---|---|---|
+| BCTC (title fallback only) | 18 | 18 | 18 | 1.00 | 2016-12 to 2017-07 |
+| NQ HĐQT (title fallback only) | 1 | 1 | 1 | 1.00 | 2017-04 |
+| ĐHĐCĐ (AGME, AGMR, EGME) | 1,564 | 1,564 | 143 | 0.24 | 2016-09 to 2026-09 |
+| Dividend (DIV, ISS) | 2,617 | 2,406 | 142 | 0.00 | 2016-02 to 2026-10 |
+| Insider (DD*) | 11,638 | 7,839 | 141 | 0.32 | 2016-01 to 2026-10 |
+| Other | 1,292 | 1,165 | 139 | 0.48 | 2013-06 to 2026-10 |
+| All | 17,130 | 12,993 | 143 | 0.26 | 2,548 distinct dates |
+
+- An event is a distinct (symbol, event_code, ICT date). vci events have no BCTC or NQ HĐQT code; the 19 such events come from the title keywords only. Sanity: 0.063 BCTC events per issuer and year against the expected 4, so N(BCTC) is DERIVED below.
+- **Time of day by year (all groups).** 2016-2019: 69-77% of events carry a time of day; 2020: 36%; 2021: 9%; 2022: 1.7%; 2023-2026: 0%. Recent vnstock events are date-only.
+
+### 6.3 Reconcile against the portals (n = 30, OBSERVED 2026-10-29)
+
+| Measure | Value |
+|---|---|
+| Posting time on trading days, ICT | 08:00-14:45: 4; 14:45-17:30: 21; 17:30-24:00: 5; 00:00-08:00: 0; non-trading day: 0 |
+| Share posted after 14:45 / after 17:30 | 86.7% / 16.7% (the 16 HOSE times are DERIVED, `postedDate` − 7 h; the 14 HNX times are the RSS `pubDate` with +0700) |
+| Compared (a symbol known) | 16, all HOSE; the 14 HNX items have no symbol (RSS titles carry none) and no override was filled |
+| Date match (same symbol and type, within ±3 ICT days) | insider 4/6, lag 0 days on all 4; BCTC 0/5 and NQ HĐQT 0/5: no vnstock row of that type within the window (vnstock has only 19 such rows in all, from 2016-2017) |
+| Time-of-day comparison | not possible: none of the 4 matched vnstock rows carries a time of day |
+| vnstock rows with a time of day | matched rows 0/4; all 1,718 rows of the sample symbols 22.4% (older years) |
+| Detection latency | not measured: window not open |
+
+### 6.4 Go/no-go (as of 2026-10-30, rho = 0.10 ASSUMED)
+
+Rule: `quant/power_rule.py` (AGENTS.md Decisions 2026-10-30). Rerun: `.venv/Scripts/python scripts/spike/vn_reconcile.py go-no-go --counts <counts-merged>/counts-summary.json --reconcile <run>/reconcile-summary.json --history <portal>/2026-10-26/175058Z-history/history-summary.json --as-of 2026-10-30`.
+
+| Target | Event set | N | L | N_eff | MDE | Tier | MDE floor (tier) | MDE 80% | Labels |
+|---|---|---|---|---|---|---|---|---|---|
+| R1 | HOSE portal history | 13,386 | 577 | 4,157.2 | 0.0310 | GO | 0.0833 (LIMITED) | 0.0434 | all DERIVED |
+| R1 | forward window | 0 | 0 | 0 | inf | NO-GO | inf | inf | OBSERVED (window not open) |
+| D2 | BCTC | 6,262 | 564 | 3,115.0 | 0.0358 | GO | 0.0842 (LIMITED) | 0.0502 | all DERIVED |
+| D2 | NQ HĐQT | n/a | n/a | n/a | n/a | n/a | n/a | n/a | MISSING (not guessed) |
+| D4 | forward window | 0 | 0 | 0 | inf | NO-GO | inf | inf | OBSERVED (window not open) |
+
+- R1 N: mean 116.0 HOSE documents/day (3 history-check days) × 0.5 stock share × 577 sessions since 2024-08-15 / 2.5 documents per event (DERIVED; research ×2-4). The 577 are weekdays less the holidays in `configs/capture.toml`, which lists none in that span, so the VN market holidays (about 20 weekdays) are not subtracted: N and L run about 4% high (MDE 0.031 to about 0.032; tier unchanged).
+- D2 BCTC N: 4 per issuer and year × U = 200 × 7.83 years from 2019-01-01 (price bars start 2018-10-25), 72 dates per year (DERIVED).
+- **Reading.** Both GO rows rest on DERIVED counts, and both floors (N_eff = L) are LIMITED. D2 and R1-VN stay conditional until Phase 3 counts BCTC and NQ HĐQT from the portals and measures rho. D4 is NO-GO until forward capture accumulates (expected through Phase 4).
 
 ## 7. Phase 0 exit
 
