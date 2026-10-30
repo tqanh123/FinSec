@@ -127,7 +127,11 @@ Phase 6 (2026-10-28 to 2026-10-30). The 5-session capture window has not opened 
   - run r3 (15 calls/min), started 4 h 21 min later: the remaining 23 symbols, PVC included, no error;
   - the merge: 143/143 symbols, 146 calls, quota 99% left before and after.
 - **Discarded run (OBSERVED 2026-10-28).** A first run, by the script before the retry was added, stopped after 30 symbols on the same error code (no retry). It ran on vnstock 5.2.1, which pip had installed into the probe venv between the `universe` and `events` steps, outside the lock. The owner reinstalled 5.1.0 from the lock on 2026-10-29; the installed files match the locked wheel's RECORD (121 files, OBSERVED 2026-10-30).
-- **Open.** No `vnstock_probe.py hash` manifest was taken around the 5.2.1 import or the reinstall, and the agent cannot read the `vnprobe` home, so the D6 agent-file check for that episode is still owed by the owner.
+- **D6 agent-file check (OBSERVED 2026-10-30).** No `vnstock_probe.py hash` manifest was taken right around the 5.2.1 import or the reinstall. The owner took one after r3 (`hash-after-r3.json`, under `vnprobe` with `python -I`; vnstock not imported) and the agent compared it with the 2026-10-26 `hash-after-probe.json`:
+  - files digest `fa134f99…` both times: all 12 machine-wide agent instruction files are still absent;
+  - `~/.vnstock/` holds the same 9 entries; only `auth/policy.enc` and `auth/usage.enc` changed size (vendor state);
+  - the hash was run from the `vnprobe` home, not the empty work folder, so the two cwd listings are not comparable; the home holds no agent folder or file at its top level, and `C:\finsec-probe\work` is still empty.
+  - Limit: a check after the fact misses a file that was written and then removed, and it covers only the listed paths.
 
 ### 6.2 Counts (vnstock vci events, 143 issuers, OBSERVED 2026-10-29)
 
