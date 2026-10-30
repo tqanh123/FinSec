@@ -194,6 +194,13 @@ icacls C:\finsec\venv /grant:r "capture:(OI)(CI)RX"
 
 5. Expected: `type C:\finsec\venv\pyvenv.cfg` shows `home = C:\Users\capture\AppData\Local\Programs\Python\Python313`. Never
    `pip install -e` the repository: capture runs from the clone through `PYTHONPATH` (section 10).
+6. **Never update vnstock in place.** Do not run `pip install`, `pip install -U` or any other installer into `C:\finsec\venv`, even
+   when a newer vnstock release is out; step 3 is the only install command (offline, every wheel checked against the lock). On
+   2026-10-28 pip put vnstock 5.2.1 into the probe venv outside the lock, and that run was discarded (`docs/phase0-spike-report.md`
+   §6.1). After step 4 `capture` has read and execute only, so an install that `capture` attempts fails. A new vnstock release is
+   planned maintenance: a new lock and pin in a commit, a re-probe under the probe user, a Decisions line from the owner, then the
+   install through steps 2-4 from a new wheel set. Inside the exit window it changes the frozen venv, so it goes through section 15
+   and restarts the 5-session count.
 
 ## 9. vnstock on the laptop (OWNER, `capture` session; OB4b)
 
@@ -321,6 +328,7 @@ $g = ([regex]'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}').Match((powercfg /getac
   '== account'; net user capture
   '== acl'; icacls C:\finsec; icacls C:\finsec-capture
   '== venv'; Get-Content C:\finsec\venv\pyvenv.cfg
+  '== packages'; C:\finsec\venv\Scripts\python.exe -I -m pip freeze --disable-pip-version-check
   '== clone'; git -C C:\finsec\app rev-parse HEAD; git -C C:\finsec\app status --porcelain
   '== tasks'; Get-ScheduledTask -TaskPath '\FinSec\' | Format-Table TaskName, State
 } *>&1 | Out-File -Encoding utf8 ("$B\laptop-config-{0}.txt" -f (Get-Date -Format yyyyMMdd))
@@ -330,7 +338,7 @@ The agent checks each line (plan R3.4): S0 or S3 noted; STANDBYIDLE and HIBERNAT
 AC = DC = 0; `python.exe` under `SYSTEM:` in `powercfg /requests` (the poller's `ES_SYSTEM_REQUIRED`; the process runs as
 `capture`); `AUTO_START`, no trigger, `Last Sync Error: 0`, 4 peers, |offset| < 0.5 s; active hours 7-19 and the pause expiry;
 "Password expires Never"; no inherited ACL on `C:\finsec` and `capture` RX there, Modify on `C:\finsec-capture`; `home` in the
-`capture` profile; HEAD equal to the deployed SHA and an empty `status --porcelain`.
+`capture` profile; `pip freeze` shows `vnstock==5.1.0` and every line matches a pin in `requirements/vnstock/win-py313.lock`; HEAD equal to the deployed SHA and an empty `status --porcelain`.
 
 Then restart the laptop once on purpose. Expected: the task starts again on its own (before Autologon), and the next heartbeat
 lists a `process_down` outage in `outages_24h`.
@@ -366,7 +374,8 @@ days after the planned last day. Clean weeks (research `vn-calendar-sessions.md`
 21/12/2026-01/01/2027 (HNX-to-HOSE transfer). Check the pause expiry again before opening. The agent records "capture window
 started <date> at <sha> (capture_version <v>)" in AGENTS.md in the first phase commit after the opening.
 
-**Freeze.** Until the phase 7 exit audit, the laptop clone, the venv and `configs/capture.toml` do not change. A process restart on
+**Freeze.** Until the phase 7 exit audit, the laptop clone, the venv and `configs/capture.toml` do not change; the venv includes
+the vnstock version (section 8 step 6). A process restart on
 the same SHA (reboot, crash, task restart) logs `process_down` by itself; a logged outage is allowed, so the count goes on.
 
 **Daily checklist (OWNER, phone, or AGENT from `<backup-mirror>`):**
