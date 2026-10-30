@@ -121,6 +121,7 @@ Every prediction is written to an append-only ledger before its outcome exists, 
 - Detecting IC 0.03 at t = 2 needs about 4,400 effectively independent events.
 - VN30 alone gives roughly 960 earnings events over 8 years, which detects only IC of about 0.065 or more.
 - Events cluster on deadline days, so N_eff < N. CIs therefore use a date-clustered block bootstrap.
+- t = 2 is the detection threshold at about 50% power; the 80%-power MDE (t = 2.8) is reported as a sensitivity line only. The rule is coded in `quant/power_rule.py` and its first VN go/no-go (2026-10-30, all counts DERIVED) is in `docs/phase0-spike-report.md` §6.4: R1 on HOSE portal history and D2 BCTC are GO with LIMITED floors, D2 NQ HĐQT is not counted yet, D4 is NO-GO.
 
 **Research universe.** A point-in-time rule computed from our own data, recomputed monthly:
 - US: the top ~500 common stocks by trailing 60-session dollar ADV.
@@ -168,8 +169,8 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | Alpaca Market Data, Basic plan | US | Daily/minute bars; IEX real-time | REST/WebSocket with paper keys | Free. Algo Trader Plus is $99/mo (SIP real-time, unlimited symbols). | Personal use, no redistribution (ASSUMED) | VERIFIED limits (IEX-only real-time, 30 WS symbols, 200 calls/min, history since 2016, latest 15 min blocked): https://docs.alpaca.markets/docs/about-market-data-api. `adjustment` defaults to raw: VERIFIED https://docs.alpaca.markets/reference/stockbars. SIP history on Basic and delisted coverage: ASSUMED, probe in Phase 0 |
 | Alpaca News (Benzinga) | US | Headlines | REST/WebSocket | Free-plan access ASSUMED | Licensed content; store headline + URL only | ASSUMED (https://docs.alpaca.markets/docs/historical-news-data). Phase 5+ |
 | Massive (formerly Polygon) EOD | US | Backup bars for reconciliation | REST | About $29/mo, ASSUMED | Personal use | ASSUMED. Optional |
-| vnstock Community (KBS / VCI) | VN | Daily OHLCV, foreign flow, BCTC, company events/news | Python library over unofficial broker endpoints. Gen 5 installs from a vendor index. | Free; sponsor tiers paid | Personal, study and research use only. No redistribution, and no rights to the source data. | VERIFIED licence and install path: https://github.com/thinh-vu/vnstock. Rate limits, history depth, price unit, timestamp granularity, delisted coverage: ASSUMED, probe in Phase 0 |
-| SSC / HOSE / HNX disclosure portals (congbothongtin.ssc.gov.vn, hsx.vn, hnx.vn) | VN | Official disclosures with posting time | HTML/PDF polling; no known API | Free | Public mandatory disclosures. Poll politely and respect robots.txt. Insider names are personal data under PDPL. | VERIFIED that the portals exist: https://vietnamnews.vn/economy/1661264/hose-listed-firms-required-to-use-single-disclosure-point.html and https://vietnamnews.vn/economy/1651308/ssc-to-launch-single-point-information-disclosure-system-for-listed-firms.html. URLs, robots.txt and ToS: ASSUMED |
+| vnstock Community (KBS / VCI) | VN | Daily OHLCV, foreign flow, BCTC, company events/news | Python library over unofficial broker endpoints. Gen 5 installs from a vendor index. | Free; sponsor tiers paid | Personal, study and research use only. No redistribution, and no rights to the source data. | VERIFIED licence and install path: https://github.com/thinh-vu/vnstock. Probed 2026-10-26 (`docs/phase0-spike-report.md` §1): adjusted prices in thousands of VND with no raw bars (a Phase 3 blocker), 2,920-day history cap, events time of day in a minority of rows, delisted symbols covered, no throttle at a 0.5 s cadence |
+| SSC / HOSE / HNX disclosure portals (congbothongtin.ssc.gov.vn, hsx.vn, hnx.vn) | VN | Official disclosures with posting time | HTML/PDF polling; no known API | Free | Public mandatory disclosures. Poll politely and respect robots.txt. Insider names are personal data under PDPL. | VERIFIED that the portals exist: https://vietnamnews.vn/economy/1661264/hose-listed-firms-required-to-use-single-disclosure-point.html and https://vietnamnews.vn/economy/1651308/ssc-to-launch-single-point-information-disclosure-system-for-listed-firms.html. URLs and robots.txt probed 2026-10-27 (`docs/phase0-spike-report.md` §2); capture uses the HOSE API listing and HNX RSS feed 3 (DECIDED 2026-10-27). ToS: ASSUMED |
 | SSI FastConnect Data | VN | Real-time and EOD prices, foreign room, ceiling/floor | Needs an SSI account and ConsumerID + ConsumerSecret. REST https://fc-data.ssi.com.vn/v2.0/Market, streaming https://fc-datahub.ssi.com.vn/v2.0 | Fees and rate limits unknown (ASSUMED) | Broker-licensed; no redistribution (ASSUMED) | VERIFIED https://guide.ssi.com.vn/ssi-products/tieng-viet/fastconnect-data/huong-dan-ket-noi. Foreign-flow field semantics: ASSUMED until the R-channel spec is read |
 | DNSE Lightspeed | VN | Real-time fallback | DNSE account plus a signed agreement | ASSUMED | Broker terms | VERIFIED that it exists: https://www.dnse.com.vn/hoc/dnse-lightspeed-api-la-gi. Protocol and fees ASSUMED |
 | HOSE margin-ineligible lists | VN | Feature, not target | Exchange notices or news | Free | Public | VERIFIED via news: https://doanhnhan.baophapluat.vn/danh-sach-59-ma-co-phieu-bi-hose-cat-margin-trong-quy-iii-2026-vuong-an-vi-pham-va-thua-lo.html. Page path ASSUMED |
@@ -223,7 +224,7 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `connectors/us_alpaca_edgar.py` | rewrite | 1 | Add a real EDGAR client: header acceptance time, at most 5 rps, User-Agent from EDGAR_IDENTITY, submissions, Form 4 via edgartools, companyfacts by accn, bulk zips. Add an Alpaca daily-bar client with `adjustment=all` and an explicit feed. Remove the `now()` fallback and the fabricated bid/ask sizes (done 2026-10-21). Data endpoints only. |
 | `connectors/vn_ssi_vnstock.py` | rewrite | 0, 3 | Add a vnstock adapter pinned to the probed version, using KBS for statements as vnstock's docs recommend. Fix the SSI endpoints now (done 2026-10-21); defer the live client to Phase 6, and write per-channel parsers only after reading the R-channel spec. Remove the `now()` fallback and the BidVol/AskVol = 100 defaults (done 2026-10-21). |
 | `connectors/base.py` | add | 1 | SourceAdapter protocol, RawRecord, token-bucket limiter, retry with backoff, idempotent key (source, source_id). |
-| `capture/` | add | 0 | Capture-only VN disclosure poller with no parsing: raw payload, sha256, first_seen_at, outage log, heartbeat. |
+| `capture/` | add | 0 | Capture-only VN disclosure poller with no parsing: raw payload, sha256, first_seen_at, outage log, heartbeat. Built 2026-10-27 (plan 261022-1147, phase 2); deployed in phase 3. |
 | `store/` | add | 1 | Raw archive writer, SQLite schema, DuckDB views, `as_of()`. |
 | `refdata/` | add | 1, 3 | Security master (permanent id, ticker, CIK, exchange, valid_from/valid_to); exchange membership including the 2026-12-28 transfer; versioned sectors; corporate actions. Every join goes through it as of the event date. |
 | `calendar/` | add | 1, 3 | XNYS sessions (the exchange_calendars package is ASSUMED suitable). VN sessions derived from VN-Index bar dates, future holidays from HoSE notices, and regime flags. |
@@ -242,8 +243,8 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | `router/linucb_bandit.py` | remove from API | 0 | On a cold start the arms tie and the first arm always wins (line 40); no LLM is called and there is no reward. Move it to `experimental/`. |
 | `api/server.py` | rewrite | 4 | Read-only GET /v1/events, /v1/predictions, /v1/scoreboard and /v1/data-health, with pydantic models, bound to localhost. Remove the tick ingest, the empty RAG search, the bandit and the hard-coded model IDs. |
 | `scripts/train_unsloth_slm.py`, `configs/unsloth_qwen3_catalyst.yaml` | defer | 7 | Use only as a distilled extractor. Drop `abnormal_return_sign_accuracy_reward`; keep the schema and number-faithfulness rewards. |
-| `tests/test_end_to_end.py` | fix | 0 | Wrap `run_modular_verification` in `test_end_to_end()`. Add test_edgar_time, test_no_order_execution and test_agents_md_paths (Phase 0), then test_point_in_time and test_labels (Phase 1). The wrapper, test_no_order_execution and test_agents_md_paths are done (2026-10-21, Phase 0b); test_edgar_time waits for Phase 0a. |
-| `pyproject.toml` | fix | 0 | Add `[tool.pytest.ini_options] pythonpath = ["src"]`. Add a dev extra (pytest, hypothesis, ruff) and a research extra (pandas or polars, pyarrow, duckdb, scikit-learn; these choices are ASSUMED). Move pathway, qdrant-client and pydantic-ai to a deferred extra. Pin vnstock to the probed version. The pytest config and the dev extra are done (2026-10-21, Phase 0b). |
+| `tests/test_end_to_end.py` | fix | 0 | Wrap `run_modular_verification` in `test_end_to_end()`. Add test_edgar_time (done 2026-10-28), test_no_order_execution and test_agents_md_paths (Phase 0), then test_point_in_time and test_labels (Phase 1). The wrapper, test_no_order_execution and test_agents_md_paths are done (2026-10-21, Phase 0b); test_edgar_time waits for Phase 0a. |
+| `pyproject.toml` | fix | 0 | Add `[tool.pytest.ini_options] pythonpath = ["src"]`. Add a dev extra (pytest, hypothesis, ruff) and a research extra (pandas or polars, pyarrow, duckdb, scikit-learn; these choices are ASSUMED). Move pathway, qdrant-client and pydantic-ai to a deferred extra. Pin vnstock to the probed version. The pytest config and the dev extra are done (2026-10-21, Phase 0b). The vnstock pin is done 2026-10-27 (`capture` extra `==5.1.0` plus the hash lock `requirements/vnstock/win-py313.lock`). |
 | `.gitignore` | fix | 0 | Anchor `data/` and `models/` as `/data/` and `/models/`. Unanchored, they silently ignore any source package with those names (OBSERVED by git check-ignore). Done 2026-10-22. |
 | `docker-compose.yml` | fix | 0 | Remove redpanda. Put qdrant and timescaledb behind compose profiles. Pin image tags, bind to 127.0.0.1, read the password from env. Done 2026-10-22. |
 | `Makefile` | fix | 0 | Bind run-api to 127.0.0.1. Document the PowerShell equivalents. Done 2026-10-22 (PowerShell forms in AGENTS.md). |
@@ -264,7 +265,7 @@ capture       EDGAR poll every 2-5 min; VN disclosure poll every 2-5 min;
 | VN earliest exit | T+2 afternoon session | VERIFIED (DNSE guide). The VN lens's T+3 was wrong. |
 | SSI credentials | ConsumerID/Secret only; fc-data / fc-datahub endpoints; drop SSI_PRIVATE_KEY_PATH | The SSI connection guide (VERIFIED). A private key belongs to FC Trading, which this project never uses. Restore it only if a real FC Data call needs a signature. |
 | Alpaca Basic SIP history | ASSUMED until probed; `adjustment=all` is mandatory | The docs page does not name feed=sip for Basic. The raw default for `adjustment` is VERIFIED. |
-| vnstock limits | ASSUMED; limiter at 20/min until measured | The official README gives no numbers; the figures come from a third-party mirror. |
+| vnstock limits | Measured 2026-10-26: no throttle at a 0.5 s cadence (10-call burst); design input 60/min (`docs/phase0-spike-report.md` §3) | The official README gives no numbers; the figures come from a third-party mirror. |
 | Universe size | Broad point-in-time ADV-ranked research universe plus a live watchlist of 30 or fewer | The Modeling lens's power calculation: 30 + 30 names cannot detect a realistic IC. |
 | RAG timing | Phase 0: as_of look-ahead fix only. Tokenizer in Phase 5. Embeddings in Phase 7. | A shipped look-ahead bug violates the core rule and agents may copy it. The rest is off the critical path, and English VN disclosures (Circular 68/2024) reduce the urgency of tokenizer and OCR work. |
 | LinUCB | Remove from api/server.py now; park in experimental/ | "Remove" and "defer" mean the same in practice. The API should not advertise routing to models that are never called. |
@@ -324,7 +325,7 @@ Portfolio-level metrics (decile spread, calendar-time Sharpe after costs, deflat
 ### 6.4 Leakage checklist (each item is a pytest)
 
 1. Every feature row has `available_at` < decision time: `information_time` for R1, entry time for the drift labels.
-2. EDGAR time golden test on the four pinned accessions, including one EST-period filing. Session-classifier tests cover 06:00, 12:00-16:00 and after-16:00 ET acceptances.
+2. EDGAR time golden test on the four pinned accessions, including one EST-period filing. Session-classifier tests cover 06:00, 12:00-16:00 and after-16:00 ET acceptances. Done 2026-10-28 (holidays in Phase 1).
 3. XBRL fundamentals:
    - an XBRL fact is used only if its accn was accepted at or before entry;
    - Frames are never used for history;
@@ -355,12 +356,12 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 **Goal.** Every load-bearing fact probed, the repo honest and testable, and VN capture running.
 
 **0a. Verification spike (2-3 days).** Results go into the "Verified Facts" section of AGENTS.md, with dates.
-- **EDGAR time golden test:** `tests/test_edgar_time.py`, with recorded fixtures for the four accessions in section 2.1.
+- **EDGAR time golden test:** `tests/test_edgar_time.py`, with recorded fixtures for the four accessions in section 2.1. Done 2026-10-28.
 - **Alpaca probe with the paper keys:**
   - SPY daily bars for 2017 with feed=sip on the Basic plan;
   - `adjustment=all` vs raw on a known split date;
   - bars for 2-3 known delisted tickers.
-- **vnstock probe** in an isolated venv. Pin the version, and hash-pin the Gen 5 vendor index as a supply-chain dependency. Measure:
+- **vnstock probe** in an isolated venv. Done 2026-10-27 (plan 261022-1147, phase 1; results in `docs/phase0-spike-report.md` §1). Pin the version, and hash-pin the Gen 5 vendor index as a supply-chain dependency. Measure:
   - the real rate limit;
   - daily and intraday history depth;
   - the price unit per source (thousand vs full VND);
@@ -368,8 +369,8 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
   - delisted coverage;
   - adjusted series on 5 known ex-dates.
 - **SSI:** confirm the owner's account status. Read the R-channel spec for the foreign-flow field names and whether they are session-cumulative.
-- **VN timestamps:** hand-check 30 VN disclosures, comparing portal posting time with vnstock time.
-- **Output:** a counts table (events per type per year, share with intraday timestamps) and a go/no-go per VN target against the power rule.
+- **VN timestamps:** hand-check 30 VN disclosures, comparing portal posting time with vnstock time. Partly done 2026-10-30 (`docs/phase0-spike-report.md` §6.3): a scripted match from portal history compared 16 of the 30 (all HOSE; the HNX items carry no symbol) by date only, because recent vnstock events carry no time of day; detection latency waits for the capture window.
+- **Output:** a counts table (events per type per year, share with intraday timestamps) and a go/no-go per VN target against the power rule. Done 2026-10-30: `docs/phase0-spike-report.md` §6.2 and §6.4.
 
 **0b. Foundations.**
 1. Done 2026-10-20: `docs/system-architecture.md` and `docs/code-standards.md` are written and pass `harness/scripts/scaffold_standards.py --check`. Re-check them whenever an owner decision in section 9 is answered.
@@ -391,7 +392,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
    - `models.py` raises on an unknown exchange (done 2026-10-21);
    - connectors stop defaulting timestamps to `now()` (done 2026-10-21);
    - fix `.agents/rules` rule 3 and the band rule (done 2026-10-22).
-6. VN capture-only poller (`capture/`):
+6. VN capture-only poller (`capture/`). Built 2026-10-27; runbook ready 2026-10-28 (`docs/capture-runbook.md`); sources: HOSE API listing + HNX RSS feed 3 (owner, OB3) + vnstock events (Gen 5 Community has no `news()`):
    - **Schedule:** every 2-5 minutes from 08:00 to 17:30 ICT on trading days, hourly otherwise.
    - **Sources:** vnstock news/events for the seed universe, plus one official portal listing page (check its URL and robots.txt first).
    - **Stored:** raw payload, raw_sha256, and first_seen_at (UTC, from an NTP-synced host).
@@ -476,6 +477,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 **Exit.**
 - CAR tables for at least 3 VN event types with N, N_eff and power, rebuilt from raw data by one command.
 - The sensitivity of results to exact vs inferred timestamps is reported.
+- The go/no-go of D2 and R1-VN is rerun on N counted from the portals (BCTC and NQ HĐQT; vnstock events carry neither) with the measured rho, replacing the DERIVED Phase 0 counts (2026-10-30). R1-VN counts only events with a portal posting time: vnstock events are date-only from 2023 (OBSERVED 2026-10-29).
 - The unit and band sanity check passes on 5 known ex-dates.
 
 ### Phase 4: VN scoreboard, daily live loop, private alerts (3-4 weeks)
@@ -497,6 +499,7 @@ Each phase is sized for one person over 2-4 weeks and has a single exit gate.
 - Matured predictions are scored automatically.
 - Live vs backtest Brier is reported.
 - Detection latency on the hand-checked sample: p50 under 5 minutes US, under 10 minutes VN.
+- D4 is expected to stay NO-GO through Phase 4: it counts only forward capture (N = 0 at the Phase 0 go/no-go, 2026-10-30).
 
 **Owner checkpoint after Phase 4.** Choose Phase 5, Phase 6, both, or stop and write up the results.
 

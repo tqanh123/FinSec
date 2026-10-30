@@ -1,7 +1,7 @@
 ---
 id: 261022-1147-phase0a-capture
 title: "Phase 0a verification spike and 0b.6 VN capture-only poller"
-status: approved
+status: in_progress
 mode: hard
 tdd: true
 branch: claude/phase0a-capture

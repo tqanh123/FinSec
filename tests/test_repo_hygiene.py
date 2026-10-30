@@ -54,6 +54,10 @@ def test_src_models_package_is_not_ignored() -> None:
         "ops.sqlite",
         "ops.db",
         "capture/data/2026-10-21.jsonl.gz",  # a nested data dir is no longer caught by the anchored /data/ (red-team RT12)
+        # The only in-repo place the capture data-root guard accepts is under /data/ (plan 261022-1147 phase 2).
+        "data/capture/raw/hose_news_api/2026-10-22.jsonl",
+        "data/capture/blobs/2026-10-22/0123abcd.bin",
+        "data/capture/state/capture.sqlite-wal",
     ],
 )
 def test_data_artefacts_are_ignored(path: str) -> None:
