@@ -49,8 +49,10 @@ git clone --branch claude/phase0a-capture https://github.com/tqanh123/FinSec.git
 git -C C:\finsec\app checkout --detach <DEPLOY_SHA>
 ```
 
-   `*S-1-5-32-544` is Administrators and `*S-1-5-18` is SYSTEM (SIDs work on any display language). `<DEPLOY_SHA>` is the commit
-   that added this runbook, or the newest hotfix SHA (section 15). The clone is never under Documents or OneDrive (Known Folder
+   `*S-1-5-32-544` is Administrators and `*S-1-5-18` is SYSTEM (SIDs work on any display language). `<DEPLOY_SHA>` is
+   `9ee2566c79b89f169c0eb64b6499c91dce938e51`, or the newest hotfix SHA (section 15). The capture code, `configs/capture.toml`, the
+   vnstock lock and `pyproject.toml` are the same there as in `1cd592d`, the commit that added this runbook (`git diff` empty,
+   OBSERVED 2026-11-01), and its copy of this runbook has section 8 step 6. The clone is never under Documents or OneDrive (Known Folder
    Move can sync those). Run every `git` command on the laptop from the admin shell: `capture` does not own the clone, so git
    would refuse it as "dubious ownership" there.
 
