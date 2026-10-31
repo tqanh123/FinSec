@@ -1,0 +1,59 @@
+{
+  "stage": "cook",
+  "plan": "261022-1147-phase0a-capture",
+  "checks": [
+    {
+      "name": "unit/full-suite",
+      "status": "PASS",
+      "file": "results/P4/unit__full-suite-38f1c3cf4969.xml",
+      "sha256": "38f1c3cf49698f181d936a1bff49c99219f009d4b72435ed666683722f3c294f",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\5388f5e4-a5ae-4bbf-9e4b-0a1ab0bb4ff5\\scratchpad\\p4-full-suite.xml"
+    },
+    {
+      "name": "smoke/end-to-end",
+      "status": "PASS",
+      "file": "results/P4/smoke__end-to-end-d3add6f9ae86.xml",
+      "sha256": "d3add6f9ae86e7f7e059876747e8f163c98171afb36aca6030e72c66468d2e0f",
+      "source": "C:\\Users\\tqanh\\AppData\\Local\\Temp\\claude\\H--study-Project-FinSec\\5388f5e4-a5ae-4bbf-9e4b-0a1ab0bb4ff5\\scratchpad\\p4-e2e.xml"
+    }
+  ],
+  "verdict": "PASS",
+  "phase": "P4",
+  "actor": "user:tqanh123",
+  "ts": "2026-10-28T10:16:21+00:00",
+  "blastRadius": {
+    "reverseDeps": {
+      "tests/test_capture_cli.py": [],
+      "tests/test_capture_invariants.py": [],
+      "tests/test_capture_ops.py": [],
+      "tests/test_capture_poller.py": [],
+      "tests/test_capture_record.py": [],
+      "tests/test_capture_schedule.py": [],
+      "tests/test_capture_sources.py": [],
+      "tests/test_capture_storage.py": [],
+      "tests/test_data_root.py": [],
+      "tests/test_dependency_pins.py": [],
+      "tests/test_repo_hygiene.py": []
+    },
+    "testsTouched": [
+      "tests/test_capture_cli.py",
+      "tests/test_capture_invariants.py",
+      "tests/test_capture_ops.py",
+      "tests/test_capture_poller.py",
+      "tests/test_capture_record.py",
+      "tests/test_capture_schedule.py",
+      "tests/test_capture_sources.py",
+      "tests/test_capture_storage.py",
+      "tests/test_data_root.py",
+      "tests/test_dependency_pins.py",
+      "tests/test_edgar_time.py",
+      "tests/test_record_edgar_headers.py",
+      "tests/test_repo_hygiene.py",
+      "tests/test_agents_md_paths.py",
+      "tests/test_no_order_execution.py"
+    ],
+    "basis": "code.importers + code.tests_reached (hs_run_facts.engine), default subjects",
+    "snapshot": "20261028-102015-9149218b"
+  },
+  "run_seq": null
+}

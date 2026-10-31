@@ -8,9 +8,9 @@
 - It never places orders and is not investment advice (DECIDED, AGENTS.md "Engineering Rules").
 - Maturity: **prototype** (AGENTS.md "Current Status", verified 2026-10-22).
   - About 1,450 lines (OBSERVED 2026-10-22) of in-memory Python under `src/finsec_alpharadar/` (`requires-python >=3.11`, `pyproject.toml:10`). The only third-party imports are numpy and fastapi (`api/server.py:5`).
-  - No HTTP/WebSocket client, database driver, environment-variable read or LLM SDK anywhere in `src/`.
+  - The only HTTP client in `src/` is `capture/sources.py` (urllib GET requests to the HOSE API and the HNX RSS feed, 2026-10-27); there is no WebSocket client or LLM SDK, and the only database is the capture state (stdlib `sqlite3`). The environment-variable reads are `FINSEC_DATA_ROOT` and `FINSEC_BACKUP_DIR`, through `resolve_data_root` / `resolve_external_dir` in `data_root.py`, called by the capture CLI (2026-10-27).
   - No prediction has been made or scored yet.
-  - Tests (OBSERVED 2026-10-22): pytest collects 274 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py`, `tests/test_rag_as_of.py`, `tests/test_forensics_guards.py`, `tests/test_api_server.py` (handlers called directly; skipped without fastapi) and the repository check `tests/test_repo_hygiene.py`. `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 274 pass in `.venv` (Python 3.13) and on Python 3.11. CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) runs `python -m pytest -q` (2026-10-22).
+  - Tests (OBSERVED 2026-10-30): pytest collects 793 tests from `tests/`: the `test_end_to_end()` smoke wrapper, the guard modules `tests/test_no_order_execution.py` and `tests/test_agents_md_paths.py`, and the unit modules `tests/test_vn_price_band.py`, `tests/test_connectors.py`, `tests/test_rag_as_of.py`, `tests/test_forensics_guards.py`, `tests/test_api_server.py` (handlers called directly; skipped without fastapi), `tests/test_data_root.py` (2026-10-27), the eight capture modules `tests/test_capture_*.py` (synthetic payloads only; `tests/test_capture_invariants.py` locks the import and clock rules; 2026-10-27), the repository checks `tests/test_repo_hygiene.py` and `tests/test_dependency_pins.py` (2026-10-27), and the phase 6 modules `tests/test_power_rule.py`, `tests/test_vn_reconcile.py` and `tests/test_vn_counts.py` (2026-10-30; the two spike scripts are loaded by path, with injected fetchers and clocks and no network or vnstock). `pyproject.toml` sets `pythonpath = ["src"]` and `testpaths` in `[tool.pytest.ini_options]`; all 793 pass in `.venv` (Python 3.13). CI: `.github/workflows/ci.yml` runs them on Python 3.11 and 3.13 for pull requests and pushes to `main`. `make test` (`Makefile:6-7`) runs `python -m pytest -q` (2026-10-22).
 - Shape today: independent engines plus a 3-endpoint FastAPI app. Target shape (PLANNED): a disclosure poller feeding an append-only prediction ledger that is scored automatically (see Data flow).
 
 ## Components
@@ -19,11 +19,26 @@
 | Path | Job | Status (checked 2026-10-22) |
 |---|---|---|
 | `domain/models.py` | `MarketRegion`, `VNExchangeBand`, `IssuerType` enums; `MarketTick`, `RegulatoryFiling`, `FinancialStatementSnapshot` dataclasses; `TickValidationError` and its subclasses, `vn_tick_size`, `vn_price_limits` | Real. Times are float epoch seconds (`timestamp` line 135, `published_at` line 219), not tz-aware datetimes. Static exchange-to-band map (lines 14-17). Since 2026-10-21 every tick rejects non-finite numbers, and a VN tick needs a listed exchange, a positive reference and a price within `price_limits` or within the band widened by one tick (decision D4; lines 148-191). Since 2026-10-22 `FinancialStatementSnapshot` is frozen and carries `issuer_type` (default `UNKNOWN`, line 277). Since 2026-10-22 an unknown market or a VN price of 0 or below raises too. |
+| `data_root.py` | `resolve_data_root`, `resolve_external_dir`, `find_work_tree`: absolute external directory from an environment variable, refused inside a git work tree unless git ignores it | Real (2026-10-27); used by `scripts/spike/` and the capture CLI. Resolves links before the parent walk; a `git check-ignore` failure is an error, never an acceptance. |
+| `capture/record.py` | Raw record schema v1: `CaptureRecord`, `RecordType`, `PitQuality`, `OutageKind`, JSONL line codec, `canonical_item_bytes`, `capture_code_digest` | Real (2026-10-27). `__post_init__` refuses naive or non-UTC times, `information_time != first_seen_at`, a bad sha256 or byte count, and mixed item/snapshot shapes. |
+| `capture/config.py` | Frozen config dataclasses and the `configs/capture.toml` loader (`tomllib`) | Real (2026-10-27). Refuses a source that breaks D5, an unknown kind, `vnstock_source = "kbs"`, and an `error_map` value that is not an `OutageKind`. |
+| `capture/schedule.py` | `Schedule`: trading days, active window, `next_due`, `gap_deadline`, `count_due` | Real (2026-10-27). Asia/Ho_Chi_Minh through zoneinfo (tzdata); holidays from the config only. |
+| `capture/sources.py` | `UrllibFetcher`, `HoseNewsApiSource`, `RssFeedSource`, `VnstockEventsSource`: fetch, extract ids, classify errors | Real (2026-10-27). Total per-request deadline and a body cap (gzip included); RSS items cut by a linear tag search, no XML parser; vnstock imported lazily in a single timed worker thread, swept round-robin within a token bucket and the poll budget. The HOSE window starts on the ICT day of the last ok poll (minus 5 min, at most 7 days back; a longer gap is noted in `polls.detail`); an item that is not strict JSON is skipped and noted in `polls.detail`; a vendor `BaseException` becomes `VendorAborted` (2026-10-28). |
+| `capture/storage.py` | `RawArchive` (JSONL), `BlobStore`, `CaptureState`/`StateReader` (SQLite WAL), `durable_commit`, `reconcile_archive` | Real (2026-10-27). fsync before commit; torn-tail repair; snapshots open read-only with `immutable=1`. `reconcile_archive` replays every line of the recovery days (the day before the commit mark to now) and skips and counts a malformed line (2026-10-28). |
+| `capture/poller.py` | `Poller` (`startup`, `tick`, `run_cycle`, `run_forever`), `TokenBucket`, `Watchdog`, `build_sources` | Real (2026-10-27). Applies the `pit_quality` rule, opens one outage per failure run, detects process down, host stalls and clock steps; the watchdog thread exits 70 when ticks stop. Schedules from the poll written last, so a backward clock step does not stall polling; backs up every closed UTC day that has no backup, oldest first (2026-10-28). |
+| `capture/heartbeat.py` | `build_heartbeat`, `write_heartbeat`: OK/DEGRADED/DOWN JSON with a fixed key whitelist | Real (2026-10-27). w32tm and Windows Update probes through an injected `run_command`; a locked replace degrades, never raises. A portal source without any ok poll goes DOWN from its first poll's gap deadline (2026-10-28). |
+| `capture/backup.py` | `run_backup`, `snapshot_state`, `iter_backup_members` | Real (2026-10-27). Closed UTC days only; the SQLite snapshot comes from a separate connection and is switched out of WAL; the reader checks the manifest sha256 and a member whitelist and never extracts. |
+| `capture/audit.py` | `audit`: unlogged gaps, ok polls in the active window, heartbeats and clock skew per day | Real (2026-10-27). Reads a snapshot only; virtual edge pairs make trailing silence a gap. |
+| `capture/host.py` | `SystemClock`, `system_sleep`, `KeepAwake`, `SingleInstanceLock`, `run_command` | Real (2026-10-27); the only capture module that reads the clock or sleeps. |
+| `capture/__main__.py` | CLI `python -m finsec_alpharadar.capture` | Real (2026-10-27): `run`, `once`, `heartbeat`, `backup`, `audit`, `check-root`, `canary-reset`; one process lock for every archive writer. |
+| `capture/__init__.py` | Re-exports the public names | Real (2026-10-27); imports no numpy, pandas or vnstock. |
 | `connectors/us_alpaca_edgar.py` | `AlpacaStreamAdapter`, `SecEdgarFilingAdapter`: dict to `MarketTick` / `RegulatoryFiling` | Stub. Static parsers, no client, called only by tests. Since 2026-10-21 the Alpaca parser requires trade `S, p, s, t, x` and quote `S, t, bp, ap, bs, as`, raises `PayloadFieldError` (`connectors/errors.py`) on a missing, null or malformed field, and rejects a quote for another symbol or later than the trade (lines 46-81). |
+| `connectors/edgar_acceptance.py` | `extract_acceptance_raw`, `parse_acceptance_datetime`, `us_session_bucket`, the `EdgarAcceptance*` errors | Real (2026-10-28), stdlib + tzdata. The header `<ACCEPTANCE-DATETIME>` read as America/New_York becomes tz-aware UTC; it raises instead of guessing, in a fixed order (format, calendar, DST gap or fold, EDGAR hours 06:00-22:00 ET on weekdays). The session buckets move to `calendar/` in Phase 1. Golden test: `tests/test_edgar_time.py`. |
 | `connectors/vn_ssi_vnstock.py` | `SSIFastConnectAdapter`, `VnstockBCTCAdapter` | Stub, as above. Since 2026-10-21 the SSI parser requires its 10 tick fields (names ASSUMED until the Phase 6 R-channel spec), turns `Ceiling` and `Floor` into `price_limits`, and holds the VERIFIED `STREAM_URL`/`REST_URL` (lines 36-37) instead of the old, wrong `WS_ENDPOINT`. Absent foreign volumes still read as 0.0; a null, non-numeric or too-large one raises a bare `TypeError`/`ValueError`/`OverflowError`, and a bool is read as a number (`True` -> 1.0), unlike every required number field (Phase 6). |
 | `quant/event_study.py` | `EventStudyAnalyzer.compute_car`: OLS market-model AR/CAR and t-stat | Real, test-only (no caller in `src/`). Bare arrays: no timestamp alignment or window checks. |
 | `quant/kalman_microstructure.py` | `KalmanPriceFilter`, `StreamingQuantEngine`: VWAP, OBI, CUSUM, volume z-score, VN foreign net flow, alert reasons | Real; wired to `POST /v1/ticks/ingest`. Session-blind. Foreign flow is summed over the 50-tick deque (line 99). Deferring that fix until the SSI field semantics are read (Phase 6) is planned (roadmap §5.2); `tests/test_end_to_end.py:94-95` feeds increments. |
 | `quant/deduplicator.py` | `MinHashDeduplicator`: near-duplicate text check | Real, test-only. Linear scan (lines 38-42) despite the "O(1)" docstring (line 10). |
+| `quant/power_rule.py` | `effective_n`, `mde`, `PowerTier`, `assess`: the pre-registered VN go/no-go rule (AGENTS.md Decisions 2026-10-30) | Real, pure stdlib, test-only (no caller in `src/`); used by `scripts/spike/vn_reconcile.py go-no-go` (2026-10-30). |
 | `forensics/xbrl_bctc_auditor.py` | `ForensicAccountingEngine.evaluate`: Altman Z, 8-variable Beneish M, 9-point Piotroski F | Real, test-only. Since 2026-10-22 an issuer gate runs before any computation (lines 243-246): only `IssuerType.NON_FINANCIAL` is scored; a bank, insurer or securities firm gets `not_applicable_financial_issuer`, and any other issuer type `issuer_type_unknown` (fail-closed). The three scores are independent: each is None with a reason in `unavailable_reasons` when a field its formula reads is not finite, one of its ratios is undefined, or the score itself comes out non-finite (`score_not_finite`) (lines 101-212), and no denominator is clamped. Formula corrections are roadmap Phase 2. |
 | `rag/hybrid_temporal_rag.py` | `HybridTemporalRAGEngine`: BM25 + RRF + exponential time decay; sentence-level diff | BM25, RRF and decay are real. The "dense" and ColBERT MaxSim legs use per-token hash vectors (lines 54-59) with no semantics. Since 2026-10-21 `search` takes a required keyword-only `as_of` and never reads the clock: it drops filings with `published_at > as_of` before ranking (line 137), refuses a non-finite one (lines 135-136), and computes the BM25 statistics over the visible filings only (lines 80-108). |
 | `router/linucb_bandit.py` | `LinUCBModelRouter`: disjoint LinUCB over model-name arms | Math is real, but no model is ever called. Only the smoke test calls `update_reward` (hard-coded 0.98, test:151); the app never does, so `GET /v1/rag/search` always picks the first arm (line 40). |
@@ -35,12 +50,11 @@ Outside `src/`:
 - `harness/`: vendored SDLC harness v7.2.0 (`/hs:plan`, `/hs:cook`, `/hs:test`, `/hs:ship`). Not product code.
 - `.agents/`: another agent tool's agent definitions, skills, rules, hooks and MCP config. DECIDED (§9.13, 2026-10-21): keep it, with its rules rewritten as pointers to AGENTS.md in Phase 0.
 
-### Target modules (PLANNED, roadmap §5.2; none exist yet)
+### Target modules (PLANNED, roadmap §5.2; none exist yet; `capture/` was built 2026-10-27)
 Planned layering (roadmap §5.1): connectors (I/O only) -> store -> features/labels (pure functions taking `as_of`) -> modeling -> ledger -> api/notify (read-only).
 
 | Path | Job | Phase |
 |---|---|---|
-| `capture/` | Capture-only VN disclosure poller: raw payload, `raw_sha256`, `first_seen_at`, outage log, heartbeat | 0 |
 | `connectors/base.py` | SourceAdapter protocol, RawRecord, token-bucket limiter, retry with backoff, idempotent key (source, source_id) | 1 |
 | `store/` | Raw archive writer, operational schema, research views, `as_of()` (SQLite WAL + DuckDB over raw JSONL/Parquet; DECIDED §9.9) | 1 |
 | `refdata/` | Security master, exchange membership (incl. the 2026-12-28 HNX-to-HOSE transfer), sectors, corporate actions | 1, 3 |
@@ -74,6 +88,12 @@ GET /v1/rag/search      (server.py:104-130)
      always [] because nothing ingests into the app's engine
   -> {"routed_model", "router_ucb_scores", "results", "as_of", "disclaimer"}
 
+python -m finsec_alpharadar.capture once|run   (capture/, 2026-10-27; laptop deployment per docs/capture-runbook.md, 2026-10-28)
+  -> per due source: fetch (HOSE API pages, HNX RSS feed 3, vnstock events in a worker) -> extract ids only
+  -> snapshot blob when the body changed; new or revised items with pit_quality -> raw/<source>/<UTC day>.jsonl
+  -> polls row, outages opened or closed -> fsync touched files -> commit state/capture.sqlite
+  run also: tick every <= 30 s, heartbeat every 900 s, from 07:15 ICT a backup of each closed UTC day not yet backed up, watchdog thread
+
 tests/test_end_to_end.py only:
   connectors parse 2 ticks (asserted only, test:40-59) and 2 filings -> HybridTemporalRAGEngine (test:124-145)
   hand-built MarketTicks -> StreamingQuantEngine (test:71-96)
@@ -83,7 +103,51 @@ tests/test_end_to_end.py only:
 ```
 Where state lives:
 - Process memory only: module-level singletons in `api/server.py:17-21`, and per-instance dicts/lists in `kalman_microstructure.py:61-63`, `hybrid_temporal_rag.py:46-48`, `deduplicator.py:20`, `linucb_bandit.py:15-16`.
-- Nothing is persisted or replayable. A restart, or each `--reload` from `Makefile:10`, drops all state; multiple uvicorn workers would each hold separate state.
+- Nothing in the API path is persisted or replayable. A restart, or each `--reload` from `Makefile:10`, drops all state; multiple uvicorn workers would each hold separate state.
+- The capture poller persists everything under `FINSEC_DATA_ROOT` and `FINSEC_BACKUP_DIR` (schema below).
+
+### Raw capture record schema v1 (`capture/record.py`, 2026-10-27)
+The contract that the Phase 1 `store/` and the Phase 3 parser read. One JSON object per line, UTF-8, Vietnamese text kept exactly
+as received (no normalisation), written with `json.dumps(..., ensure_ascii=False, sort_keys=True, separators=(",", ":"))` plus
+`\n`. Every instant is a UTC string `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | `1` |
+| `record_type` | `"item"` \| `"snapshot"` | item = one disclosure or row; snapshot = one whole response body |
+| `source` | str | source name in the config (`hose_news_api`, `hnx_rss_issuers`, `vnstock_events`) |
+| `source_id` | str | the source's own id (HOSE `"2506861"`, HNX guid `"638933"`, vnstock `"vci:<id>"`); snapshot: `"sha256:<raw_sha256>"` |
+| `information_time` | str UTC | v1: always equal to `first_seen_at` (provisional; the parser recomputes it) |
+| `information_time_basis` | `"first_seen"` | the only v1 value |
+| `first_seen_at` | str UTC | when the response holding the record arrived (headers, injected clock) |
+| `ingested_at` | str UTC | when the record was written; never before `first_seen_at` |
+| `pit_quality` | `"first_seen"` \| `"late"` | `late` on a source's first-ever poll, after its gap deadline, after any outage since its last ok poll, or when that poll lies in the future (a backward clock step) |
+| `raw_sha256` | 64 lower-case hex | item: sha256 of `canonical_item_bytes(payload)`; snapshot: sha256 of the body as received (after gunzip) |
+| `payload_format` | `"json"` \| `"text"` \| `"blob"` | HOSE and vnstock items json; RSS items text (the `<item>` fragment verbatim); snapshots blob |
+| `payload` | JSON \| str \| null | item: the verbatim value; snapshot: null |
+| `blob_path` | str \| null | snapshot: `blobs/<YYYY-MM-DD>/<sha256>.bin`, relative to the data root |
+| `byte_count` | int | bytes of the raw item or body |
+| `snapshot_sha256` | str \| null | item: the body that held it (null for vnstock) |
+| `request` | object | no secrets: HTTP `{method, url, params, header_names}`; vnstock `{call, args, library_version}` |
+| `response` | object | HTTP `{status, http_date, rtt_ms, content_type}`; vnstock `{rows, attrs}` |
+| `cycle_id` | str | `<started_at %Y%m%dT%H%M%S%fZ>-<seq>` |
+| `capture_version` | str | `<__version__>+<12 hex of capture_code_digest>`, the digest over `capture/*.py` with CRLF read as LF |
+
+- **Read rule.** For one key `(source, source_id, raw_sha256)` the record with the earliest `first_seen_at` wins; a later duplicate
+  (if a crash ever let one through) is ignored. A changed payload of a known `source_id` is a new key: every version is kept.
+- **On disk.** `$FINSEC_DATA_ROOT/raw/<source>/<YYYY-MM-DD>.jsonl` (UTC day of `ingested_at`, append-only),
+  `blobs/<YYYY-MM-DD>/<sha256>.bin`, `state/capture.sqlite` (WAL, `synchronous=FULL`), `state/capture.lock`, `ops/capture.log`
+  (ids, counts and times only). `$FINSEC_BACKUP_DIR/heartbeat.json`, `heartbeats/heartbeat-<d>.json` and
+  `daily/<d>/{capture-<d>.tar.gz, state-<d>.sqlite, manifest-<d>.json}`; nothing is ever deleted or overwritten.
+- **Durability.** Each source's new blobs and touched JSONL files are fsynced before the state commit that follows its poll;
+  `startup()` truncates a torn JSONL tail and replays every archived line from the day before the last commit mark into `seen`
+  (a malformed line is skipped and counted), so a crash between the fsync and the commit cannot write a second record.
+- **State tables.** `meta`, `seen(source, source_id, raw_sha256, first_seen_at)`, `polls` (status, outage kind, HTTP status and
+  date, rtt, skew, item counts, pages, `run_mode`, `pid`), `outages(kind, source NULL = process-wide, start_at, end_at NULL = open)`,
+  `blobs`, `alive`, `heartbeats`, `backups`, `kv` (vnstock cursor, last snapshot sha per source, canary baseline, component status).
+  `detail` columns hold the error class, `code`, and the sha256 and length of a vendor message, never its text.
+- **Clock.** `skew_ms` = header arrival (local clock) minus the server `Date` header. HNX holds its headers for 40-49 s and stamps
+  `Date` when it sends them, so the send/receive midpoint would read half the response time as skew (OBSERVED 2026-10-27).
 
 ### Target core loop (PLANNED, roadmap §3)
 ```
@@ -100,11 +164,11 @@ capture -> parse -> as-of features -> predict -> ledger -> alert -> score -> sco
 - DECIDED (2026-10-21): US pipeline first, VN capture-only poller from week 1 on the always-on capture laptop (§9.2, §9.4); embedded storage (§9.9).
 
 ## External dependencies
-None of these is called from `src/` today. Labels and URLs are copied from AGENTS.md "Verified Facts"; add any new fact there first, with a label and a date.
+Only the VN portals and vnstock are called from `src/` (by `capture/`, 2026-10-27). Labels and URLs are copied from AGENTS.md "Verified Facts"; add any new fact there first, with a label and a date.
 - **SEC EDGAR** (US filings: 8-K, 10-Q, 10-K, Form 4).
   - Fair access: at most 10 requests/s with a declared User-Agent. VERIFIED https://www.sec.gov/os/accessing-edgar-data
-  - Information time: the filing header `<ACCEPTANCE-DATETIME>`, read as America/New_York. The submissions JSON `acceptanceDateTime` is for discovery only; its "Z" did not match UTC. OBSERVED 2026-10-20; the Phase 0 golden test settles the header side.
-  - User-Agent is meant to come from `EDGAR_IDENTITY` (Planned, roadmap §5.2). `.env.example:5` holds a placeholder, `.agents/mcp_config.json:23` hard-codes it, and nothing in `src/` reads it.
+  - Information time: the filing header `<ACCEPTANCE-DATETIME>`, read as America/New_York. The submissions JSON `acceptanceDateTime` is for discovery only; its "Z" did not match UTC. OBSERVED 2026-10-20; the header side was settled on 2026-10-28 by `tests/test_edgar_time.py` (four recorded headers, one EST and three EDT) and is parsed by `connectors/edgar_acceptance.py`.
+  - User-Agent is meant to come from `EDGAR_IDENTITY` (Planned, roadmap §5.2). `.env.example:5` holds a placeholder, `.agents/mcp_config.json:23` hard-codes it, and nothing in `src/` reads it. `scripts/spike/record_edgar_headers.py` reads it from `.env` and never prints or stores it (2026-10-28).
 - **Alpaca Market Data, Basic plan** (paper keys).
   - IEX-only real-time data, 30 WebSocket symbols, 200 historical calls/min. VERIFIED https://docs.alpaca.markets/docs/about-market-data-api
   - Bars `adjustment` defaults to raw; request `all` for return labels. VERIFIED https://docs.alpaca.markets/reference/stockbars
@@ -114,8 +178,15 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
   - The old code constant `wss://stream.ssi.com.vn` was wrong; fixed 2026-10-21 (`STREAM_URL`/`REST_URL`, `vn_ssi_vnstock.py:36-37`); never reuse it. `SSI_PRIVATE_KEY_PATH` is not needed for FC Data and was removed from `.env.example` (2026-10-22).
 - **vnstock** (VN prices, statements, events over unofficial broker endpoints).
   - Community licence: personal, study or research use only, no redistribution. VERIFIED https://github.com/thinh-vu/vnstock
-  - Rate limits, history depth and price units: ASSUMED until the Phase 0 probe.
-  - Declared in the `prod` extra (`pyproject.toml:25`), not imported in `src/`.
+  - Gen 5 installs only from the vendor index https://vnstocks.com/api/packages; the PyPI project is quarantined (OBSERVED 2026-10-22). Pinned `==5.1.0` in the `capture` extra (`pyproject.toml:36-38`), installed only through the hash lock `requirements/vnstock/win-py313.lock` in a venv outside the clone (2026-10-27). Imported only lazily inside `capture/sources.py` `VnstockEventsSource`, never at module level.
+  - Probe results (OBSERVED 2026-10-26; `docs/phase0-spike-report.md` §1):
+    - adjusted prices in thousands of VND, and no raw bars (a Phase 3 blocker);
+    - history capped at 2,920 calendar days;
+    - no throttle at a 0.5 s cadence;
+    - `news()` removed, and `events(source="kbs")` broken.
+  - VN disclosure portals (Phase 2 capture, DECIDED 2026-10-27): HOSE API listing plus HNX RSS feed 3 (`docs/phase0-spike-report.md` §2), polled by `capture/sources.py` (2026-10-27).
+- **Cloud sync folder** (OneDrive or Google Drive, secondary account; D3): on the capture laptop `FINSEC_BACKUP_DIR` holds the heartbeat, the nightly backups and the owner's evidence files (`ops/`); the dev machine reads the same folder to run the audit (`docs/capture-runbook.md`, 2026-10-28). Free quota is 5 GB.
+- **tzdata** (core dependency since 2026-10-27, no version bound): Windows has no system IANA database, so zoneinfo needs the package for Asia/Ho_Chi_Minh and America/New_York.
 - **Telegram Bot API**: the alert channel (DECIDED §9.8; built in Phase 4). It is not in AGENTS.md "Verified Facts"; see roadmap §4 for its source.
 - **LLM providers**: none called. The model IDs in `api/server.py:20` and `tests/test_end_to_end.py:149` are unverified. Provider choice is deferred to the Phase 5 gate (DECIDED §9.11); extraction starts rule-based.
 - **docker-compose services** (`docker-compose.yml`): Qdrant (6333/6334, profile `rag`) and TimescaleDB (5432, profile `ticks`). Unused. Since 2026-10-22 the image tags are pinned, the password comes from `POSTGRES_PASSWORD` in `.env` (compose refuses an empty one), and every port binds 127.0.0.1 only. Per §9.9 and roadmap §5.1: Redpanda is removed, TimescaleDB waits for Phase 6 ticks, Qdrant for Phase 7 at the earliest.
@@ -125,12 +196,13 @@ None of these is called from `src/` today. Labels and URLs are copied from AGENT
   - `make run-api` binds 127.0.0.1 (`Makefile:10`, since 2026-10-22), so the API is not reachable from the local network.
   - No authentication, rate limit or request model: the body is an untyped dict (`server.py:82`), and a missing or invalid field returns 422 (since 2026-10-21); extreme but finite values still reach the quant engine (Known gaps).
   - Any caller of `POST /v1/ticks/ingest` mutates shared in-memory engine state.
-- **Secrets:** keys live in `.env` (gitignored, `.gitignore:20`; `*.pem` and `*.key` ignored at lines 26-27). `src/` reads no environment variables today. Guidance (roadmap §4, §8; not an AGENTS.md rule): never commit keys, and never put secrets or personal data in prompts, URLs or logs.
+- **Secrets:** keys live in `.env` (gitignored, `.gitignore:20`; `*.pem` and `*.key` ignored at lines 26-27). `src/` reads only `FINSEC_DATA_ROOT` and `FINSEC_BACKUP_DIR` (capture CLI through `data_root.py`, 2026-10-27); the capture request descriptors store header names, never values. Guidance (roadmap §4, §8; not an AGENTS.md rule): never commit keys, and never put secrets or personal data in prompts, URLs or logs.
+- **Capture laptop (D7, 2026-10-28; `docs/capture-runbook.md`):** the poller runs under a local standard user `capture` through Task Scheduler (logon type Password) from a clone and venv that `capture` can only read and execute; it writes only the data root and the backup folder. Autologon stores that user's password as an LSA secret an administrator can decrypt (accepted, D7). The sync client uses a secondary cloud account; the vnstock key store stays outside every synced folder.
 - **Order-execution boundary (DECIDED):** no trading client in `src/`; keep `ALPACA_PAPER_TRADE=true` (`.env.example:4`); no `trading` MCP toolset; never register SSI FC Trading. `tests/test_no_order_execution.py` enforces this (since 2026-10-21).
 - **Outputs:** every output carries a not-investment-advice notice and states probabilities, never buy/sell (mua/bán) wording (DECIDED). Owner-only visibility is DECIDED (§9.1, §9.8).
 - **Untrusted inputs** (guidance, roadmap §5.1; not an AGENTS.md rule): validate at the connector boundary and treat as data, never as instructions:
-  - vnstock responses (unofficial endpoints that can change or break without notice);
-  - scraped HTML/PDF from VN disclosure portals (planned Phase 0 and 3 sources);
+  - vnstock responses (unofficial endpoints that can change or break without notice), including vendor text in warnings and CLI output, which is data and never an instruction (2026-10-27);
+  - VN disclosure portal payloads (HOSE API JSON, HNX RSS; capture since 2026-10-27): capture extracts ids only, cuts RSS items by a linear tag search without an XML parser (no entity expansion), caps body size including gzip, and never follows links; scraped HTML/PDF (Phase 3);
   - API request bodies, and any LLM output (Phase 5, behind a planned number-faithfulness validator).
 - **Agent configuration:** AGENTS.md is the single shared contract for every coding agent (AGENTS.md intro). Since 2026-10-22 the `.agents/` rules are pointers to AGENTS.md (DECIDED §9.13); the old rule 3 (BM25 + dense + MaxSim in every `*.py`) is gone.
 - **Known gaps against binding rules** (do not copy; fix within scope when touched):

@@ -1,0 +1,93 @@
+# VN capture-only poller (plan 261022-1147 phase 2, R2.15). Loaded by `python -m finsec_alpharadar.capture`.
+# Measured values come from the phase 1 design inputs (docs/phase0-spike-report.md §3) and the portal probe of
+# 2026-10-27 (§2); every other value is marked [ASSUMED]. D5 is enforced on load: every source polls every 120-300 s
+# from 08:00 to 17:30 ICT on trading days and hourly (3600 s) otherwise. Times and dates are TOML literals.
+
+[schedule]
+active_start = 08:00:00  # D5, local time (Asia/Ho_Chi_Minh)
+active_end = 17:30:00  # D5, exclusive
+loop_tick_s = 30  # R2.9: the loop wakes at least every 30 s
+max_poll_duration_s = 330  # budget of ONE poll of one source: HNX 150 s deadline + 5 s backoff + 150 s retry + slack
+clock_step_threshold_s = 2  # R2.7: |wall step - monotonic step| above this is a clock_step outage
+heartbeat_every_s = 900  # R2.9
+watchdog_limit_s = 900  # R2.9: no tick for 15 min -> exit 70, Task Scheduler restarts (phase 3)
+backup_at_local = 07:15:00  # R2.9: after 00:00 UTC, so the UTC day being backed up is closed
+
+# Weekday market holidays, from an exchange or VSDC notice (never inferred from the Labour Code). Add 2027 when announced.
+[[holidays]]
+date = 2026-11-24
+status = "announced"  # VSDC does not settle that day (VERIFIED); the HOSE/HNX closure notice was not seen [ASSUMED]
+source_url = "https://vsdc.vn/en/ad/198399"
+
+# HOSE disclosure listing (owner OB3, 2026-10-27). URL and headers as used by scripts/spike/portal_probe.py on 2026-10-27;
+# whether Origin/Referer are needed is [ASSUMED] (research vn-disclosure-portals.md §1).
+[[sources]]
+name = "hose_news_api"
+kind = "hose_news_api"
+enabled = true
+url = "https://api.hsx.vn/n/api/v1/1/news/securitiesType/0"
+active_interval_s = 180  # D5 (120-300)
+idle_interval_s = 3600  # D5
+timeout_s = 30  # spike §3 row 5 (headers p50 3.9 s, total max 14.8 s)
+deadline_s = 60  # total per request (red-team r1 RT2)
+retries = 1  # spike §3 row 5: 2 of 48 requests failed once and the next round succeeded
+page_size = 20  # spike §3 row 4
+max_pages = 2  # spike §3 row 4 (a proposal: one page held a full hour of the session)
+min_request_spacing_s = 1  # [ASSUMED] between two pages of one poll
+max_body_bytes = 5000000  # [ASSUMED] a 20-item page is far smaller
+headers = { Origin = "https://www.hsx.vn", Referer = "https://www.hsx.vn/", Accept = "application/json" }
+
+# HNX RSS feed 3, issuer disclosures (owner OB3, 2026-10-27). 100 items per fetch, no paging.
+[[sources]]
+name = "hnx_rss_issuers"
+kind = "rss_feed"
+enabled = true
+url = "https://hnx.vn/3/vi_vn/thong-tin-cong-bo-tu-to-chuc-phat-hanh.rss"
+active_interval_s = 180  # D5 (120-300)
+idle_interval_s = 3600  # D5
+timeout_s = 90  # urllib has ONE socket timeout for connect and each read; headers took up to 48.7 s in session (spike §2)
+deadline_s = 150  # total per request
+retries = 1  # spike §3 row 5
+max_body_bytes = 5000000  # [ASSUMED] a 100-item feed is far smaller
+
+# vnstock events() (secondary source, D2). Runs only under the capture user in the hash-pinned environment (D6); the
+# dev dry run uses a copy of this file with `enabled = false`.
+[[sources]]
+name = "vnstock_events"
+kind = "vnstock_events"
+enabled = true
+active_interval_s = 180  # D5 (120-300)
+idle_interval_s = 3600  # D5
+timeout_s = 60  # not used by vnstock (no HTTP fetcher); required by the schema [ASSUMED]
+deadline_s = 60  # not used by vnstock [ASSUMED]
+retries = 0  # a vendor failure is an outage until the next scheduled poll [ASSUMED]
+max_body_bytes = 5000000  # not used by vnstock [ASSUMED]
+vnstock_source = "vci"  # "kbs" events are broken (VNSTOCK_KBS_COMPANY_SHAPE, spike §1) and refused on load
+# VN30 constituents as of 2026-10-26 (spike §3 row 2, `Reference().index.members('VN30')`); refresh at each VN30 review.
+symbols = [
+    "ACB", "BID", "BSR", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG", "LPB",
+    "MBB", "MCH", "MSN", "MWG", "SAB", "SHB", "SSB", "SSI", "STB", "TCB",
+    "TCX", "VCB", "VHM", "VIB", "VIC", "VJC", "VNM", "VPB", "VPL", "VRE",
+]
+symbols_per_poll = 30  # one VN30 sweep per poll (spike §3 row 2); the sweep also stops inside max_poll_duration_s
+calls_per_min = 60  # spike §3 row 1: 50% of the fastest clean cadence (10-call burst only)
+vendor_call_timeout_s = 60  # [ASSUMED] observed calls took 0.29-0.76 s
+release_expires_on = 2027-10-17  # spike §3 row 7: vnstock 5.1.0 stops serving data after this day
+# A per-symbol error noted in polls.detail, not an outage. [ASSUMED]: this code is documented for ohlcv(), not events().
+symbol_error_codes = ["VNSTOCK_INPUT_SYMBOL_UNKNOWN"]
+# Case-insensitive substrings of a warning message (or of the frame's attrs JSON, keys included, so keep them specific).
+# A match keeps the rows and opens vendor_quota_exceeded with the cursor held (red-team r1 RT7). [ASSUMED]: the probe saw a
+# history-cap UserWarning but its text was not stored; these are the probe's truncation words without the bare "limit".
+quota_warning_patterns = ["truncat", "quota", "giới hạn", "hạn mức", "cắt"]
+# Logged by category and message hash, then ignored: the "update available" UserWarning fires on most calls (spike §1).
+# [ASSUMED] wording: the vendor's notice reads "Vui lòng cập nhật lên phiên bản ..." (research vnstock-gen5.md).
+ignore_warning_patterns = ["cập nhật", "phiên bản", "update", "version"]
+
+[sources.error_map]  # vendor error code -> outage kind (spike §1 and §3 row 6); an unknown code -> source_unreachable
+VNSTOCK_FEATURE_REMOVED = "vendor_unavailable"
+VNSTOCK_KBS_COMPANY_SHAPE = "source_invalid_payload"
+VNSTOCK_RELEASE_EXPIRED = "vendor_release_expired"  # documented by the vendor (VERIFIED, AGENTS.md); not observed
+
+[heartbeat]
+canary_files = ["AGENTS.md", "CLAUDE.md"]  # hashed against the baseline taken at `run` start (red-team r1 LT4)
+stripchart_host = "time.windows.com"  # w32tm /stripchart worked against it without admin (OBSERVED 2026-10-22, research §3.3)

@@ -1,0 +1,12 @@
+{"actor": "user:tqanh123", "kind": "open", "mark": "0c237301758419451ca0721be2b3fa6a7593d980", "phase": "P1", "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-26T10:32:22+00:00"}
+{"actor": "user:tqanh123", "claimed": true, "kind": "open", "mark": "0c237301758419451ca0721be2b3fa6a7593d980", "phase": "P1", "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-26T10:32:29+00:00"}
+{"actor": "user:tqanh123", "kind": "verify", "patch_ids": {}, "phase": "P1", "sha": [], "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-26T11:06:24+00:00"}
+{"actor": "user:tqanh123", "kind": "verify", "patch_ids": {}, "phase": "P1", "sha": [], "supersedes": "2026-10-26T11:06:24+00:00", "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-27T06:15:28+00:00"}
+{"actor": "user:tqanh123", "claimed": true, "kind": "open", "mark": "af1f596f2fb24454373cc6d0316bba793b58b650", "phase": "P2", "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-27T07:27:19+00:00"}
+{"actor": "user:tqanh123", "kind": "verify", "patch_ids": {}, "phase": "P2", "sha": [], "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-27T09:43:28+00:00"}
+{"actor": "user:tqanh123", "kind": "open", "mark": "af1f596f2fb24454373cc6d0316bba793b58b650", "phase": "P3", "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-27T09:43:29+00:00"}
+{"actor": "user:tqanh123", "claimed": true, "kind": "open", "mark": "af1f596f2fb24454373cc6d0316bba793b58b650", "phase": "P3", "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-28T03:08:39+00:00"}
+{"actor": "user:tqanh123", "claimed": true, "kind": "open", "mark": "9149218bf81ecfcfa7b72b35f1cf816557705be0", "phase": "P4", "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-28T03:28:16+00:00"}
+{"actor": "user:tqanh123", "kind": "verify", "patch_ids": {}, "phase": "P4", "sha": [], "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-28T10:16:24+00:00"}
+{"actor": "user:tqanh123", "claimed": true, "kind": "open", "mark": "7d8abe2a986fc4174298a5bb7e7d922446749bf8", "phase": "P6", "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-28T10:27:21+00:00"}
+{"actor": "user:tqanh123", "kind": "verify", "patch_ids": {}, "phase": "P6", "sha": [], "tree": "H:\\study\\Project\\FinSec", "ts": "2026-10-29T18:45:02+00:00"}

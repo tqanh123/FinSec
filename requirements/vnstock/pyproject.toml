@@ -1,0 +1,13 @@
+[project]
+name = "finsec-vnstock-env"
+version = "0"
+requires-python = "==3.13.*"
+dependencies = ["vnstock==5.1.0"]
+
+[[tool.uv.index]]
+name = "vnstocks"
+url = "https://vnstocks.com/api/packages"
+explicit = true
+
+[tool.uv.sources]
+vnstock = { index = "vnstocks" }
